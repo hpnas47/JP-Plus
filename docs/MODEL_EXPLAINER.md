@@ -155,15 +155,29 @@ By analyzing every play individually:
 
 ---
 
-## JP+ Performance (2022-2025)
+## JP+ Performance
 
-### Multi-Year Results
+### 2025 Season Results
+
+| Metric | Value |
+|--------|-------|
+| MAE | 12.21 points |
+| Overall ATS | 51.9% (325-301) |
+
+#### ATS by Edge Threshold (2025)
+
+| Edge | vs Closing Line | vs Opening Line |
+|------|-----------------|-----------------|
+| 3+ pts | 54.1% (172-146) | **55.3%** (189-153) |
+| 5+ pts | 55.4% (98-79) | **58.3%** (119-85) |
+
+### Multi-Year Results (2022-2025)
 
 | Years | MAE | Overall ATS % |
 |-------|-----|---------------|
 | 2022-2025 | 12.48 | 51.3% |
 
-#### ATS Performance by Edge Threshold
+#### ATS Performance by Edge Threshold (Multi-Year)
 
 | Edge | vs Closing Line | vs Opening Line |
 |------|-----------------|-----------------|
@@ -200,26 +214,41 @@ Vegas lines are set by professionals with decades of experience and access to in
 
 ---
 
-## 2025 JP+ Top 10
+## 2025 JP+ Top 25
 
 End-of-season power ratings (normalized for direct spread calculation):
 
-| Rank | Team | Overall |
-|------|------|---------|
-| 1 | Ohio State | +27.6 |
-| 2 | Indiana | +26.9 |
-| 3 | Notre Dame | +25.5 |
-| 4 | Oregon | +23.5 |
-| 5 | Miami | +22.9 |
-| 6 | Texas Tech | +22.1 |
-| 7 | Texas A&M | +19.3 |
-| 8 | Alabama | +18.9 |
-| 9 | Utah | +17.6 |
-| 10 | Georgia | +17.6 |
+| Rank | Team | Overall | Off | Def |
+|------|------|---------|-----|-----|
+| 1 | Ohio State | +27.6 | +12.9 | +14.7 |
+| 2 | Indiana | +26.9 | +15.2 | +10.7 |
+| 3 | Notre Dame | +25.5 | +12.5 | +11.9 |
+| 4 | Oregon | +23.5 | +11.4 | +11.8 |
+| 5 | Miami | +22.9 | +9.3 | +13.2 |
+| 6 | Texas Tech | +22.1 | +3.4 | +18.0 |
+| 7 | Texas A&M | +19.3 | +10.1 | +9.8 |
+| 8 | Alabama | +18.9 | +7.0 | +11.1 |
+| 9 | Georgia | +17.6 | +8.1 | +9.4 |
+| 10 | Utah | +17.6 | +11.3 | +6.2 |
+| 11 | Vanderbilt | +17.5 | +17.2 | +0.3 |
+| 12 | Oklahoma | +16.9 | +0.9 | +16.1 |
+| 13 | Missouri | +16.6 | +4.4 | +12.6 |
+| 14 | Ole Miss | +16.3 | +12.3 | +4.0 |
+| 15 | Washington | +16.2 | +9.3 | +6.6 |
+| 16 | Louisville | +15.2 | +6.1 | +8.6 |
+| 17 | Tennessee | +14.1 | +12.1 | +1.6 |
+| 18 | James Madison | +14.1 | +3.2 | +11.0 |
+| 19 | BYU | +13.7 | +7.7 | +5.6 |
+| 20 | Texas | +13.4 | +3.5 | +9.4 |
+| 21 | South Florida | +12.7 | +6.4 | +5.7 |
+| 22 | Florida State | +12.3 | +10.9 | +1.5 |
+| 23 | Penn State | +12.0 | +7.9 | +4.1 |
+| 24 | USC | +11.8 | +12.6 | -0.9 |
+| 25 | Auburn | +11.5 | +3.0 | +8.1 |
 
 **Spread Calculation:** Team A rating - Team B rating = expected point spread (before adjustments).
 
-Example: Ohio State (+28.0) vs Indiana (+27.8) → Ohio State favored by 0.2 points at neutral site.
+Example: Ohio State (+27.6) vs Indiana (+26.9) → Ohio State favored by 0.7 points at neutral site.
 
 Ratings are normalized with mean=0 and std=12 across FBS teams. Higher = better.
 
