@@ -55,6 +55,20 @@
   - `--hfa` aligned to 2.5 (was 3.0 CLI, 2.8 function)
   - Fixed docstrings that incorrectly stated asymmetric_garbage default as False
 
+- **Implemented Pace Adjustment for Triple-Option Teams** - Compress spreads for teams with fewer possessions
+  - **Analysis:** Triple-option teams (Army, Navy, Air Force, Kennesaw State) have 30% worse MAE (16.09 vs 12.36, p=0.001)
+  - **Root cause:** ~55 plays/game vs ~70 for standard offenses = less regression to mean = more variance
+  - **Solution:** Compress spreads by 10% toward zero when triple-option team involved (15% if both)
+  - **Backtest results (2022-2024):**
+    | Config | MAE | 3+ edge | 5+ edge |
+    |--------|-----|---------|---------|
+    | No pace adjustment | 13.97 | 52.0% (677-626) | 53.3% (537-471) |
+    | With pace adjustment | 13.96 | 52.0% (679-626) | 53.3% (538-472) |
+  - **Finding:** Minimal overall effect (~0.01 MAE, +2 wins) because triple-option games are only ~3% of sample
+  - **Decision:** Implemented as theoretically sound incremental improvement. Effect is neutral-to-slightly-positive.
+  - Added `_get_pace_adjustment()` method and `TRIPLE_OPTION_TEAMS` set to `spread_generator.py`
+  - Added `pace_adjustment` component to `SpreadComponents` dataclass
+
 ---
 
 ## Session: February 1, 2026 (Evening)

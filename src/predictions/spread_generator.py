@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 # Elite FCS teams (based on 2022-2024 performance vs FBS)
 # These teams average +2 to +15 margin vs FBS (compared to +30 for average FCS)
 # Criteria: avg margin < 20 with multiple FBS games, or FCS playoff regulars
+# Triple-option / slow-pace teams that require spread compression
+# These teams have ~30% worse MAE due to fewer possessions per game
+# Spreads should be compressed toward 0 to account for reduced game volume
+TRIPLE_OPTION_TEAMS = frozenset({
+    "Army",
+    "Navy",
+    "Air Force",
+    "Kennesaw State",
+})
+
 ELITE_FCS_TEAMS = frozenset({
     # Top performers vs FBS (data-driven)
     "Sacramento State",
@@ -64,6 +74,7 @@ class SpreadComponents:
     early_down: float = 0.0
     luck_adjustment: float = 0.0
     fcs_adjustment: float = 0.0  # Penalty when FBS plays FCS
+    pace_adjustment: float = 0.0  # Compression for triple-option teams
 
 
 @dataclass
@@ -112,6 +123,7 @@ class PredictedSpread:
             "early_down": self.components.early_down,
             "luck_adj": self.components.luck_adjustment,
             "fcs_adj": self.components.fcs_adjustment,
+            "pace_adj": self.components.pace_adjustment,
         }
 
 
@@ -187,6 +199,44 @@ class SpreadGenerator:
             # Tiered mode (default)
             self.fcs_penalty_elite = fcs_penalty_elite if fcs_penalty_elite is not None else self.DEFAULT_FCS_PENALTY_ELITE
             self.fcs_penalty_standard = fcs_penalty_standard if fcs_penalty_standard is not None else self.DEFAULT_FCS_PENALTY_STANDARD
+
+    def _get_pace_adjustment(
+        self, home_team: str, away_team: str, spread: float
+    ) -> float:
+        """Calculate pace adjustment for triple-option teams.
+
+        Triple-option teams run ~30% fewer plays per game, creating more variance
+        and consistently worse MAE (16.09 vs 12.36 for standard teams). To account
+        for this reduced game volume, we compress spreads toward 0 when a triple-
+        option team is involved.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+            spread: Current spread before pace adjustment
+
+        Returns:
+            Pace adjustment (added to spread to compress it toward 0)
+        """
+        # Check if either team runs triple-option
+        home_is_triple = home_team in TRIPLE_OPTION_TEAMS
+        away_is_triple = away_team in TRIPLE_OPTION_TEAMS
+
+        if not home_is_triple and not away_is_triple:
+            return 0.0
+
+        # Compression factor: reduce spread magnitude by 10%
+        # This accounts for fewer possessions = more variance
+        compression = 0.10
+
+        # If both teams are triple-option, apply double compression
+        if home_is_triple and away_is_triple:
+            compression = 0.15
+
+        # Adjustment moves spread toward 0
+        # If spread is positive (home favored), adjustment is negative
+        # If spread is negative (away favored), adjustment is positive
+        return -spread * compression
 
     def _get_fcs_adjustment(self, home_team: str, away_team: str) -> float:
         """Calculate FCS adjustment for the matchup.
@@ -382,6 +432,12 @@ class SpreadGenerator:
             + components.luck_adjustment
             + components.fcs_adjustment
         )
+
+        # Pace adjustment for triple-option teams (compress toward 0)
+        components.pace_adjustment = self._get_pace_adjustment(
+            home_team, away_team, spread
+        )
+        spread += components.pace_adjustment
 
         # Convert to win probability
         win_prob = self._spread_to_probability(spread)
