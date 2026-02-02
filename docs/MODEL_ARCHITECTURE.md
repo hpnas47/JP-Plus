@@ -306,7 +306,9 @@ Pedigree scores are calculated from historical coaching records:
 
 **Key insight:** First-time HCs (like Brent Key at Georgia Tech, Deion Sanders at Colorado) are **excluded entirely** from the adjustment. We have no basis to predict they'll improve the program, so they receive no boost. The model won't predict their breakout, but it also won't penalize the program.
 
-**Backtest validation:** The coaching change adjustment showed neutral impact on MAE/ATS across 2023-2025 (sample of affected games too small). Kept for conceptual soundness—when it applies, it's directionally correct.
+**Known limitation:** Career win % embeds "opportunity" (better jobs → higher win %), not purely coaching skill. A 65% win rate at Alabama means something different than 65% at Kansas. Ideally we'd normalize by prior team talent, but this adds complexity for a feature with small sample size.
+
+**Backtest validation:** The coaching change adjustment showed neutral impact on MAE/ATS across 2023-2025 (sample of affected games too small). This is a qualitative signal with limited statistical power—included for conceptual completeness but shouldn't be expected to provide measurable ATS lift.
 
 ### Decay Schedule
 | Week | Preseason Weight | In-Season Weight |
@@ -528,6 +530,7 @@ python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-penalty-
 ### Parking Lot (Needs Evidence Before Implementation)
 - [ ] **Soft cap on asymmetric garbage time** - Concern: winning team can accumulate unlimited full-weight plays in blowouts, potentially inflating ratings. Proposed fix: decay weight after +35 margin, cap full-weight GT plays per game. **Status:** Theoretically valid but no evidence of actual problem. Test first: are blowout-heavy teams systematically over-rated vs Vegas?
 - [ ] **Reduce turnover weight to improve 3+ edge** - Turnovers help 5+ edge (+0.9%) but slightly hurt 3+ edge (-0.2%). Could test 5% weight instead of 10%. **Status:** Tradeoff exists but current 10% matches SP+ and helps high-conviction bets.
+- [ ] **Normalize coaching pedigree by prior team talent** - Career win % embeds opportunity (better jobs → higher win %), not purely skill. Normalizing by talent level of teams coached would be more accurate. **Status:** Small sample size (~10-15 coaching changes/year) makes this hard to validate. Current neutral backtest impact suggests feature is already appropriately weighted.
 
 ---
 

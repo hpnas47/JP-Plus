@@ -117,6 +117,8 @@ The adjustment depends on:
 - **Talent-performance gap** - Bigger gap = more forgetting (Florida at talent #8 but performing #45 gets a big boost)
 - **Coach pedigree** - Proven coaches (Kiffin, Cignetti, Sumrall) get more benefit of the doubt than first-time HCs
 
+*Caveat: Coach pedigree uses career win %, which embeds "opportunity" (better jobs → higher win %), not purely skill. This is a qualitative signal with limited statistical power due to small sample size (~10-15 relevant coaching changes per year).*
+
 This prevents JP+ from being too slow to recognize turnarounds like Indiana 2024 (Cignetti) or projecting improvement at Florida 2025 (Sumrall).
 
 By week 8, the model is 85%+ based on current season data. By week 12, preseason priors are fully phased out.
