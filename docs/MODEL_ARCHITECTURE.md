@@ -495,6 +495,7 @@ python scripts/backtest.py --years 2025 --use-efm --alpha 100 --fcs-penalty 24
 
 ### High Priority
 - [x] **Expose separate O/D/ST ratings** - ✅ DONE. JP+ now exposes separate offensive, defensive, and special teams ratings via `get_offensive_rating()`, `get_defensive_rating()`, `get_special_teams_rating()`, and in `get_ratings_df()` output. This enables future game totals prediction.
+- [ ] **Game totals prediction (over/under)** - Formula validated: `Total = 2×Avg + (Off_A + Off_B) - (Def_A + Def_B)`. Each team's expected points: `Team_A_points = Avg + Off_A - Def_B`. Ready to implement.
 - [ ] Integrate Finishing Drives component into EFM foundation
 - [ ] Add quarterback-specific adjustments for transfers/injuries
 - [ ] Improve situational adjustment calibration

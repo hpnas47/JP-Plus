@@ -2,6 +2,30 @@
 
 ---
 
+## Session: February 1, 2026 (Evening)
+
+### Completed This Evening
+
+- **Investigated Ole Miss Ranking Discrepancy** - Ole Miss ranks #14 in JP+ but #7-9 in SP+, FPI, and Sagarin
+  - **Root cause identified:** Defense. Ole Miss offense is elite (+12.2, top 5) but defense is mediocre (+2.6)
+  - Average top-9 defense: +13.9. Ole Miss defense gap: **-11.3 points**
+  - Defensive SR allowed: 36.8% (vs 31-34% for elite defenses like Ohio State/Oregon)
+  - **Hypothetical:** If Ole Miss had average top-10 defense, they'd rank **#3** at +26.1
+  - **Conclusion:** JP+ is correctly identifying a defensive weakness that hurt them in big games
+    - Lost to Miami 27-31 in playoff (allowed 31 points as predicted)
+    - Close wins vs Oklahoma (+8), LSU (+5), Arkansas (+6) - defense gave up a lot
+  - Other systems may weight win-loss record (13-2) more heavily; JP+ ignores record entirely
+  - **Game-by-game defensive breakdown:** Struggled vs Georgia (47% SR allowed), Arkansas (46%)
+
+- **Validated Defensive Rating Convention for Game Totals** - Confirmed current convention works
+  - Current JP+: Higher defense = better (points saved vs average)
+  - Formula for game totals: `Total = 2×Avg + (Off_A + Off_B) - (Def_A + Def_B)`
+  - Example verified: A(Off +10, Def +8) vs B(Off +5, Def +3) → Total = 56 + 15 - 11 = 60
+  - Good defenses lower totals, good offenses raise them - mathematically correct
+  - **No changes needed** to defensive rating convention for totals prediction
+
+---
+
 ## Session: February 1, 2026 (Continued)
 
 ### Completed Today
@@ -270,14 +294,17 @@
 
 ### The Parking Lot (Future Work)
 
-**Where we stopped:** FBS-only filtering implemented. 5+ pt edge improved from 54.0% → 54.8%. Asymmetric GT validated (helps Indiana, improves ATS).
+**Where we stopped:** Investigated Ole Miss ranking discrepancy (#14 JP+ vs #7-9 other systems). Confirmed JP+ correctly identifies their defensive weakness. Validated game totals formula ready for implementation.
 
 **Open tasks to consider:**
 1. **EFM alpha parameter sweep** - Sweep [50, 100, 150, 200] to validate alpha=100 is optimal
 2. **Penalty Adjustment** - Explore adding penalty yards as an adjustment factor
    - Hypothesis: Disciplined teams (fewer penalties) have a real edge JP+ ignores
    - Approach: Calculate penalty yards/game vs FBS average, convert to point impact
-3. **Game totals prediction** - Use exposed O/D/ST ratings to predict over/under
+3. **Game totals prediction** - Formula validated and ready to implement:
+   - `Total = 2×Avg + (Off_A + Off_B) - (Def_A + Def_B)`
+   - `Team_A_points = Avg + Off_A - Def_B`
+   - Current defensive convention (higher = better) works correctly
 4. **Further blowout improvement** - FCS penalty helped, but blowout MAE still high. Could explore:
    - Lower ridge alpha to reduce shrinkage (let elite teams rate higher)
    - Weak FBS team penalty (G5 bottom-feeders similar to FCS)
@@ -298,7 +325,14 @@
 
 5. **"Mistake-free" football (penalties)** - 2025 Indiana was extremely disciplined. Does Success Rate already capture ~80% of this value, or is penalty differential a distinct predictive signal? Need to analyze correlation between penalty rates and ATS performance independent of efficiency metrics.
 
-6. **Indiana #2 vs Ohio State #1** - Indiana won the championship, beat everyone including Ohio State, yet JP+ has them #2. Investigation found:
+6. ~~**Ole Miss #14 vs #7-9 in other systems**~~ - **RESOLVED:** Investigated why Ole Miss ranks lower in JP+ than SP+/FPI/Sagarin:
+   - **Root cause:** Defense (+2.6) is far below top-team average (+13.9)
+   - Offense is elite (+12.2), but defense allowed 36.8% SR (vs 31-34% for elite defenses)
+   - If Ole Miss had average top-10 defense, they'd rank #3 at +26.1
+   - Lost to Miami 27-31 in playoff - exactly what weak defense rating predicted
+   - **Conclusion:** JP+ correctly identifies defensive weakness; other systems may weight 13-2 record more heavily
+
+7. **Indiana #2 vs Ohio State #1** - Indiana won the championship, beat everyone including Ohio State, yet JP+ has them #2. Investigation found:
    - FBS-only filtering didn't change this (Indiana still #2)
    - Asymmetric GT actually helps Indiana (#4 → #2)
    - The 3.4 pt gap is consistent across all filter configurations
