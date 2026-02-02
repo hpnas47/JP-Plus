@@ -142,31 +142,40 @@ def fetch_season_data(
             break
 
     # Fetch betting lines
+    # Prefer DraftKings for consistency, fall back to any available
+    preferred_providers = ["DraftKings", "ESPN Bet", "Bovada"]
     try:
         lines = client.get_betting_lines(year)
         for game_lines in lines:
             if not game_lines.lines:
                 continue
 
-            # Find consensus line
-            consensus = None
-            for line in game_lines.lines:
-                if line.provider and line.provider.lower() == "consensus":
-                    consensus = line
+            # Find preferred provider line
+            selected_line = None
+            for provider in preferred_providers:
+                for line in game_lines.lines:
+                    if line.provider and line.provider == provider:
+                        selected_line = line
+                        break
+                if selected_line:
                     break
 
-            if consensus is None:
-                consensus = game_lines.lines[0] if game_lines.lines else None
+            # Fall back to first available if no preferred provider found
+            if selected_line is None:
+                selected_line = game_lines.lines[0] if game_lines.lines else None
 
-            if consensus and consensus.spread is not None:
+            if selected_line and selected_line.spread is not None:
                 # CFBD spread is already from home team perspective
                 # (negative = home favored, positive = away favored)
+                # Capture both opening and closing lines
                 betting.append({
                     "game_id": game_lines.id,
                     "home_team": game_lines.home_team,
                     "away_team": game_lines.away_team,
-                    "spread": consensus.spread,
-                    "over_under": consensus.over_under,
+                    "spread_close": selected_line.spread,
+                    "spread_open": selected_line.spread_open if selected_line.spread_open is not None else selected_line.spread,
+                    "over_under": selected_line.over_under,
+                    "provider": selected_line.provider,
                 })
     except Exception as e:
         logger.warning(f"Error fetching betting lines: {e}")
@@ -701,17 +710,20 @@ def walk_forward_predict_efm(
 def calculate_ats_results(
     predictions: list[dict],
     betting_df: pl.DataFrame,
+    use_opening_line: bool = False,
 ) -> pd.DataFrame:
     """Calculate against-the-spread results.
 
     Args:
         predictions: List of prediction dictionaries
-        betting_df: Polars DataFrame with Vegas lines
+        betting_df: Polars DataFrame with Vegas lines (must have spread_close and spread_open columns)
+        use_opening_line: If True, use opening lines; if False, use closing lines (default)
 
     Returns:
         Pandas DataFrame with ATS results
     """
     results = []
+    spread_col = "spread_open" if use_opening_line else "spread_close"
 
     for pred in predictions:
         # Find matching Vegas line (Polars filtering is fast)
@@ -723,7 +735,7 @@ def calculate_ats_results(
         if len(line_match) == 0:
             continue
 
-        vegas_spread = line_match[0, "spread"]  # Vegas: negative = home favored
+        vegas_spread = line_match[0, spread_col]  # Vegas: negative = home favored
         actual_margin = pred["actual_margin"]  # Positive = home won
         model_spread = pred["predicted_spread"]  # Our model: positive = home favored
 
@@ -891,6 +903,7 @@ def run_backtest(
     fcs_penalty: float = 24.0,
     use_portal: bool = True,
     portal_scale: float = 0.15,
+    use_opening_line: bool = False,
 ) -> dict:
     """Run full backtest across specified years.
 
@@ -914,6 +927,7 @@ def run_backtest(
         fcs_penalty: Points to add to FBS team's margin vs FCS (default 24.0, EFM only)
         use_portal: Whether to incorporate transfer portal into preseason priors
         portal_scale: How much to weight portal impact (default 0.15)
+        use_opening_line: If True, use opening lines for ATS; if False, use closing lines (default)
 
     Returns:
         Dictionary with backtest results
@@ -984,7 +998,7 @@ def run_backtest(
 
         # Calculate ATS
         if len(betting_df) > 0:
-            ats_results = calculate_ats_results(predictions, betting_df)
+            ats_results = calculate_ats_results(predictions, betting_df, use_opening_line)
             all_ats.append(ats_results)
 
         # Year metrics
@@ -1328,6 +1342,11 @@ def main():
         default=0.15,
         help="How much to weight transfer portal impact (default: 0.15)",
     )
+    parser.add_argument(
+        "--opening-line",
+        action="store_true",
+        help="Use opening lines for ATS calculation instead of closing lines",
+    )
 
     args = parser.parse_args()
 
@@ -1356,6 +1375,7 @@ def main():
     )
     logger.info(f"Preseason priors: {'disabled' if args.no_priors else 'enabled'}")
     logger.info(f"Transfer portal: {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
+    logger.info(f"ATS line type: {'opening' if args.opening_line else 'closing'}")
     if args.use_efm:
         logger.info(
             f"EFM weights: efficiency={args.efm_efficiency_weight}, "
@@ -1384,6 +1404,7 @@ def main():
         fcs_penalty=args.fcs_penalty,
         use_portal=not args.no_portal,
         portal_scale=args.portal_scale,
+        use_opening_line=args.opening_line,
     )
 
     print_results(results)

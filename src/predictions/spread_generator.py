@@ -6,11 +6,12 @@ from typing import Optional
 
 import pandas as pd
 
-from src.models.ridge_model import RidgeRatingsModel
-from src.models.luck_regression import LuckRegressor
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
-from src.models.early_down_model import EarlyDownModel
+# Legacy models
+from src.models.legacy.ridge_model import RidgeRatingsModel
+from src.models.legacy.luck_regression import LuckRegressor
+from src.models.legacy.early_down_model import EarlyDownModel
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
