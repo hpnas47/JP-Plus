@@ -334,6 +334,9 @@ def walk_forward_predict(
     plays_df: Optional[pd.DataFrame] = None,
     turnover_df: Optional[pd.DataFrame] = None,
     to_scrub_factor: float = 0.5,
+    fbs_teams: Optional[set[str]] = None,
+    fcs_penalty_elite: float = 18.0,
+    fcs_penalty_standard: float = 32.0,
 ) -> list[dict]:
     """Perform walk-forward prediction through a season.
 
@@ -365,6 +368,9 @@ def walk_forward_predict(
         turnover_df: Per-game net home turnover margins from build_game_turnovers()
         to_scrub_factor: How much turnover noise to remove from margins (0-1).
                         0.0 = no scrub, 1.0 = full scrub.
+        fbs_teams: Set of FBS team names for FCS detection
+        fcs_penalty_elite: Points for elite FCS teams (default: 18.0)
+        fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
 
     Returns:
         List of prediction result dictionaries
@@ -459,6 +465,9 @@ def walk_forward_predict(
             situational=situational,
             travel=TravelAdjuster(),
             altitude=AltitudeAdjuster(),
+            fbs_teams=fbs_teams,
+            fcs_penalty_elite=fcs_penalty_elite,
+            fcs_penalty_standard=fcs_penalty_standard,
         )
 
         # Predict this week's games
@@ -999,6 +1008,9 @@ def run_backtest(
                 plays_df=plays_df.to_pandas() if plays_df is not None else None,
                 turnover_df=turnover_df.to_pandas() if turnover_df is not None else None,
                 to_scrub_factor=to_scrub_factor,
+                fbs_teams=fbs_teams,
+                fcs_penalty_elite=fcs_penalty_elite,
+                fcs_penalty_standard=fcs_penalty_standard,
             )
         all_predictions.extend(predictions)
 

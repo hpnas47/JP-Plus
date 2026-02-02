@@ -345,6 +345,12 @@ def run_predictions(
         travel = TravelAdjuster()
         altitude = AltitudeAdjuster()
 
+        # Fetch FBS teams for FCS detection
+        logger.info("Fetching FBS teams...")
+        fbs_teams_list = client.get_fbs_teams(year)
+        fbs_teams = {t.school for t in fbs_teams_list}
+        logger.info(f"Loaded {len(fbs_teams)} FBS teams")
+
         # Build spread generator
         spread_gen = SpreadGenerator(
             ridge_model=ridge_model,
@@ -355,6 +361,9 @@ def run_predictions(
             situational=situational,
             travel=travel,
             altitude=altitude,
+            fbs_teams=fbs_teams,
+            fcs_penalty_elite=settings.fcs_penalty_elite if hasattr(settings, 'fcs_penalty_elite') else 18.0,
+            fcs_penalty_standard=settings.fcs_penalty_standard if hasattr(settings, 'fcs_penalty_standard') else 32.0,
         )
 
         # Fetch upcoming games
