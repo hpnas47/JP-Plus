@@ -36,6 +36,25 @@
   - Updated `backtest.py` with `--fcs-penalty-elite` and `--fcs-penalty-standard` CLI args
   - Fixed CLI default for `--asymmetric-garbage` (now enabled by default, use `--no-asymmetric-garbage` to disable)
 
+- **Tested Turnover Cap (±7 pts) - Not Implemented** - Investigated double-counting concern
+  - **Concern:** Turnovers influence field position → EPA → IsoPPP, then added again as explicit component
+  - **Tested:** Cap turnover contribution at ±7 points after shrinkage
+  - **Results:**
+    | Config | MAE | 3+ edge | 5+ edge |
+    |--------|-----|---------|---------|
+    | No turnover (weight=0) | 12.48 | **52.3%** | 56.0% |
+    | With turnover, no cap | 12.48 | 52.1% | **56.9%** |
+    | With turnover, cap=7 | 12.48 | 52.1% | **56.9%** |
+  - **Finding:** Cap has zero effect - the 10% weight + Bayesian shrinkage already constrains turnovers sufficiently
+  - **Decision:** Not implemented. Added complexity with no benefit. The real tradeoff is turnovers vs no turnovers, not cap vs no cap.
+  - **Optimization insight:** Should optimize for MAE (primary) with 3+ edge as key validation metric. 5+ edge can be variance with smaller sample.
+
+- **Fixed CLI/Function Default Mismatches** - Audited all backtest.py parameters
+  - `--asymmetric-garbage` → `--no-asymmetric-garbage` (asymmetric now enabled by default)
+  - `--alpha` aligned to 50.0 (was 10 CLI, 150 function)
+  - `--hfa` aligned to 2.5 (was 3.0 CLI, 2.8 function)
+  - Fixed docstrings that incorrectly stated asymmetric_garbage default as False
+
 ---
 
 ## Session: February 1, 2026 (Evening)
