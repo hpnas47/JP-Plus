@@ -518,6 +518,10 @@ python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-penalty-
 - [ ] Expected value calculations with Kelly criterion
 - [ ] Automated betting recommendations
 
+### Parking Lot (Needs Evidence Before Implementation)
+- [ ] **Soft cap on asymmetric garbage time** - Concern: winning team can accumulate unlimited full-weight plays in blowouts, potentially inflating ratings. Proposed fix: decay weight after +35 margin, cap full-weight GT plays per game. **Status:** Theoretically valid but no evidence of actual problem. Test first: are blowout-heavy teams systematically over-rated vs Vegas?
+- [ ] **Reduce turnover weight to improve 3+ edge** - Turnovers help 5+ edge (+0.9%) but slightly hurt 3+ edge (-0.2%). Could test 5% weight instead of 10%. **Status:** Tradeoff exists but current 10% matches SP+ and helps high-conviction bets.
+
 ---
 
 ## References
