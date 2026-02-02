@@ -1,0 +1,476 @@
+"""Special teams model for field goals, punts, and kickoffs."""
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SpecialTeamsRating:
+    """Container for team special teams ratings."""
+
+    team: str
+    field_goal_rating: float  # PAAR (Points Added Above Replacement)
+    punt_rating: float  # Net yards above expected
+    kickoff_rating: float  # Coverage/return efficiency
+    overall_rating: float  # Combined special teams value
+
+
+class SpecialTeamsModel:
+    """
+    Model for evaluating special teams performance.
+
+    Components:
+    - Field Goals: Points Added Above Replacement (PAAR) based on make rates by distance
+    - Punts: Net yards vs available yards, touchback avoidance
+    - Kickoffs: Coverage efficiency (for kicking team), return efficiency
+    """
+
+    # Expected FG make rates by distance (yards)
+    EXPECTED_FG_RATES = {
+        (0, 30): 0.92,
+        (30, 40): 0.83,
+        (40, 50): 0.72,
+        (50, 60): 0.55,
+        (60, 100): 0.30,
+    }
+
+    # Points value of a field goal attempt by distance
+    FG_POINT_VALUES = {
+        (0, 30): 2.8,  # ~3 pts * make rate
+        (30, 40): 2.5,
+        (40, 50): 2.2,
+        (50, 60): 1.7,
+        (60, 100): 1.0,
+    }
+
+    # Expected punt net yards
+    EXPECTED_PUNT_NET = 40.0
+
+    # Expected kickoff touchback rate
+    EXPECTED_TOUCHBACK_RATE = 0.60
+
+    def __init__(self):
+        """Initialize the special teams model."""
+        self.team_ratings: dict[str, SpecialTeamsRating] = {}
+
+    def _get_fg_expected_rate(self, distance: int) -> float:
+        """Get expected FG make rate for a given distance."""
+        for (low, high), rate in self.EXPECTED_FG_RATES.items():
+            if low <= distance < high:
+                return rate
+        return 0.30  # Default for very long attempts
+
+    def _get_fg_point_value(self, distance: int) -> float:
+        """Get expected point value for a FG attempt at given distance."""
+        for (low, high), value in self.FG_POINT_VALUES.items():
+            if low <= distance < high:
+                return value
+        return 1.0
+
+    def calculate_fg_paar(
+        self,
+        attempts: list[dict],  # List of {distance: int, made: bool}
+    ) -> float:
+        """Calculate Field Goal Points Added Above Replacement.
+
+        Args:
+            attempts: List of FG attempts with distance and result
+
+        Returns:
+            PAAR value (positive = above replacement, negative = below)
+        """
+        if not attempts:
+            return 0.0
+
+        total_paar = 0.0
+
+        for attempt in attempts:
+            distance = attempt.get("distance", 35)
+            made = attempt.get("made", False)
+
+            expected_rate = self._get_fg_expected_rate(distance)
+            point_value = self._get_fg_point_value(distance)
+
+            # PAAR = actual points - expected points
+            actual_points = 3.0 if made else 0.0
+            expected_points = 3.0 * expected_rate
+
+            total_paar += actual_points - expected_points
+
+        return total_paar
+
+    def calculate_punt_rating(
+        self,
+        punts: list[dict],  # List of {gross: int, net: int, inside_20: bool, touchback: bool}
+    ) -> float:
+        """Calculate punt efficiency rating.
+
+        Args:
+            punts: List of punt data
+
+        Returns:
+            Punt rating (yards above expected per punt)
+        """
+        if not punts:
+            return 0.0
+
+        total_net = sum(p.get("net", 40) for p in punts)
+        total_punts = len(punts)
+        inside_20_count = sum(1 for p in punts if p.get("inside_20", False))
+        touchback_count = sum(1 for p in punts if p.get("touchback", False))
+
+        avg_net = total_net / total_punts
+        inside_20_rate = inside_20_count / total_punts
+        touchback_rate = touchback_count / total_punts
+
+        # Base rating: net yards vs expected
+        net_rating = avg_net - self.EXPECTED_PUNT_NET
+
+        # Bonus for inside 20s, penalty for touchbacks
+        positional_rating = (inside_20_rate * 5.0) - (touchback_rate * 3.0)
+
+        return net_rating + positional_rating
+
+    def calculate_kickoff_rating(
+        self,
+        kickoffs: list[dict],  # List of {touchback: bool, return_yards: int}
+        kickoff_returns: list[dict],  # List of {return_yards: int} for returns allowed
+    ) -> float:
+        """Calculate kickoff efficiency rating.
+
+        Args:
+            kickoffs: Kickoffs by the team
+            kickoff_returns: Returns against the team's kickoffs
+
+        Returns:
+            Kickoff rating (combined coverage and return efficiency)
+        """
+        coverage_rating = 0.0
+        return_rating = 0.0
+
+        # Coverage rating (for kickoffs by team)
+        if kickoffs:
+            touchbacks = sum(1 for k in kickoffs if k.get("touchback", False))
+            touchback_rate = touchbacks / len(kickoffs)
+
+            # Returns allowed
+            returns = [k for k in kickoffs if not k.get("touchback", False)]
+            if returns:
+                avg_return = np.mean(
+                    [k.get("return_yards", 20) for k in returns]
+                )
+                # Expected return is ~23 yards
+                coverage_rating = (23.0 - avg_return) / 5.0
+
+            # Bonus for touchback rate above expected
+            coverage_rating += (touchback_rate - self.EXPECTED_TOUCHBACK_RATE) * 3.0
+
+        # Return rating (for team's own returns)
+        if kickoff_returns:
+            avg_return = np.mean(
+                [r.get("return_yards", 20) for r in kickoff_returns]
+            )
+            return_rating = (avg_return - 23.0) / 5.0
+
+        return coverage_rating + return_rating
+
+    def calculate_team_rating(
+        self,
+        team: str,
+        fg_attempts: Optional[list[dict]] = None,
+        punts: Optional[list[dict]] = None,
+        kickoffs: Optional[list[dict]] = None,
+        kickoff_returns: Optional[list[dict]] = None,
+    ) -> SpecialTeamsRating:
+        """Calculate comprehensive special teams rating for a team.
+
+        Args:
+            team: Team name
+            fg_attempts: Field goal attempt data
+            punts: Punt data
+            kickoffs: Kickoff data
+            kickoff_returns: Kickoff return data
+
+        Returns:
+            SpecialTeamsRating for the team
+        """
+        fg_rating = self.calculate_fg_paar(fg_attempts or [])
+        punt_rating = self.calculate_punt_rating(punts or [])
+        kick_rating = self.calculate_kickoff_rating(
+            kickoffs or [], kickoff_returns or []
+        )
+
+        # Overall is sum, but normalized to per-game impact
+        # Typical game has ~3 FG attempts, ~5 punts, ~5 kickoffs
+        overall = (fg_rating / 3.0) + (punt_rating / 5.0) + (kick_rating / 5.0)
+
+        rating = SpecialTeamsRating(
+            team=team,
+            field_goal_rating=fg_rating,
+            punt_rating=punt_rating,
+            kickoff_rating=kick_rating,
+            overall_rating=overall,
+        )
+
+        self.team_ratings[team] = rating
+        return rating
+
+    def calculate_from_game_stats(
+        self,
+        team: str,
+        games_df: pd.DataFrame,
+    ) -> SpecialTeamsRating:
+        """Calculate special teams rating from aggregated game statistics.
+
+        This is a simplified calculation when detailed play-by-play isn't available.
+
+        Args:
+            team: Team name
+            games_df: DataFrame with game-level stats
+
+        Returns:
+            SpecialTeamsRating for the team
+        """
+        # Filter to team's games
+        home_games = games_df[games_df["home_team"] == team]
+        away_games = games_df[games_df["away_team"] == team]
+
+        # Aggregate stats (if available in the data)
+        fg_made = 0
+        fg_attempts = 0
+        punt_yards = 0
+        punt_count = 0
+
+        stat_columns_home = {
+            "home_fg_made": "fg_made",
+            "home_fg_attempts": "fg_attempts",
+            "home_punt_yards": "punt_yards",
+            "home_punts": "punts",
+        }
+
+        stat_columns_away = {
+            "away_fg_made": "fg_made",
+            "away_fg_attempts": "fg_attempts",
+            "away_punt_yards": "punt_yards",
+            "away_punts": "punts",
+        }
+
+        for _, game in home_games.iterrows():
+            if "home_fg_made" in game:
+                fg_made += game.get("home_fg_made", 0)
+                fg_attempts += game.get("home_fg_attempts", 0)
+            if "home_punt_yards" in game:
+                punt_yards += game.get("home_punt_yards", 0)
+                punt_count += game.get("home_punts", 0)
+
+        for _, game in away_games.iterrows():
+            if "away_fg_made" in game:
+                fg_made += game.get("away_fg_made", 0)
+                fg_attempts += game.get("away_fg_attempts", 0)
+            if "away_punt_yards" in game:
+                punt_yards += game.get("away_punt_yards", 0)
+                punt_count += game.get("away_punts", 0)
+
+        # Calculate simplified ratings
+        fg_rating = 0.0
+        if fg_attempts > 0:
+            actual_rate = fg_made / fg_attempts
+            # Compare to expected rate for average distance (~35 yards)
+            expected_rate = 0.78
+            fg_rating = (actual_rate - expected_rate) * fg_attempts * 3.0
+
+        punt_rating = 0.0
+        if punt_count > 0:
+            avg_gross = punt_yards / punt_count
+            expected_gross = 42.0
+            punt_rating = avg_gross - expected_gross
+
+        # Kickoff rating defaulted without detailed data
+        kick_rating = 0.0
+
+        overall = fg_rating + punt_rating + kick_rating
+
+        rating = SpecialTeamsRating(
+            team=team,
+            field_goal_rating=fg_rating,
+            punt_rating=punt_rating,
+            kickoff_rating=kick_rating,
+            overall_rating=overall,
+        )
+
+        self.team_ratings[team] = rating
+        return rating
+
+    def get_rating(self, team: str) -> Optional[SpecialTeamsRating]:
+        """Get special teams rating for a team.
+
+        Args:
+            team: Team name
+
+        Returns:
+            SpecialTeamsRating or None if not calculated
+        """
+        return self.team_ratings.get(team)
+
+    def get_matchup_differential(
+        self, team_a: str, team_b: str
+    ) -> float:
+        """Get special teams point differential in a matchup.
+
+        Args:
+            team_a: First team
+            team_b: Second team
+
+        Returns:
+            Expected point advantage for team_a from special teams
+        """
+        rating_a = self.team_ratings.get(team_a)
+        rating_b = self.team_ratings.get(team_b)
+
+        overall_a = rating_a.overall_rating if rating_a else 0.0
+        overall_b = rating_b.overall_rating if rating_b else 0.0
+
+        return overall_a - overall_b
+
+    def get_summary_df(self) -> pd.DataFrame:
+        """Get summary of all team ratings as a DataFrame.
+
+        Returns:
+            DataFrame with special teams ratings
+        """
+        if not self.team_ratings:
+            return pd.DataFrame()
+
+        data = [
+            {
+                "team": r.team,
+                "fg_rating": r.field_goal_rating,
+                "punt_rating": r.punt_rating,
+                "kickoff_rating": r.kickoff_rating,
+                "overall": r.overall_rating,
+            }
+            for r in self.team_ratings.values()
+        ]
+
+        df = pd.DataFrame(data)
+        return df.sort_values("overall", ascending=False).reset_index(drop=True)
+
+    def calculate_fg_ratings_from_plays(
+        self,
+        plays_df: pd.DataFrame,
+        games_played: Optional[dict[str, int]] = None,
+    ) -> None:
+        """Calculate FG ratings for all teams from play-by-play data.
+
+        Parses field goal plays from the play-by-play data and calculates
+        Points Added Above Expected (PAAE) for each team.
+
+        Args:
+            plays_df: DataFrame with play-by-play data (must have play_type, play_text, offense columns)
+            games_played: Optional dict of team -> games played for per-game normalization
+        """
+        if plays_df.empty:
+            logger.warning("Empty plays dataframe, skipping FG rating calculation")
+            return
+
+        # Filter to field goal plays
+        fg_plays = plays_df[
+            plays_df["play_type"].str.contains("Field Goal", case=False, na=False)
+        ].copy()
+
+        if fg_plays.empty:
+            logger.warning("No field goal plays found")
+            return
+
+        # Parse distance from play_text
+        def extract_distance(text):
+            if pd.isna(text):
+                return None
+            match = re.search(r'(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
+            return int(match.group(1)) if match else None
+
+        fg_plays["distance"] = fg_plays["play_text"].apply(extract_distance)
+
+        # Determine if made
+        fg_plays["made"] = fg_plays["play_type"].str.contains("Good", case=False, na=False)
+
+        # Filter out plays without distance (can't evaluate)
+        fg_plays = fg_plays[fg_plays["distance"].notna()].copy()
+
+        if fg_plays.empty:
+            logger.warning("No field goal plays with parseable distance")
+            return
+
+        # Calculate PAAE for each attempt
+        def calc_paae(row):
+            distance = row["distance"]
+            made = row["made"]
+            expected_rate = self._get_fg_expected_rate(distance)
+            actual_points = 3.0 if made else 0.0
+            expected_points = 3.0 * expected_rate
+            return actual_points - expected_points
+
+        fg_plays["paae"] = fg_plays.apply(calc_paae, axis=1)
+
+        # Aggregate by team
+        team_fg = fg_plays.groupby("offense").agg(
+            total_paae=("paae", "sum"),
+            attempts=("paae", "count"),
+            makes=("made", "sum"),
+        )
+
+        # Convert to per-game rating
+        # Typical team has ~2.5 FG attempts per game
+        # We want a per-game adjustment value
+        for team, row in team_fg.iterrows():
+            total_paae = row["total_paae"]
+            attempts = row["attempts"]
+
+            # Estimate games from attempts (avg ~2.5 per game)
+            estimated_games = max(1, attempts / 2.5)
+
+            if games_played and team in games_played:
+                estimated_games = games_played[team]
+
+            # Per-game FG rating
+            per_game_rating = total_paae / estimated_games
+
+            # Create rating (FG-only for now, others zeroed)
+            rating = SpecialTeamsRating(
+                team=team,
+                field_goal_rating=per_game_rating,
+                punt_rating=0.0,
+                kickoff_rating=0.0,
+                overall_rating=per_game_rating,  # FG-only
+            )
+            self.team_ratings[team] = rating
+
+        logger.info(
+            f"Calculated FG ratings for {len(self.team_ratings)} teams "
+            f"from {len(fg_plays)} FG attempts"
+        )
+
+    def get_fg_differential(self, home_team: str, away_team: str) -> float:
+        """Get field goal efficiency differential for a matchup.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+
+        Returns:
+            Expected point advantage for home team from FG efficiency
+        """
+        home_rating = self.team_ratings.get(home_team)
+        away_rating = self.team_ratings.get(away_team)
+
+        home_fg = home_rating.field_goal_rating if home_rating else 0.0
+        away_fg = away_rating.field_goal_rating if away_rating else 0.0
+
+        return home_fg - away_fg

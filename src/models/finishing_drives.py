@@ -1,0 +1,410 @@
+"""Finishing drives model for red zone and scoring efficiency."""
+
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FinishingDrivesRating:
+    """Container for team finishing drives ratings."""
+
+    team: str
+    red_zone_td_rate: float  # TD% in red zone
+    red_zone_scoring_rate: float  # Any score % in red zone
+    points_per_trip: float  # Average points per red zone trip
+    goal_to_go_conversion: float  # TD% in goal-to-go situations
+    overall_rating: float  # Combined efficiency score
+
+
+class FinishingDrivesModel:
+    """
+    Model for evaluating red zone and scoring efficiency.
+
+    Focuses on:
+    - Red zone TD% (touchdowns vs field goals)
+    - Points per red zone opportunity
+    - Goal-to-go conversion rate
+    - Scoring opportunity conversion
+    """
+
+    # Expected values (FBS averages)
+    EXPECTED_RZ_TD_RATE = 0.58  # ~58% of RZ trips end in TD
+    EXPECTED_RZ_SCORING_RATE = 0.85  # ~85% score something
+    EXPECTED_POINTS_PER_TRIP = 4.8  # Average points per RZ trip
+    EXPECTED_GOAL_TO_GO = 0.65  # 65% TD rate in goal-to-go
+
+    # Point values for conversion
+    TD_POINTS = 7.0  # Including typical PAT
+    FG_POINTS = 3.0
+
+    # Prior strength for Bayesian regression (equivalent to ~10 RZ trips of prior data)
+    # Reduced from 20 to 10 to trust actual data more at end of season
+    # With 150+ RZ plays per team, raw data is reliable
+    PRIOR_RZ_TRIPS = 10
+
+    def __init__(self, regress_to_mean: bool = True, prior_strength: int = None):
+        """Initialize the finishing drives model.
+
+        Args:
+            regress_to_mean: Whether to apply Bayesian regression toward expected values
+            prior_strength: Number of prior RZ trips to use for regression (default: 10)
+        """
+        self.team_ratings: dict[str, FinishingDrivesRating] = {}
+        self.regress_to_mean = regress_to_mean
+        self.prior_strength = prior_strength or self.PRIOR_RZ_TRIPS
+
+    def calculate_team_rating(
+        self,
+        team: str,
+        rz_touchdowns: int,
+        rz_field_goals: int,
+        rz_turnovers: int,
+        rz_failed: int,  # Downs/other
+        goal_to_go_tds: Optional[int] = None,
+        goal_to_go_attempts: Optional[int] = None,
+    ) -> FinishingDrivesRating:
+        """Calculate finishing drives rating for a team.
+
+        Args:
+            team: Team name
+            rz_touchdowns: Red zone touchdowns scored
+            rz_field_goals: Red zone field goals made
+            rz_turnovers: Red zone turnovers
+            rz_failed: Other failed red zone trips (4th down stops, etc.)
+            goal_to_go_tds: TDs in goal-to-go situations (optional)
+            goal_to_go_attempts: Total goal-to-go attempts (optional)
+
+        Returns:
+            FinishingDrivesRating for the team
+        """
+        total_rz_trips = rz_touchdowns + rz_field_goals + rz_turnovers + rz_failed
+
+        if total_rz_trips == 0:
+            return FinishingDrivesRating(
+                team=team,
+                red_zone_td_rate=self.EXPECTED_RZ_TD_RATE,
+                red_zone_scoring_rate=self.EXPECTED_RZ_SCORING_RATE,
+                points_per_trip=self.EXPECTED_POINTS_PER_TRIP,
+                goal_to_go_conversion=self.EXPECTED_GOAL_TO_GO,
+                overall_rating=0.0,
+            )
+
+        # Calculate rates with optional Bayesian regression toward the mean
+        if self.regress_to_mean:
+            # Bayesian regression: (observed + prior_mean * prior_strength) / (n + prior_strength)
+            prior = self.prior_strength
+
+            # Regressed RZ TD rate
+            prior_tds = self.EXPECTED_RZ_TD_RATE * prior
+            rz_td_rate = (rz_touchdowns + prior_tds) / (total_rz_trips + prior)
+
+            # Regressed RZ scoring rate
+            prior_scores = self.EXPECTED_RZ_SCORING_RATE * prior
+            rz_scoring_rate = (rz_touchdowns + rz_field_goals + prior_scores) / (total_rz_trips + prior)
+
+            # Regressed points per trip
+            total_points = (rz_touchdowns * self.TD_POINTS) + (rz_field_goals * self.FG_POINTS)
+            prior_points = self.EXPECTED_POINTS_PER_TRIP * prior
+            points_per_trip = (total_points + prior_points) / (total_rz_trips + prior)
+        else:
+            # Raw rates (no regression)
+            rz_td_rate = rz_touchdowns / total_rz_trips
+            rz_scoring_rate = (rz_touchdowns + rz_field_goals) / total_rz_trips
+            total_points = (rz_touchdowns * self.TD_POINTS) + (rz_field_goals * self.FG_POINTS)
+            points_per_trip = total_points / total_rz_trips
+
+        # Goal-to-go conversion (also regressed if enabled)
+        if goal_to_go_attempts and goal_to_go_attempts > 0:
+            if self.regress_to_mean:
+                prior_gtg = self.EXPECTED_GOAL_TO_GO * (self.prior_strength / 2)  # Fewer GTG situations
+                goal_to_go_rate = (goal_to_go_tds + prior_gtg) / (goal_to_go_attempts + self.prior_strength / 2)
+            else:
+                goal_to_go_rate = goal_to_go_tds / goal_to_go_attempts
+        else:
+            # Estimate from RZ TD rate
+            goal_to_go_rate = min(rz_td_rate + 0.05, 1.0)
+
+        # Overall rating: points above expected per trip
+        expected_points = self.EXPECTED_POINTS_PER_TRIP
+        overall = (points_per_trip - expected_points) * (total_rz_trips / 10.0)
+
+        rating = FinishingDrivesRating(
+            team=team,
+            red_zone_td_rate=rz_td_rate,
+            red_zone_scoring_rate=rz_scoring_rate,
+            points_per_trip=points_per_trip,
+            goal_to_go_conversion=goal_to_go_rate,
+            overall_rating=overall,
+        )
+
+        self.team_ratings[team] = rating
+        return rating
+
+    def calculate_from_drives(
+        self,
+        team: str,
+        drives_df: pd.DataFrame,
+    ) -> FinishingDrivesRating:
+        """Calculate finishing drives rating from drive-level data.
+
+        Args:
+            team: Team name
+            drives_df: DataFrame with drive data including:
+                - offense: Team on offense
+                - start_yards_to_goal: Starting field position
+                - end_yards_to_goal: Ending field position
+                - drive_result: Result (TD, FG, Punt, Turnover, etc.)
+
+        Returns:
+            FinishingDrivesRating for the team
+        """
+        # Filter to team's offensive drives that entered red zone
+        team_drives = drives_df[drives_df["offense"] == team]
+
+        # Red zone = inside 20 yards
+        rz_drives = team_drives[
+            (team_drives["end_yards_to_goal"] <= 20)
+            | (team_drives["start_yards_to_goal"] <= 20)
+        ]
+
+        if len(rz_drives) == 0:
+            return self.calculate_team_rating(team, 0, 0, 0, 0)
+
+        # Count outcomes
+        result_col = "drive_result" if "drive_result" in rz_drives.columns else "result"
+
+        rz_tds = len(rz_drives[rz_drives[result_col].str.contains("TD", case=False, na=False)])
+        rz_fgs = len(rz_drives[rz_drives[result_col].str.contains("FG", case=False, na=False)])
+        rz_turnovers = len(
+            rz_drives[
+                rz_drives[result_col].str.contains(
+                    "INT|FUMBLE|TURNOVER", case=False, na=False
+                )
+            ]
+        )
+        rz_failed = len(rz_drives) - rz_tds - rz_fgs - rz_turnovers
+
+        # Goal-to-go situations (inside 10)
+        goal_to_go = team_drives[
+            team_drives["start_yards_to_goal"] <= 10
+        ]
+        gtg_tds = len(
+            goal_to_go[goal_to_go[result_col].str.contains("TD", case=False, na=False)]
+        )
+        gtg_attempts = len(goal_to_go)
+
+        return self.calculate_team_rating(
+            team=team,
+            rz_touchdowns=rz_tds,
+            rz_field_goals=rz_fgs,
+            rz_turnovers=rz_turnovers,
+            rz_failed=rz_failed,
+            goal_to_go_tds=gtg_tds,
+            goal_to_go_attempts=gtg_attempts,
+        )
+
+    def calculate_from_game_stats(
+        self,
+        team: str,
+        games_df: pd.DataFrame,
+    ) -> FinishingDrivesRating:
+        """Calculate finishing drives rating from game-level statistics.
+
+        Args:
+            team: Team name
+            games_df: DataFrame with game stats
+
+        Returns:
+            FinishingDrivesRating for the team
+        """
+        home_games = games_df[games_df["home_team"] == team]
+        away_games = games_df[games_df["away_team"] == team]
+
+        # Aggregate red zone stats if available
+        rz_attempts = 0
+        rz_tds = 0
+
+        for _, game in home_games.iterrows():
+            if "home_rz_attempts" in game:
+                rz_attempts += game.get("home_rz_attempts", 0)
+                rz_tds += game.get("home_rz_tds", 0)
+
+        for _, game in away_games.iterrows():
+            if "away_rz_attempts" in game:
+                rz_attempts += game.get("away_rz_attempts", 0)
+                rz_tds += game.get("away_rz_tds", 0)
+
+        if rz_attempts == 0:
+            # Use scoring as proxy
+            total_points = 0
+            total_games = 0
+            for _, game in home_games.iterrows():
+                total_points += game["home_points"]
+                total_games += 1
+            for _, game in away_games.iterrows():
+                total_points += game["away_points"]
+                total_games += 1
+
+            if total_games == 0:
+                return self.calculate_team_rating(team, 0, 0, 0, 0)
+
+            # Estimate RZ trips from total scoring
+            avg_points = total_points / total_games
+            estimated_rz_trips = avg_points / self.EXPECTED_POINTS_PER_TRIP
+            estimated_tds = int(estimated_rz_trips * self.EXPECTED_RZ_TD_RATE)
+            estimated_fgs = int(estimated_rz_trips * 0.25)
+
+            return self.calculate_team_rating(
+                team=team,
+                rz_touchdowns=estimated_tds * total_games,
+                rz_field_goals=estimated_fgs * total_games,
+                rz_turnovers=int(estimated_rz_trips * 0.08 * total_games),
+                rz_failed=int(estimated_rz_trips * 0.07 * total_games),
+            )
+
+        # Calculate from actual RZ data
+        rz_fgs = int(rz_attempts * 0.25)  # Estimate
+        rz_turnovers = int(rz_attempts * 0.08)
+        rz_failed = rz_attempts - rz_tds - rz_fgs - rz_turnovers
+
+        return self.calculate_team_rating(
+            team=team,
+            rz_touchdowns=rz_tds,
+            rz_field_goals=max(0, rz_fgs),
+            rz_turnovers=max(0, rz_turnovers),
+            rz_failed=max(0, rz_failed),
+        )
+
+    def get_rating(self, team: str) -> Optional[FinishingDrivesRating]:
+        """Get finishing drives rating for a team.
+
+        Args:
+            team: Team name
+
+        Returns:
+            FinishingDrivesRating or None if not calculated
+        """
+        return self.team_ratings.get(team)
+
+    def get_matchup_differential(
+        self, team_a: str, team_b: str
+    ) -> float:
+        """Get finishing drives point differential in a matchup.
+
+        Args:
+            team_a: First team
+            team_b: Second team
+
+        Returns:
+            Expected point advantage for team_a from finishing drives
+        """
+        rating_a = self.team_ratings.get(team_a)
+        rating_b = self.team_ratings.get(team_b)
+
+        overall_a = rating_a.overall_rating if rating_a else 0.0
+        overall_b = rating_b.overall_rating if rating_b else 0.0
+
+        return overall_a - overall_b
+
+    def calculate_all_from_plays(self, plays_df: pd.DataFrame) -> None:
+        """Calculate finishing drives ratings for all teams from play-by-play data.
+
+        Identifies red zone plays (yards_to_goal <= 20) and tracks scoring outcomes.
+
+        Args:
+            plays_df: Play-by-play DataFrame with yards_to_goal, offense, play_type columns
+        """
+        if plays_df.empty or "yards_to_goal" not in plays_df.columns:
+            logger.warning("No yards_to_goal data available for finishing drives calculation")
+            return
+
+        # Filter to red zone plays
+        rz_plays = plays_df[plays_df["yards_to_goal"] <= 20].copy()
+
+        if rz_plays.empty:
+            return
+
+        all_teams = set(rz_plays["offense"].dropna())
+
+        for team in all_teams:
+            team_rz = rz_plays[rz_plays["offense"] == team]
+
+            if team_rz.empty:
+                continue
+
+            # Count scoring plays by type
+            play_types = team_rz["play_type"].str.lower().fillna("")
+
+            rz_tds = (
+                play_types.str.contains("touchdown", na=False) |
+                play_types.str.contains("rushing td", na=False) |
+                play_types.str.contains("passing td", na=False)
+            ).sum()
+
+            rz_fgs = play_types.str.contains("field goal good", na=False).sum()
+
+            rz_turnovers = (
+                play_types.str.contains("interception", na=False) |
+                play_types.str.contains("fumble recovery (opponent)", na=False)
+            ).sum()
+
+            # Estimate total RZ trips from unique game/drive combinations
+            # Approximate: count scoring plays + turnovers + failed 4th downs as "trip endings"
+            rz_failed_4th = (
+                (team_rz["down"] == 4) &
+                ~play_types.str.contains("touchdown|field goal", na=False)
+            ).sum()
+
+            # Total trips approximation
+            total_trips = rz_tds + rz_fgs + rz_turnovers + max(1, rz_failed_4th)
+
+            # Goal-to-go (inside 10)
+            gtg_plays = team_rz[team_rz["yards_to_goal"] <= 10]
+            gtg_tds = (
+                gtg_plays["play_type"].str.lower().fillna("").str.contains("touchdown", na=False)
+            ).sum()
+
+            # Estimate GTG attempts (very rough)
+            gtg_attempts = max(1, len(gtg_plays) // 3)  # ~3 plays per GTG situation
+
+            self.calculate_team_rating(
+                team=team,
+                rz_touchdowns=int(rz_tds),
+                rz_field_goals=int(rz_fgs),
+                rz_turnovers=int(rz_turnovers),
+                rz_failed=int(rz_failed_4th),
+                goal_to_go_tds=int(gtg_tds),
+                goal_to_go_attempts=int(gtg_attempts),
+            )
+
+        logger.info(f"Calculated finishing drives ratings for {len(self.team_ratings)} teams")
+
+    def get_summary_df(self) -> pd.DataFrame:
+        """Get summary of all team ratings as a DataFrame.
+
+        Returns:
+            DataFrame with finishing drives ratings
+        """
+        if not self.team_ratings:
+            return pd.DataFrame()
+
+        data = [
+            {
+                "team": r.team,
+                "rz_td_rate": r.red_zone_td_rate,
+                "rz_scoring_rate": r.red_zone_scoring_rate,
+                "points_per_trip": r.points_per_trip,
+                "goal_to_go": r.goal_to_go_conversion,
+                "overall": r.overall_rating,
+            }
+            for r in self.team_ratings.values()
+        ]
+
+        df = pd.DataFrame(data)
+        return df.sort_values("overall", ascending=False).reset_index(drop=True)
