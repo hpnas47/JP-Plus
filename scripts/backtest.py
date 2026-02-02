@@ -501,7 +501,7 @@ def walk_forward_predict_efm(
     preseason_priors: Optional[PreseasonPriors] = None,
     hfa_value: float = 2.5,
     prior_weight: int = 8,
-    ridge_alpha: float = 100.0,
+    ridge_alpha: float = 50.0,  # Optimized via sweep
     efficiency_weight: float = 0.54,
     explosiveness_weight: float = 0.36,
     turnover_weight: float = 0.10,

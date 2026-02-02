@@ -2,6 +2,26 @@
 
 ---
 
+## Session: February 2, 2026
+
+### Completed Today
+
+- **Optimized Ridge Alpha from 100 to 50** - Sweep revealed alpha=50 is optimal
+  - Tested alphas: 25, 40, 50, 60, 75, 85, 100, 150, 200
+  - **MAE improvement:** 12.56 → 12.54 (-0.02 pts)
+  - **3+ edge ATS:** 52.1% → 52.4% (+0.3%)
+  - **5+ edge ATS:** 55.3% → 56.0% (+0.7%)
+  - Lower alpha = less regularization = teams separate more
+  - Updated default in `efficiency_foundation_model.py` and `backtest.py`
+
+- **Tested EPA Regression vs SR+IsoPPP** - EPA regression performed worse
+  - Hypothesis: Single clipped EPA regression could capture both efficiency and magnitude
+  - **Result:** EPA regression had higher MAE (12.64 vs 12.55) and worse ATS (52.4% vs 54.5% at 5+ edge)
+  - SR+IsoPPP remains the better approach - Success Rate filters noise, IsoPPP adds explosiveness
+  - Experiment not committed (per user request)
+
+---
+
 ## Session: February 1, 2026 (Evening)
 
 ### Completed This Evening
@@ -238,7 +258,7 @@
 #### EFM Parameters
 | Parameter | Value | Location |
 |-----------|-------|----------|
-| `ridge_alpha` | 100 | `efficiency_foundation_model.py` |
+| `ridge_alpha` | 50 | `efficiency_foundation_model.py` (optimized from 100) |
 | `efficiency_weight` | 0.54 | `efficiency_foundation_model.py` |
 | `explosiveness_weight` | 0.36 | `efficiency_foundation_model.py` |
 | `turnover_weight` | 0.10 | `efficiency_foundation_model.py` |
@@ -294,10 +314,10 @@
 
 ### The Parking Lot (Future Work)
 
-**Where we stopped:** Investigated Ole Miss ranking discrepancy (#14 JP+ vs #7-9 other systems). Confirmed JP+ correctly identifies their defensive weakness. Validated game totals formula ready for implementation.
+**Where we stopped:** Optimized ridge alpha from 100 to 50 (+0.7% ATS at 5+ edge). Tested EPA regression vs SR+IsoPPP (SR+IsoPPP wins). Game totals formula validated and ready for implementation.
 
 **Open tasks to consider:**
-1. **EFM alpha parameter sweep** - Sweep [50, 100, 150, 200] to validate alpha=100 is optimal
+1. ~~**EFM alpha parameter sweep**~~ - ✅ DONE. Optimal alpha=50 (was 100). See Feb 2 session.
 2. **Penalty Adjustment** - Explore adding penalty yards as an adjustment factor
    - Hypothesis: Disciplined teams (fewer penalties) have a real edge JP+ ignores
    - Approach: Calculate penalty yards/game vs FBS average, convert to point impact

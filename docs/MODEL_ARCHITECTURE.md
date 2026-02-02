@@ -441,7 +441,7 @@ python scripts/backtest.py --years 2024 2025 --use-efm
 python scripts/backtest.py --years 2024 2025 --use-efm --sweep
 
 # Custom parameters
-python scripts/backtest.py --years 2025 --use-efm --alpha 100 --fcs-penalty 24
+python scripts/backtest.py --years 2025 --use-efm --alpha 50 --fcs-penalty 24
 ```
 
 ### CLI Options
@@ -451,7 +451,7 @@ python scripts/backtest.py --years 2025 --use-efm --alpha 100 --fcs-penalty 24
 | `--years` | 2023 2024 | Years to backtest |
 | `--start-week` | 4 | First week to predict |
 | `--use-efm` | Required | Use JP+ (EFM-based) model - always include this flag |
-| `--alpha` | 100 | Ridge regularization strength |
+| `--alpha` | 50 | Ridge regularization strength (optimized via sweep) |
 | `--fcs-penalty` | 24.0 | Points added for FBS vs FCS games |
 | `--no-portal` | False | Disable transfer portal adjustment |
 | `--portal-scale` | 0.15 | Weight for transfer portal impact |
@@ -487,7 +487,7 @@ python scripts/backtest.py --years 2025 --use-efm --alpha 100 --fcs-penalty 24
 ## Open Items
 
 ### Needs Validation
-- [ ] **EFM alpha parameter sweep** - Currently using alpha=100 without rigorous tuning. Should sweep [50, 100, 150, 200] across 2023-2025 to find optimal value. Estimated time: 2.5-3 hours for full sweep.
+- [x] **EFM alpha parameter sweep** - ✅ DONE. Swept alphas 25-200 across 2022-2025. Optimal: alpha=50 (MAE 12.54, 5+ edge 56.0% vs 55.3% at alpha=100). Updated defaults.
 
 ---
 

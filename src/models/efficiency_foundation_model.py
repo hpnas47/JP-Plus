@@ -126,7 +126,7 @@ class EfficiencyFoundationModel:
 
     def __init__(
         self,
-        ridge_alpha: float = 100.0,
+        ridge_alpha: float = 50.0,  # Optimized via sweep (was 100.0)
         efficiency_weight: float = 0.54,  # Reduced from 0.60 to make room for turnovers
         explosiveness_weight: float = 0.36,  # Reduced from 0.40 to make room for turnovers
         turnover_weight: float = 0.10,  # 10% weight for turnovers (like SP+)
