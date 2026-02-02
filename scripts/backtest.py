@@ -509,7 +509,8 @@ def walk_forward_predict_efm(
     asymmetric_garbage: bool = True,
     team_records: Optional[dict[str, dict[int, tuple[int, int]]]] = None,
     year: int = 2024,
-    fcs_penalty: float = 24.0,
+    fcs_penalty_elite: float = 18.0,
+    fcs_penalty_standard: float = 32.0,
     fg_plays_df: Optional[pl.DataFrame] = None,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
@@ -534,10 +535,11 @@ def walk_forward_predict_efm(
         explosiveness_weight: Weight for IsoPPP component (default 0.36)
         turnover_weight: Weight for turnover margin component (default 0.10)
         garbage_time_weight: Weight for garbage time plays (default 0.1)
-        asymmetric_garbage: Only penalize trailing team in garbage time (default False)
+        asymmetric_garbage: Only penalize trailing team in garbage time (default True)
         team_records: Historical team records for trajectory calculation
         year: Current season year (for trajectory calculation)
-        fcs_penalty: Points to add to FBS team's margin vs FCS opponent (default 24.0)
+        fcs_penalty_elite: Points for elite FCS teams (default 18.0)
+        fcs_penalty_standard: Points for standard FCS teams (default 32.0)
         fg_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
 
     Returns:
@@ -669,7 +671,8 @@ def walk_forward_predict_efm(
             travel=TravelAdjuster(),
             altitude=AltitudeAdjuster(),
             fbs_teams=fbs_teams,
-            fcs_penalty=fcs_penalty,
+            fcs_penalty_elite=fcs_penalty_elite,
+            fcs_penalty_standard=fcs_penalty_standard,
         )
 
         # Predict this week's games (Polars iteration is faster)
@@ -886,9 +889,9 @@ def fetch_all_season_data(
 def run_backtest(
     years: list[int],
     start_week: int = 4,
-    ridge_alpha: float = 150,
+    ridge_alpha: float = 50.0,
     use_priors: bool = True,
-    hfa_value: float = 2.8,
+    hfa_value: float = 2.5,
     decay_rate: float = 0.005,
     prior_weight: int = 8,
     margin_cap: int = 38,
@@ -900,7 +903,8 @@ def run_backtest(
     efm_turnover_weight: float = 0.10,
     efm_garbage_time_weight: float = 0.1,
     efm_asymmetric_garbage: bool = True,
-    fcs_penalty: float = 24.0,
+    fcs_penalty_elite: float = 18.0,
+    fcs_penalty_standard: float = 32.0,
     use_portal: bool = True,
     portal_scale: float = 0.15,
     use_opening_line: bool = False,
@@ -923,8 +927,9 @@ def run_backtest(
         efm_explosiveness_weight: EFM IsoPPP weight (default 0.36)
         efm_turnover_weight: EFM turnover margin weight (default 0.10)
         efm_garbage_time_weight: EFM garbage time play weight (default 0.1)
-        efm_asymmetric_garbage: Only penalize trailing team in garbage time (default False)
-        fcs_penalty: Points to add to FBS team's margin vs FCS (default 24.0, EFM only)
+        efm_asymmetric_garbage: Only penalize trailing team in garbage time (default True)
+        fcs_penalty_elite: Points for elite FCS teams (default 18.0, EFM only)
+        fcs_penalty_standard: Points for standard FCS teams (default 32.0, EFM only)
         use_portal: Whether to incorporate transfer portal into preseason priors
         portal_scale: How much to weight portal impact (default 0.15)
         use_opening_line: If True, use opening lines for ATS; if False, use closing lines (default)
@@ -976,7 +981,8 @@ def run_backtest(
                 asymmetric_garbage=efm_asymmetric_garbage,
                 team_records=team_records,
                 year=year,
-                fcs_penalty=fcs_penalty,
+                fcs_penalty_elite=fcs_penalty_elite,
+                fcs_penalty_standard=fcs_penalty_standard,
                 fg_plays_df=fg_plays_df,
             )
         else:
@@ -1248,14 +1254,14 @@ def main():
     parser.add_argument(
         "--alpha",
         type=float,
-        default=10,
-        help="Ridge regression alpha parameter (default: 10)",
+        default=50.0,
+        help="Ridge regression alpha parameter (default: 50.0)",
     )
     parser.add_argument(
         "--hfa",
         type=float,
-        default=3.0,
-        help="Home field advantage in points (default: 3.0)",
+        default=2.5,
+        help="Home field advantage in points (default: 2.5)",
     )
     parser.add_argument(
         "--decay",
@@ -1321,15 +1327,21 @@ def main():
         help="EFM: weight for turnover margin component (default: 0.10)",
     )
     parser.add_argument(
-        "--asymmetric-garbage",
+        "--no-asymmetric-garbage",
         action="store_true",
-        help="EFM: only penalize trailing team in garbage time (winning team keeps full weight)",
+        help="EFM: disable asymmetric garbage time (penalize both teams equally in garbage time)",
     )
     parser.add_argument(
-        "--fcs-penalty",
+        "--fcs-penalty-elite",
         type=float,
-        default=24.0,
-        help="EFM: points to add to FBS team's margin vs FCS opponent (default: 24.0)",
+        default=18.0,
+        help="EFM: points for elite FCS teams (default: 18.0)",
+    )
+    parser.add_argument(
+        "--fcs-penalty-standard",
+        type=float,
+        default=32.0,
+        help="EFM: points for standard FCS teams (default: 32.0)",
     )
     parser.add_argument(
         "--no-portal",
@@ -1382,7 +1394,7 @@ def main():
             f"explosiveness={args.efm_explosiveness_weight}, "
             f"turnover={args.efm_turnover_weight}"
         )
-        logger.info(f"EFM asymmetric garbage time: {args.asymmetric_garbage}")
+        logger.info(f"EFM asymmetric garbage time: {not args.no_asymmetric_garbage}")
     else:
         logger.info(f"Turnover scrub factor: {args.to_scrub_factor}")
 
@@ -1400,8 +1412,9 @@ def main():
         efm_efficiency_weight=args.efm_efficiency_weight,
         efm_explosiveness_weight=args.efm_explosiveness_weight,
         efm_turnover_weight=args.efm_turnover_weight,
-        efm_asymmetric_garbage=args.asymmetric_garbage,
-        fcs_penalty=args.fcs_penalty,
+        efm_asymmetric_garbage=not args.no_asymmetric_garbage,
+        fcs_penalty_elite=args.fcs_penalty_elite,
+        fcs_penalty_standard=args.fcs_penalty_standard,
         use_portal=not args.no_portal,
         portal_scale=args.portal_scale,
         use_opening_line=args.opening_line,

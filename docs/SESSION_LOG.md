@@ -20,6 +20,22 @@
   - SR+IsoPPP remains the better approach - Success Rate filters noise, IsoPPP adds explosiveness
   - Experiment not committed (per user request)
 
+- **Implemented Tiered FCS Penalties** - Elite vs Standard FCS teams now have different penalties
+  - **Problem:** Flat 24pt penalty overestimates elite FCS teams (NDSU, Montana State, etc.) and underestimates weak FCS
+  - **Analysis:** 2022-2024 FCS games show mean FBS margin of 30.3 pts vs standard FCS, but only +2 to +15 vs elite FCS
+  - **Solution:** Tiered system with ELITE=18 pts, STANDARD=32 pts
+  - **Elite FCS teams identified:** 23 teams including NDSU, Montana State, Sacramento State, Idaho, South Dakota State
+  - **Backtest results (2022-2025):**
+    | FCS Penalty Config | 3+ edge | 5+ edge |
+    |-------------------|---------|---------|
+    | Flat 24pt | 52.4% | 56.0% |
+    | Tiered 18/28 (SP+-like) | 52.4% | 56.3% |
+    | **Tiered 18/32** | **52.5%** | **56.9%** |
+  - **5+ edge improvement:** +0.9% over flat penalty, +0.6% over SP+ values
+  - Updated `spread_generator.py` with `ELITE_FCS_TEAMS` set and tiered penalty logic
+  - Updated `backtest.py` with `--fcs-penalty-elite` and `--fcs-penalty-standard` CLI args
+  - Fixed CLI default for `--asymmetric-garbage` (now enabled by default, use `--no-asymmetric-garbage` to disable)
+
 ---
 
 ## Session: February 1, 2026 (Evening)

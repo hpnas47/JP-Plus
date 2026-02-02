@@ -92,14 +92,14 @@ After calculating base ratings, JP+ adjusts for:
 - **Travel distance** (cross-country trips hurt)
 - **Altitude** (playing at BYU, Air Force, or Colorado is tough)
 - **Situational factors** (bye weeks, lookahead spots, letdown games)
-- **FCS opponent penalty** (+24 points to FBS team's margin)
+- **FCS opponent penalty** (tiered: +18 pts for elite FCS, +32 pts for standard FCS)
 - **FG efficiency differential** (kicker PAAE difference between teams)
 
 **Team-Specific HFA:** Not all home fields are equal. LSU at night (4.0 pts) is much tougher than playing at Kent State (1.75 pts). JP+ uses curated HFA values for ~50 teams based on stadium environment, with conference-based defaults for others.
 
 **Trajectory Modifier:** HFA isn't static—it changes as programs rise or fall. A team that's dramatically improved (like Vanderbilt or Indiana in 2024) will have more energized crowds and a stronger home environment. JP+ compares the prior year's win rate to the historical baseline (3 years before) and adjusts HFA by up to ±0.5 points. This is calculated once at the start of each season and locked in. Rising programs get a boost; declining programs get a penalty.
 
-**FCS Penalty:** When an FBS team plays an FCS opponent, JP+ adds 24 points to the FBS team's predicted margin. This corrects for the model's tendency to under-predict blowouts against FCS teams—without play-by-play data on FCS teams, the base model treats them as merely "below average" rather than dramatically weaker. The 24-point adjustment was derived from backtest analysis showing FBS teams beat FCS teams by ~24 points more than the base model predicted.
+**FCS Penalty (Tiered):** When an FBS team plays an FCS opponent, JP+ applies a tiered penalty based on FCS team quality. **Elite FCS teams** (North Dakota State, Montana State, South Dakota State, Sacramento State, and other FCS playoff regulars) receive an 18-point penalty. **Standard FCS teams** receive a 32-point penalty. This tiered approach recognizes that elite FCS programs routinely compete with lower-tier FBS teams, while standard FCS opponents are dramatically weaker. The tiered system improved 5+ edge ATS from 56.0% to 56.9%.
 
 ### Preseason Priors
 
@@ -150,12 +150,12 @@ By analyzing every play individually:
 
 | Years | MAE | ATS % |
 |-------|-----|-------|
-| 2022-2025 | 12.54 | 51.3% |
+| 2022-2025 | 12.51 | 51.3% |
 
 | Confidence Level | Record | ATS % |
 |------------------|--------|-------|
-| 3+ pt edge | 724-646 | 52.8% |
-| 5+ pt edge | 449-371 | 54.8% |
+| 3+ pt edge | 691-625 | 52.5% |
+| 5+ pt edge | 457-346 | 56.9% |
 
 ### Accuracy by Game Margin
 

@@ -19,6 +19,36 @@ from src.adjustments.altitude import AltitudeAdjuster
 
 logger = logging.getLogger(__name__)
 
+# Elite FCS teams (based on 2022-2024 performance vs FBS)
+# These teams average +2 to +15 margin vs FBS (compared to +30 for average FCS)
+# Criteria: avg margin < 20 with multiple FBS games, or FCS playoff regulars
+ELITE_FCS_TEAMS = frozenset({
+    # Top performers vs FBS (data-driven)
+    "Sacramento State",
+    "Idaho",
+    "Incarnate Word",
+    "North Dakota State",
+    "William & Mary",
+    "Southern Illinois",
+    "Holy Cross",
+    "Weber State",
+    "Fordham",
+    "Monmouth",
+    "South Dakota State",
+    "Montana State",
+    "Montana",
+    # Traditional FCS powers (playoff regulars)
+    "James Madison",  # Now FBS but was elite FCS
+    "Sam Houston",  # Now FBS but was elite FCS
+    "Villanova",
+    "UC Davis",
+    "Eastern Washington",
+    "Northern Iowa",
+    "Delaware",
+    "Richmond",
+    "Furman",  # 2022 was outlier, generally competitive
+})
+
 
 @dataclass
 class SpreadComponents:
@@ -95,9 +125,11 @@ class SpreadGenerator:
              fcs_adjustment
     """
 
-    # Default FCS penalty based on backtest analysis
-    # FBS teams beat FCS teams by ~24 points more than base model predicts
-    DEFAULT_FCS_PENALTY = 24.0
+    # Tiered FCS penalties based on backtest analysis (2022-2024)
+    # Mean FBS margin vs FCS: 30.3 points
+    # Elite FCS teams average +5 to +15 margin, regular FCS average +35+
+    DEFAULT_FCS_PENALTY_ELITE = 18.0  # Elite FCS (playoff regulars, consistent vs FBS)
+    DEFAULT_FCS_PENALTY_STANDARD = 32.0  # Standard FCS teams
 
     def __init__(
         self,
@@ -112,6 +144,9 @@ class SpreadGenerator:
         altitude: Optional[AltitudeAdjuster] = None,
         fbs_teams: Optional[set[str]] = None,
         fcs_penalty: Optional[float] = None,
+        fcs_penalty_elite: Optional[float] = None,
+        fcs_penalty_standard: Optional[float] = None,
+        elite_fcs_teams: Optional[set[str]] = None,
     ):
         """Initialize spread generator with model components.
 
@@ -126,8 +161,10 @@ class SpreadGenerator:
             travel: Travel adjuster
             altitude: Altitude adjuster
             fbs_teams: Set of FBS team names for FCS detection
-            fcs_penalty: Points to add to FBS team's margin vs FCS opponent
-                        (default: 24.0 based on backtest analysis)
+            fcs_penalty: DEPRECATED - use fcs_penalty_elite/standard instead
+            fcs_penalty_elite: Points for elite FCS teams (default: 18.0)
+            fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
+            elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS)
         """
         self.ridge_model = ridge_model or RidgeRatingsModel()
         self.luck_regressor = luck_regressor or LuckRegressor()
@@ -139,13 +176,24 @@ class SpreadGenerator:
         self.travel = travel or TravelAdjuster()
         self.altitude = altitude or AltitudeAdjuster()
         self.fbs_teams = fbs_teams or set()
-        self.fcs_penalty = fcs_penalty if fcs_penalty is not None else self.DEFAULT_FCS_PENALTY
+        self.elite_fcs_teams = elite_fcs_teams if elite_fcs_teams is not None else ELITE_FCS_TEAMS
+
+        # Support legacy single fcs_penalty parameter
+        if fcs_penalty is not None:
+            # Legacy mode: use single penalty for all FCS
+            self.fcs_penalty_elite = fcs_penalty
+            self.fcs_penalty_standard = fcs_penalty
+        else:
+            # Tiered mode (default)
+            self.fcs_penalty_elite = fcs_penalty_elite if fcs_penalty_elite is not None else self.DEFAULT_FCS_PENALTY_ELITE
+            self.fcs_penalty_standard = fcs_penalty_standard if fcs_penalty_standard is not None else self.DEFAULT_FCS_PENALTY_STANDARD
 
     def _get_fcs_adjustment(self, home_team: str, away_team: str) -> float:
         """Calculate FCS adjustment for the matchup.
 
-        When an FBS team plays an FCS team, apply a penalty in favor of
-        the FBS team. FCS teams are identified as teams not in the fbs_teams set.
+        When an FBS team plays an FCS team, apply a tiered penalty in favor of
+        the FBS team. Elite FCS teams (playoff regulars, consistent vs FBS)
+        get a smaller penalty than standard FCS teams.
 
         Args:
             home_team: Home team name
@@ -154,7 +202,7 @@ class SpreadGenerator:
         Returns:
             FCS adjustment (positive = favors home, negative = favors away)
         """
-        if not self.fbs_teams or self.fcs_penalty == 0:
+        if not self.fbs_teams:
             return 0.0
 
         home_is_fbs = home_team in self.fbs_teams
@@ -162,10 +210,12 @@ class SpreadGenerator:
 
         if home_is_fbs and not away_is_fbs:
             # Home is FBS, away is FCS - add penalty to home's favor
-            return self.fcs_penalty
+            penalty = self.fcs_penalty_elite if away_team in self.elite_fcs_teams else self.fcs_penalty_standard
+            return penalty
         elif away_is_fbs and not home_is_fbs:
             # Away is FBS, home is FCS - subtract penalty (favor away)
-            return -self.fcs_penalty
+            penalty = self.fcs_penalty_elite if home_team in self.elite_fcs_teams else self.fcs_penalty_standard
+            return -penalty
         else:
             # Both FBS or both non-FBS - no adjustment
             return 0.0

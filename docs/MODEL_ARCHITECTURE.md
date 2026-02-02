@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 1, 2026
+**Last Updated:** February 2, 2026
 
 ## Overview
 
@@ -130,7 +130,7 @@ EFM ratings feed into `SpreadGenerator` which applies additional adjustments:
 | **Travel** | 0-1.5 pts | Distance and time zone penalties |
 | **Altitude** | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
 | **Situational** | -2 to +2 pts | Lookahead, letdown, rivalry, bye week |
-| **FCS Penalty** | +24 pts | Added to FBS team's margin when playing FCS opponent |
+| **FCS Penalty** | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
 | **FG Efficiency** | -1.5 to +1.5 pts | Kicker PAAE differential between teams |
 
 ### Home Field Advantage Detail
@@ -182,24 +182,29 @@ HFA is adjusted for rising or declining programs. A team experiencing sustained 
 
 This ensures JP+ captures the reality that home field advantage is not static—it evolves with program trajectory.
 
-### FCS Opponent Penalty
+### FCS Opponent Penalty (Tiered)
 
-When an FBS team plays an FCS opponent, JP+ adds 24 points to the FBS team's predicted margin.
+When an FBS team plays an FCS opponent, JP+ applies a tiered penalty based on FCS team quality:
 
-**Why this is needed:**
-- The base EFM model has no play-by-play data on FCS teams
-- FCS teams default to ratings that treat them as merely "below average FBS" teams
-- Reality: FBS teams beat FCS opponents by ~33 points on average, but the model only predicts ~9
+| FCS Tier | Penalty | Examples |
+|----------|---------|----------|
+| **Elite FCS** | +18 pts | North Dakota State, Montana State, South Dakota State, Sacramento State, Idaho |
+| **Standard FCS** | +32 pts | All other FCS teams |
 
-**Derivation:**
-- Diagnostic analysis of 81 FCS games (2022-2025) showed JP+ under-predicted by 23.4 points on average
-- 99.5% of blowout prediction errors were under-predictions, not over-predictions
-- Penalty sweep from 0-30 points showed optimal value around 24
+**Why tiered?**
+- Analysis of 359 FCS games (2022-2024) showed vastly different margins by FCS quality
+- Mean FBS margin vs standard FCS: ~30 points
+- Mean FBS margin vs elite FCS: only +2 to +15 points
+- Elite FCS teams are FCS playoff regulars or have proven track records vs FBS opponents
 
-**Impact:**
-- MAE improved from 13.11 → 12.57 (-0.54 points)
-- FCS games MAE improved from 29.54 → 12.78 (-16.76 points)
-- ATS at 5+ point edge improved from 52.8% → 53.2%
+**Elite FCS Classification (23 teams):**
+Top performers vs FBS (data-driven): Sacramento State, Idaho, Incarnate Word, North Dakota State, William & Mary, Southern Illinois, Holy Cross, Weber State, Fordham, Monmouth, South Dakota State, Montana State, Montana
+
+FCS playoff regulars: Villanova, UC Davis, Eastern Washington, Northern Iowa, Delaware, Richmond, Furman
+
+**Impact (vs flat 24pt penalty):**
+- 5+ edge ATS improved from 56.0% → 56.9% (+0.9%)
+- 3+ edge ATS improved from 52.4% → 52.5% (+0.1%)
 
 **Note:** This adjustment only affects the ~3% of games involving FCS opponents. FBS vs FBS games are unchanged.
 
@@ -365,11 +370,11 @@ SpreadGenerator
 
 | Metric | Value |
 |--------|-------|
-| **MAE** | 12.54 |
-| **ATS Record** | 1255-1190-40 |
+| **MAE** | 12.51 |
+| **ATS Record** | ~1260-1195 |
 | **ATS %** | 51.3% |
-| **3+ pt edge** | 52.8% (724-646) |
-| **5+ pt edge** | 54.8% (449-371) |
+| **3+ pt edge** | 52.5% (691-625) |
+| **5+ pt edge** | 56.9% (457-346) |
 
 #### ATS by Season Phase
 | Phase | Record | ATS % |
@@ -434,25 +439,28 @@ CFB Power Ratings Model/
 ### Running Backtests
 
 ```bash
-# Standard JP+ backtest
-python scripts/backtest.py --years 2024 2025 --use-efm
+# Standard JP+ backtest (uses optimized defaults)
+python scripts/backtest.py --use-efm
 
 # Parameter sweep
-python scripts/backtest.py --years 2024 2025 --use-efm --sweep
+python scripts/backtest.py --use-efm --sweep
 
 # Custom parameters
-python scripts/backtest.py --years 2025 --use-efm --alpha 50 --fcs-penalty 24
+python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-penalty-elite 18 --fcs-penalty-standard 32
 ```
 
 ### CLI Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--years` | 2023 2024 | Years to backtest |
+| `--years` | 2022-2025 | Years to backtest |
 | `--start-week` | 4 | First week to predict |
 | `--use-efm` | Required | Use JP+ (EFM-based) model - always include this flag |
-| `--alpha` | 50 | Ridge regularization strength (optimized via sweep) |
-| `--fcs-penalty` | 24.0 | Points added for FBS vs FCS games |
+| `--alpha` | 50.0 | Ridge regularization strength (optimized via sweep) |
+| `--hfa` | 2.5 | Base home field advantage in points |
+| `--fcs-penalty-elite` | 18.0 | Points added for FBS vs elite FCS |
+| `--fcs-penalty-standard` | 32.0 | Points added for FBS vs standard FCS |
+| `--no-asymmetric-garbage` | False | Disable asymmetric garbage time (enabled by default) |
 | `--no-portal` | False | Disable transfer portal adjustment |
 | `--portal-scale` | 0.15 | Weight for transfer portal impact |
 | `--sweep` | False | Run parameter grid search |
