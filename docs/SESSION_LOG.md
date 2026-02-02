@@ -69,6 +69,51 @@
   - Added `_get_pace_adjustment()` method and `TRIPLE_OPTION_TEAMS` set to `spread_generator.py`
   - Added `pace_adjustment` component to `SpreadComponents` dataclass
 
+- **Audited Garbage Time Thresholds (Indiana/Ole Miss)** - Investigated if thresholds cause rating lag vs consensus
+  - **Hypothesis:** Our Q4 threshold (>14 pts) vs SP+ (>21 pts) might suppress "dominance signal"
+  - **Analysis of 2025 data:**
+    | Team | Garbage Time Plays | While Leading | While Trailing | Threshold Gap |
+    |------|-------------------|---------------|----------------|---------------|
+    | Indiana (def) | 154 (21.9%) | 154 | **0** | 9 plays |
+    | Ole Miss (off) | 108 (12.2%) | 108 | **0** | 21 plays |
+  - **Critical Finding:** Asymmetric weighting already solves this problem
+    - Both teams have **0 trailing garbage time plays** - no penalty applied
+    - All dominant plays receive **full 1.0x weight**
+    - The 14pt vs 21pt threshold gap affects only 30 combined plays
+  - **Indiana Defense:** Actually allows MORE success in garbage time (68.2%) vs non-garbage (64.5%)
+    - Opponent desperation offense is more effective, not less
+  - **Ole Miss Offense:** Higher SR in garbage time (56.5%) vs non-garbage (47.8%) - dominance IS captured
+  - **Recommendation:** Do NOT change thresholds. Issue is elsewhere.
+
+- **Deep Dive: Ole Miss Rating Gap vs Consensus** - Root cause is NOT garbage time
+  - **Efficiency Comparison (2025):**
+    | Team | Off SR | Def SR | SR Margin |
+    |------|--------|--------|-----------|
+    | Indiana | 54.4% | 34.7% | +19.7% |
+    | Ohio State | 54.7% | 35.9% | +18.8% |
+    | Ole Miss | 48.9% | 39.2% | **+9.7%** |
+  - **Ole Miss SR Margin gap vs elite teams: -10pp** - this is the primary driver
+  - **Turnover Margin:**
+    | Team | TO Margin |
+    |------|-----------|
+    | Indiana | +5 |
+    | Oregon | +4 |
+    | Ole Miss | **-2** |
+  - **Game-by-game defensive disasters:**
+    - Georgia: 62.5% SR allowed
+    - Arkansas: 52.1% SR allowed
+  - **Why SP+ might rank Ole Miss higher:**
+    - Different opponent adjustment (SEC strength credit)
+    - More aggressive turnover regression
+    - Different explosiveness weighting (Ole Miss has 1.292 IsoPPP)
+    - EPA-based vs SR-based defense metrics
+  - **Parked for future investigation:** Opponent adjustment methodology, turnover regression tuning
+
+- **Ensured Script Connectivity** - Updated all scripts to pass FBS teams and FCS penalties
+  - `backtest.py` legacy path: Added `fbs_teams`, `fcs_penalty_elite`, `fcs_penalty_standard` params
+  - `run_weekly.py`: Now fetches FBS teams and passes to SpreadGenerator
+  - Ensures pace adjustment and tiered FCS penalties work across all execution paths
+
 ---
 
 ## Session: February 1, 2026 (Evening)
