@@ -26,15 +26,16 @@ sys.path.insert(0, str(project_root))
 from config.settings import get_settings
 from src.api.cfbd_client import CFBDClient
 from src.data.processors import DataProcessor, RecencyWeighter
-from src.models.ridge_model import RidgeRatingsModel, TeamRatings
 from src.models.efficiency_foundation_model import EfficiencyFoundationModel
-from src.models.luck_regression import LuckRegressor
 from src.models.preseason_priors import PreseasonPriors
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
-from src.models.early_down_model import EarlyDownModel
+# Legacy models (kept for comparison, EFM recommended instead)
+from src.models.legacy.ridge_model import RidgeRatingsModel, TeamRatings
+from src.models.legacy.luck_regression import LuckRegressor
+from src.models.legacy.early_down_model import EarlyDownModel
 from src.models.finishing_drives import FinishingDrivesModel
 from src.models.special_teams import SpecialTeamsModel
 from src.predictions.spread_generator import SpreadGenerator

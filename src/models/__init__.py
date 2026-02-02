@@ -1,14 +1,23 @@
-"""Model components package."""
+"""Model components package.
 
-from .ridge_model import RidgeRatingsModel, TeamRatings
-from .luck_regression import LuckRegressor
-from .special_teams import SpecialTeamsModel
+Active models (EFM pipeline):
+- EfficiencyFoundationModel: Core rating engine
+- FinishingDrivesModel: Red zone efficiency
+- SpecialTeamsModel: Field goal efficiency
+- PreseasonPriors: Preseason ratings and adjustments
+
+Legacy models available in src.models.legacy:
+- RidgeRatingsModel, LuckRegressor, EarlyDownModel
+"""
+
+from .efficiency_foundation_model import EfficiencyFoundationModel
 from .finishing_drives import FinishingDrivesModel
+from .special_teams import SpecialTeamsModel
+from .preseason_priors import PreseasonPriors
 
 __all__ = [
-    "RidgeRatingsModel",
-    "TeamRatings",
-    "LuckRegressor",
-    "SpecialTeamsModel",
+    "EfficiencyFoundationModel",
     "FinishingDrivesModel",
+    "SpecialTeamsModel",
+    "PreseasonPriors",
 ]
