@@ -458,12 +458,18 @@
 | Parameter | Value | Location |
 |-----------|-------|----------|
 | Prior year weight | 0.6 (default) | `preseason_priors.py` |
-| Talent weight | 0.4 (default) | `preseason_priors.py` |
-| Regression range | 0.1 - 0.5 (based on returning PPA) | `preseason_priors.py` → `_get_regression_factor()` |
+| Talent weight | 0.4 (default, reduced to 0.2 for extreme teams) | `preseason_priors.py` |
+| Base regression range | 0.1 - 0.5 (based on returning PPA) | `preseason_priors.py` → `_get_regression_factor()` |
+| Asymmetric regression threshold | ±8 pts (full), ±20 pts (min) | `preseason_priors.py` → `_get_regression_factor()` |
+| Asymmetric regression floor | 0.33x multiplier at 20+ pts from mean | `preseason_priors.py` → `_get_regression_factor()` |
+| Extremity talent threshold | 12-20 pts from mean | `preseason_priors.py` → `calculate_preseason_ratings()` |
+| Extremity talent scale | 0.5 (halve talent weight) at 20+ pts | `preseason_priors.py` → `calculate_preseason_ratings()` |
 | Coaching forget factor cap | 0.5 | `preseason_priors.py` → `_calculate_coaching_change_weights()` |
 | Coaching gap divisor | 60 | `preseason_priors.py` (gap/60 = base forget) |
 | Portal scale | 0.15 | `preseason_priors.py` → `calculate_portal_impact()` |
 | Portal adjustment cap | ±15% | `preseason_priors.py` → `calculate_portal_impact()` |
+| Triple-option rating boost | +6.0 pts | `preseason_priors.py` → `TRIPLE_OPTION_RATING_BOOST` |
+| Triple-option talent weight | 0% (use 100% prior) | `preseason_priors.py` → `calculate_preseason_ratings()` |
 
 #### Coach Pedigree (Data-Driven)
 | Tier | Pedigree Range | Example Coaches |

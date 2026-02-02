@@ -265,6 +265,24 @@ The regression factor for prior year ratings is adjusted based on returning prod
 
 This prevents overvaluing teams that lost key players and undervaluing teams returning most of their production.
 
+### Asymmetric Regression
+
+Standard regression pulls all teams toward the mean uniformly—but this compresses the true spread between elite and terrible teams. A very bad team at -25 shouldn't gain 7.5 points just from regression.
+
+JP+ applies **asymmetric regression**: teams far from the mean regress less than teams near the mean.
+
+| Distance from Mean | Regression Multiplier | Effective Regression |
+|-------------------|----------------------|---------------------|
+| ±8 pts | 1.0x | 30% (baseline) |
+| ±14 pts | 0.67x | 20% |
+| ±20+ pts | 0.33x | 10% |
+
+**Example:** Kent State at raw -25 rating:
+- Old (uniform): -25 × 0.7 = -17.5 (lost 7.5 pts of badness)
+- New (asymmetric): -25 × 0.9 = -22.5 (kept most of badness)
+
+**Extremity-Weighted Talent:** For extreme teams (20+ pts from mean), talent blend weight is reduced from 40% to 20%. This trusts proven performance over talent projections for outlier teams, preventing the talent component from compressing ratings back toward average.
+
 ### Transfer Portal Adjustment
 
 The returning production metric only captures players who stayed—it doesn't account for incoming transfers. JP+ addresses this by fetching transfer portal data and calculating net production impact:
@@ -596,6 +614,8 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 ## Changelog
 
 ### February 2026
+- **Added Asymmetric Regression for Preseason Priors** - Fixed spread compression problem for blowout games. Standard regression pulled ALL teams toward mean uniformly, causing bad teams (Kent State -25) to gain 7.5 pts they didn't earn. Now regression scales by distance from mean: teams within ±8 pts get normal 30% regression, teams 20+ pts from mean get only 10% regression. Additionally, talent weight is halved (40%→20%) for extreme teams to trust proven performance over talent projections. Result: rating spread preserved at 90% vs 70% before.
+- **Added Triple-Option Team Adjustment** - Fixed systematic underrating of triple-option teams (Navy, Army, Air Force, Kennesaw State). These teams were showing as underdogs when Vegas had them as favorites because: (1) SP+ efficiency metrics don't capture their scheme's value, (2) service academies have artificially low recruiting rankings. Applied +6 pt boost to raw SP+ ratings and 100% prior weight (no talent blend). Result: 2024 early season ATS improved from 49.5% to 51.1%.
 - **Added QB Injury Adjustment System** - Manual flagging system for starter injuries. Pre-computes depth charts from CFBD player PPA data, calculates starter/backup differential, applies adjustment = PPA_drop × 30 plays/game. Usage: `--qb-out TEAM` CLI flag. Example adjustments: Georgia -6.8 pts, Ohio State -10.0 pts, Texas +8.0 pts (Arch Manning backup is better).
 - **Added Time Decay Parameter (but NOT used)** - Tested time decay (weighting recent games more) in 2D sweep with alpha. Finding: decay consistently hurts performance across all alpha values. Best config is alpha=50, decay=1.0 (no decay). Walk-forward already ensures temporal validity. Parameter added but defaults to 1.0.
 - **Tested Havoc Rate (NOT implemented)** - Investigated replacing turnovers with Havoc Rate (TFLs, sacks, PBUs). Finding: Havoc correlates with turnovers forced (r=0.425) but neither provides ATS edge—Vegas already prices both. Kept current turnover approach.

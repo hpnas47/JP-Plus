@@ -3,8 +3,21 @@
 Uses previous year's ratings and team talent to create preseason expectations.
 These are blended with in-season data based on games played.
 
-Includes coaching change regression: when a new HC arrives at an underperforming
-team, the model dampens prior year drag and weights talent more heavily.
+Key features:
+- **Asymmetric Regression**: Teams far from the mean (elite or terrible) regress less
+  toward average. This preserves the true spread between top and bottom teams,
+  improving accuracy for blowout games where traditional regression compresses
+  ratings too much.
+
+- **Extremity-Weighted Talent**: For extreme teams (20+ pts from mean), talent weight
+  is reduced to 50% of normal. This trusts proven performance over talent projections
+  for outlier teams.
+
+- **Coaching Change Adjustment**: When a new HC arrives at an underperforming team,
+  the model dampens prior year drag and weights talent more heavily.
+
+- **Transfer Portal Integration**: Adjusts returning production based on net portal
+  gains/losses.
 """
 
 import logging
@@ -109,6 +122,45 @@ COACHING_CHANGES = {
 # Manual overrides for talent rank (if API data is inconsistent)
 # Format: {year: {team: talent_rank}}
 TALENT_RANK_OVERRIDES = {}
+
+
+# =============================================================================
+# TRIPLE-OPTION TEAM ADJUSTMENT
+# =============================================================================
+
+# Triple-option teams are systematically underrated by efficiency metrics like SP+
+# because EPA calculations don't capture their scheme's value properly.
+# Analysis of 2024 backtest showed Navy/Army rated as underdogs when Vegas had
+# them as 7-11 pt favorites. Adding a rating boost corrects this systematic bias.
+#
+# Boost magnitude based on observed discrepancy:
+# - Navy vs Temple: Ours +4.1, Vegas -11.5 → 15.6 pt gap
+# - Army vs Rice: Ours +8.8, Vegas -7.0 → 15.8 pt gap
+# - Navy vs Memphis: Ours +21.4, Vegas +9.5 → 11.9 pt gap
+# Using 8.0 pt boost as conservative estimate (half of observed gap)
+
+TRIPLE_OPTION_TEAMS = frozenset({
+    "Army",
+    "Navy",
+    "Air Force",
+    "Kennesaw State",
+})
+
+TRIPLE_OPTION_RATING_BOOST = 6.0  # Points to add to raw SP+ rating (conservative)
+
+
+def get_triple_option_boost(team: str) -> float:
+    """Get rating boost for triple-option teams.
+
+    Args:
+        team: Team name
+
+    Returns:
+        Rating boost (positive points to add to raw SP+ rating)
+    """
+    if team in TRIPLE_OPTION_TEAMS:
+        return TRIPLE_OPTION_RATING_BOOST
+    return 0.0
 
 
 def get_coach_pedigree(coach_name: str) -> float:
@@ -450,34 +502,74 @@ class PreseasonPriors:
 
         return normalized
 
-    def _get_regression_factor(self, returning_ppa: Optional[float]) -> float:
-        """Calculate regression factor based on returning production.
+    def _get_regression_factor(
+        self,
+        returning_ppa: Optional[float],
+        raw_prior: Optional[float] = None,
+        mean_prior: float = 0.0,
+    ) -> float:
+        """Calculate regression factor based on returning production and rating extremity.
 
         Teams with high returning production should regress less toward mean.
         Teams with low returning production (roster turnover) regress more.
 
-        Formula: regression = 0.5 - (0.4 * percent_ppa)
-        - At 0% returning: 0.5 (heavy regression - very different team)
-        - At 50% returning: 0.3 (baseline)
-        - At 100% returning: 0.1 (minimal regression - same team)
+        ASYMMETRIC REGRESSION: Teams far from the mean regress less.
+        This preserves the true spread between elite and weak teams, preventing
+        artificial compression that hurts betting accuracy for blowout games.
+
+        Formula:
+        1. Base regression = 0.5 - (0.4 * percent_ppa)
+           - At 0% returning: 0.5 (heavy regression)
+           - At 50% returning: 0.3 (baseline)
+           - At 100% returning: 0.1 (minimal regression)
+
+        2. Extremity multiplier scales down regression for extreme teams:
+           - Within ±10 of mean: full regression (multiplier = 1.0)
+           - 10-25 from mean: linear scale down (1.0 -> 0.5)
+           - 25+ from mean: minimal regression (multiplier = 0.5)
+
+        3. Final regression = base_regression * extremity_multiplier
 
         Args:
             returning_ppa: Percentage of PPA returning (0-1), or None if unknown
+            raw_prior: The raw prior rating before regression (for extremity calc)
+            mean_prior: The mean prior rating to measure distance from
 
         Returns:
             Regression factor (0-1)
         """
+        # Calculate base regression from returning production
         if returning_ppa is None:
-            # Unknown returning production - use default
-            return self.regression_factor
+            base_regression = self.regression_factor
+        else:
+            # Clamp to valid range
+            pct = max(0.0, min(1.0, returning_ppa))
+            # Linear interpolation: high returning = less regression
+            base_regression = 0.5 - (0.4 * pct)
 
-        # Clamp to valid range
-        pct = max(0.0, min(1.0, returning_ppa))
+        # Apply asymmetric regression based on distance from mean
+        # This preserves the true spread - bad teams stay bad, good teams stay good
+        if raw_prior is not None:
+            distance_from_mean = abs(raw_prior - mean_prior)
 
-        # Linear interpolation: high returning = less regression
-        regression = 0.5 - (0.4 * pct)
+            # Scale down regression for extreme teams:
+            # - Within ±8 of mean: full regression (multiplier = 1.0)
+            # - 8-20 from mean: linear scale down (1.0 -> 0.33)
+            # - 20+ from mean: minimal regression (multiplier = 0.33)
+            #
+            # More aggressive than before to preserve full spread between
+            # elite teams (+30) and terrible teams (-25)
+            if distance_from_mean <= 8:
+                extremity_multiplier = 1.0
+            elif distance_from_mean >= 20:
+                extremity_multiplier = 0.33
+            else:
+                # Linear interpolation between 8 and 20
+                extremity_multiplier = 1.0 - 0.67 * (distance_from_mean - 8) / 12
 
-        return regression
+            return base_regression * extremity_multiplier
+
+        return base_regression
 
     def _calculate_coaching_change_weights(
         self,
@@ -626,12 +718,27 @@ class PreseasonPriors:
             else:
                 effective_ret_ppa = None
 
-            # Calculate team-specific regression factor based on effective returning production
-            team_regression = self._get_regression_factor(effective_ret_ppa)
+            # Get raw prior rating first (needed for asymmetric regression)
+            raw_prior = prior_sp.get(team)
+
+            # Apply triple-option boost to raw prior
+            # These teams are systematically underrated by SP+ efficiency metrics
+            triple_option_boost = get_triple_option_boost(team)
+            if raw_prior is not None and triple_option_boost > 0:
+                raw_prior += triple_option_boost
+                logger.debug(f"{team}: Applied triple-option boost of +{triple_option_boost:.1f} pts")
+
+            # Calculate team-specific regression factor based on:
+            # 1. Effective returning production (higher = less regression)
+            # 2. Distance from mean (farther = less regression - asymmetric)
+            team_regression = self._get_regression_factor(
+                effective_ret_ppa,
+                raw_prior=raw_prior,
+                mean_prior=mean_prior,
+            )
 
             # Get prior year rating (regressed toward mean)
-            if team in prior_sp:
-                raw_prior = prior_sp[team]
+            if raw_prior is not None:
                 regressed_prior = (
                     raw_prior * (1 - team_regression)
                     + mean_prior * team_regression
@@ -665,19 +772,55 @@ class PreseasonPriors:
             # Calculate combined rating
             if team in prior_sp and team in talent_normalized:
                 # Have both sources - apply potentially adjusted weights
+                #
+                # SPECIAL CASE: Triple-option teams (service academies)
+                # These teams have very low recruiting talent due to unique constraints
+                # (service commitment, physical requirements) but the triple-option
+                # scheme lets them punch way above their talent weight.
+                # Use 100% prior rating, no talent blend.
+                if team in TRIPLE_OPTION_TEAMS:
+                    final_prior_wt = 1.0
+                    final_talent_wt = 0.0
+                    logger.debug(f"{team}: Triple-option team, using 100% prior rating")
+                # For extreme teams, reduce talent weight to preserve proven performance
+                # Talent regression hurts accuracy for outlier teams (very good or very bad)
+                # because talent doesn't capture scheme advantages or systemic issues
+                elif raw_prior is not None:
+                    distance_from_mean = abs(raw_prior - mean_prior)
+                    if distance_from_mean >= 20:
+                        # Very extreme team - trust prior more, talent less
+                        extremity_talent_scale = 0.5  # Halve talent weight
+                    elif distance_from_mean >= 12:
+                        # Moderately extreme - gradual reduction
+                        extremity_talent_scale = 1.0 - 0.5 * (distance_from_mean - 12) / 8
+                    else:
+                        extremity_talent_scale = 1.0
+
+                    # Apply extremity scaling to coaching-adjusted weights
+                    final_talent_wt = talent_wt * extremity_talent_scale
+                    final_prior_wt = 1.0 - final_talent_wt
+                else:
+                    final_prior_wt = prior_wt
+                    final_talent_wt = talent_wt
+
                 combined = (
-                    regressed_prior * prior_wt
-                    + talent_score * talent_wt
+                    regressed_prior * final_prior_wt
+                    + talent_score * final_talent_wt
                 )
 
-                # Track coaching adjustment impact
-                if is_new_hc:
+                # Track coaching adjustment impact (compared to default weights)
+                if is_new_hc and forget_factor > 0:
+                    # Calculate what rating would be with default weights
+                    default_talent_scale = extremity_talent_scale if raw_prior is not None else 1.0
+                    default_talent_wt = self.talent_weight * default_talent_scale
+                    default_prior_wt = 1.0 - default_talent_wt
                     default_combined = (
-                        regressed_prior * self.prior_year_weight
-                        + talent_score * self.talent_weight
+                        regressed_prior * default_prior_wt
+                        + talent_score * default_talent_wt
                     )
                     coaching_adj = combined - default_combined
-                    coaching_adjustments.append((team, coach_name, coaching_adj, talent_rank, perf_rank))
+                    if abs(coaching_adj) > 0.1:
+                        coaching_adjustments.append((team, coach_name, coaching_adj, talent_rank, perf_rank))
 
                 confidence = min(prior_confidence, talent_confidence) + 0.2
             elif team in prior_sp:

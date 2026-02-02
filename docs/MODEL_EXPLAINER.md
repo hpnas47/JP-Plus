@@ -104,11 +104,17 @@ After calculating base ratings, JP+ adjusts for:
 
 **Pace Adjustment (Triple-Option):** Triple-option teams (Army, Navy, Air Force, Kennesaw State) run significantly fewer plays per game (~55 vs ~70 for standard offenses). This creates more variance in outcomes—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001). To account for this reduced game volume, JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
 
+**Triple-Option Rating Boost:** Triple-option teams (especially service academies) are systematically underrated by efficiency metrics like SP+ because EPA calculations don't fully capture their scheme's value. Additionally, service academies have artificially low recruiting rankings due to unique constraints (service commitment, physical requirements) that don't reflect their actual competitiveness. JP+ applies a +6 point boost to raw SP+ ratings for these teams and uses 100% prior rating (no talent blend) to correct this systematic bias.
+
 ### Preseason Priors
 
 In weeks 1-4, there's insufficient current-season data. JP+ blends in:
 - Previous year's SP+ ratings (60%) - adjusted for returning production
 - Recruiting rankings / talent composite (40%)
+
+**Asymmetric Regression:** Standard regression pulls all teams toward the mean uniformly—but this compresses the true spread between elite and terrible teams. A team rated -25 (very bad) shouldn't gain 7 points from regression. JP+ applies asymmetric regression: teams far from the mean (±20 pts) regress only ~10% vs the normal ~30% for mid-tier teams. This preserves the true gap between Ohio State (+27) and Kent State (-25), improving blowout game accuracy.
+
+**Extremity-Weighted Talent Blend:** For extreme teams (20+ pts from mean), the talent weight is reduced from 40% to 20%. Talent composites are more compressed than performance—a terrible team isn't terrible because of talent alone (scheme, coaching, roster construction matter). Trusting proven performance for outliers prevents artificial spread compression.
 
 **Returning Production Adjustment:** Teams returning most of their production (high % of PPA returning) keep more of their prior rating. Teams with heavy roster turnover regress more toward the mean. This prevents overvaluing teams that lost key players.
 
