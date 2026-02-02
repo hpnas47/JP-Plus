@@ -107,7 +107,7 @@ The ridge regression training data **excludes plays involving FCS opponents**. W
 **Why this matters:**
 - FCS teams have too few games against FBS opponents to estimate reliable coefficients
 - Including FCS plays pollutes the regression with unreliable team strength estimates
-- FCS opponents are handled separately via the FCS Penalty adjustment (+24 pts)
+- FCS opponents are handled separately via the tiered FCS Penalty adjustment (+18/+32 pts)
 
 This is implemented in `backtest.py` by filtering plays where both offense and defense are in the FBS teams set before passing to the EFM.
 
@@ -132,6 +132,8 @@ EFM ratings feed into `SpreadGenerator` which applies additional adjustments:
 | **Situational** | -2 to +2 pts | Lookahead, letdown, rivalry, bye week |
 | **FCS Penalty** | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
 | **FG Efficiency** | -1.5 to +1.5 pts | Kicker PAAE differential between teams |
+| **Pace Adjustment** | -10% to -15% | Spread compression for triple-option teams |
+| **QB Injury** | ±3-10 pts | Manual flag when starting QB is out (see below) |
 
 ### Home Field Advantage Detail
 
@@ -208,12 +210,38 @@ FCS playoff regulars: Villanova, UC Davis, Eastern Washington, Northern Iowa, De
 
 **Note:** This adjustment only affects the ~3% of games involving FCS opponents. FBS vs FBS games are unchanged.
 
+### QB Injury Adjustment
+
+QB injuries are the single biggest source of prediction error that JP+ otherwise ignores. The model provides a manual flagging system for known starter injuries:
+
+1. **Pre-computed depth charts:** For each team, identify the starter (most pass attempts) and backup using CFBD player PPA data
+2. **PPA differential:** Calculate the per-play efficiency drop when switching to the backup
+3. **Point adjustment:** `PPA_drop × 30 plays/game` (QBs typically involved in ~30 pass/scramble plays)
+
+| Team (2024) | Starter | PPA | Backup | PPA | Adjustment |
+|-------------|---------|-----|--------|-----|------------|
+| Georgia | Beck | 0.353 | Stockton | 0.125 | **-6.8 pts** |
+| Ohio State | Howard | 0.575 | Brown | 0.243 | **-10.0 pts** |
+| Texas | Ewers | 0.322 | A. Manning | 0.589 | **+8.0 pts** |
+| Alabama | Milroe | 0.321 | Simpson | 0.215 | **-3.2 pts** |
+
+**Usage:** `python scripts/run_weekly.py --qb-out Georgia Texas` applies the adjustment for those teams.
+
+**Note:** Texas is unusual—Arch Manning (backup) has better PPA than Ewers (starter), so the adjustment is positive. CFBD has no injury data; flagging requires manual input.
+
+### Pace Adjustment (Triple-Option)
+
+Triple-option teams (Army, Navy, Air Force, Kennesaw State) run ~55 plays/game vs ~70 for standard offenses. This creates more variance—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001).
+
+JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
+
 #### Key Files
 - `src/predictions/spread_generator.py` - Combines all components
 - `src/adjustments/home_field.py` - Team-specific and conference HFA values
 - `src/adjustments/travel.py` - Travel distance/timezone
 - `src/adjustments/altitude.py` - Altitude adjustment
 - `src/adjustments/situational.py` - Situational factors
+- `src/adjustments/qb_adjustment.py` - QB injury adjustment system
 
 ---
 
@@ -431,7 +459,8 @@ CFB Power Ratings Model/
 │   │   ├── home_field.py        # Team-specific HFA & trajectory
 │   │   ├── travel.py            # Travel adjustments
 │   │   ├── altitude.py          # Altitude adjustments
-│   │   └── situational.py       # Situational factors
+│   │   ├── situational.py       # Situational factors
+│   │   └── qb_adjustment.py     # QB injury adjustment system
 │   └── predictions/
 │       ├── spread_generator.py  # Combines all components
 │       └── vegas_comparison.py  # Compare to Vegas lines
@@ -475,6 +504,22 @@ python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-penalty-
 | `--sweep` | False | Run parameter grid search |
 | `--no-priors` | False | Disable preseason priors |
 
+### Weekly Predictions (run_weekly.py)
+
+```bash
+# Generate predictions for current week
+python scripts/run_weekly.py --year 2025 --week 10
+
+# With QB injury adjustments
+python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--year` | Current | Season year |
+| `--week` | Current | Week to predict |
+| `--qb-out` | None | Teams whose starting QB is out (space-separated) |
+
 ---
 
 ## Key Design Decisions
@@ -512,9 +557,9 @@ python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-penalty-
 
 ### High Priority
 - [x] **Expose separate O/D/ST ratings** - ✅ DONE. JP+ now exposes separate offensive, defensive, and special teams ratings via `get_offensive_rating()`, `get_defensive_rating()`, `get_special_teams_rating()`, and in `get_ratings_df()` output. This enables future game totals prediction.
+- [x] **Add quarterback-specific adjustments for injuries** - ✅ DONE. Added `QBInjuryAdjuster` class that pre-computes depth charts from CFBD player PPA data. Manual flagging via `--qb-out TEAM` CLI flag. Adjustment = PPA drop × 30 plays/game.
 - [ ] **Game totals prediction (over/under)** - Formula validated: `Total = 2×Avg + (Off_A + Off_B) - (Def_A + Def_B)`. Each team's expected points: `Team_A_points = Avg + Off_A - Def_B`. Ready to implement.
 - [ ] Integrate Finishing Drives component into EFM foundation
-- [ ] Add quarterback-specific adjustments for transfers/injuries
 - [ ] Improve situational adjustment calibration
 
 ### Medium Priority
@@ -551,6 +596,10 @@ python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-penalty-
 ## Changelog
 
 ### February 2026
+- **Added QB Injury Adjustment System** - Manual flagging system for starter injuries. Pre-computes depth charts from CFBD player PPA data, calculates starter/backup differential, applies adjustment = PPA_drop × 30 plays/game. Usage: `--qb-out TEAM` CLI flag. Example adjustments: Georgia -6.8 pts, Ohio State -10.0 pts, Texas +8.0 pts (Arch Manning backup is better).
+- **Added Time Decay Parameter (but NOT used)** - Tested time decay (weighting recent games more) in 2D sweep with alpha. Finding: decay consistently hurts performance across all alpha values. Best config is alpha=50, decay=1.0 (no decay). Walk-forward already ensures temporal validity. Parameter added but defaults to 1.0.
+- **Tested Havoc Rate (NOT implemented)** - Investigated replacing turnovers with Havoc Rate (TFLs, sacks, PBUs). Finding: Havoc correlates with turnovers forced (r=0.425) but neither provides ATS edge—Vegas already prices both. Kept current turnover approach.
+- **Tested Style Mismatch Adjustment (NOT implemented)** - Tested rush/pass style profiles for matchup advantages. Finding: Made predictions worse (ATS -0.2pp, MAE +0.09). Vegas already prices style matchups efficiently.
 - **Added Turnover Margin Component (10%)** - JP+ now includes per-game turnover margin as 10% of the overall rating, matching SP+'s approach. Turnovers are identified from play-by-play data (interceptions, fumble recoveries) and converted to point value using 4.5 points per turnover. The efficiency and explosiveness weights were adjusted from 60/40 to 54/36 to accommodate the new component. **Bayesian shrinkage** (prior_strength=10) regresses turnover margin toward 0 based on games played, preventing overweighting of small-sample luck while trusting sustained performance. This captures teams like Indiana (+15 margin) and Notre Dame (+17 margin) who create systematic turnover advantages that pure efficiency metrics miss.
 - **Reduced Red Zone Regression Strength (20→10)** - The prior_strength for RZ TD rate regression was reduced from 20 to 10 to better credit elite RZ teams at end of season. Impact: 5+ edge ATS improved from 54.8% to 55.3%.
 - **Added FBS-Only Filtering** - Ridge regression training data now excludes plays involving FCS opponents. FCS teams have insufficient games against FBS opponents to estimate reliable coefficients, so including them pollutes the regression. FCS games are handled separately via the FCS Penalty (+24 pts). Impact: 5+ pt edge improved from 54.0% → 54.8% (+0.8%). This is the cleanest data pipeline for opponent adjustment.

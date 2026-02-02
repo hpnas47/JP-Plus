@@ -114,6 +114,20 @@
   - `run_weekly.py`: Now fetches FBS teams and passes to SpreadGenerator
   - Ensures pace adjustment and tiered FCS penalties work across all execution paths
 
+- **Tested Alpha × Decay 2D Sweep - Decay NOT Beneficial** - Time decay makes predictions worse
+  - **Hypothesis:** Weight recent games more heavily (decay=0.95 → Week 1 gets ~0.54 weight by Week 12)
+  - **Added:** `time_decay` parameter to `EfficiencyFoundationModel`
+  - **Sweep:** 5 alphas (30,40,50,60,75) × 5 decays (1.0,0.98,0.96,0.94,0.92) across 2022-2025
+  - **Results:**
+    | Config | MAE | 5+ Edge |
+    |--------|-----|---------|
+    | alpha=40, decay=1.0 | **13.802** | **52.8%** |
+    | alpha=50, decay=1.0 | 13.805 | 52.6% |
+    | alpha=75, decay=0.92 | 13.924 | 50.6% |
+  - **Clear finding:** No decay (1.0) is best across ALL alpha values
+  - **Why decay hurts:** Walk-forward already ensures temporal validity; early-season data provides valuable opponent calibration; teams don't change as much week-to-week as assumed
+  - **Decision:** Keep alpha=50, decay=1.0 (default). Parameter added but not used.
+
 - **Implemented QB Injury Adjustment System** - Manual flagging of starter injuries with pre-computed drop-offs
   - **Problem:** QB injuries are the single biggest source of MAE error, not handled by model
   - **Solution:** Minimal viable implementation with manual flagging
@@ -425,9 +439,11 @@
 | `turnover_prior_strength` | 10.0 | `efficiency_foundation_model.py` |
 | `garbage_time_weight` | 0.1 | `efficiency_foundation_model.py` |
 | `asymmetric_garbage` | True | `efficiency_foundation_model.py` |
+| `time_decay` | 1.0 | `efficiency_foundation_model.py` (tested, decay hurts performance) |
 | `rating_std` | 12.0 | `efficiency_foundation_model.py` |
 | `rz_prior_strength` | 10 | `finishing_drives.py` |
-| `fcs_penalty` | 24.0 | `spread_generator.py` |
+| `fcs_penalty_elite` | 18.0 | `spread_generator.py` |
+| `fcs_penalty_standard` | 32.0 | `spread_generator.py` |
 
 #### HFA Parameters
 | Parameter | Value | Location |

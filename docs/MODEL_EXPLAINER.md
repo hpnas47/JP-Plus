@@ -200,16 +200,16 @@ End-of-season power ratings (normalized for direct spread calculation):
 
 | Rank | Team | Overall |
 |------|------|---------|
-| 1 | Ohio State | +28.0 |
-| 2 | Indiana | +27.8 |
-| 3 | Notre Dame | +25.8 |
-| 4 | Oregon | +24.1 |
-| 5 | Miami | +23.0 |
-| 6 | Texas Tech | +22.3 |
-| 7 | Texas A&M | +19.2 |
-| 8 | Alabama | +18.4 |
-| 9 | Utah | +17.7 |
-| 10 | Georgia | +17.3 |
+| 1 | Ohio State | +27.6 |
+| 2 | Indiana | +26.9 |
+| 3 | Notre Dame | +25.5 |
+| 4 | Oregon | +23.5 |
+| 5 | Miami | +22.9 |
+| 6 | Texas Tech | +22.1 |
+| 7 | Texas A&M | +19.3 |
+| 8 | Alabama | +18.9 |
+| 9 | Utah | +17.6 |
+| 10 | Georgia | +17.6 |
 
 **Spread Calculation:** Team A rating - Team B rating = expected point spread (before adjustments).
 

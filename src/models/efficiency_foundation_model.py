@@ -134,6 +134,7 @@ class EfficiencyFoundationModel:
         garbage_time_weight: float = 0.1,  # Weight for garbage time plays (0 to discard)
         rating_std: float = 12.0,  # Target std for ratings (SP+ uses ~12)
         asymmetric_garbage: bool = True,  # Only penalize trailing team in garbage time
+        time_decay: float = 1.0,  # Per-week decay factor (1.0 = no decay, 0.95 = 5% per week)
     ):
         """Initialize Efficiency Foundation Model.
 
@@ -150,6 +151,9 @@ class EfficiencyFoundationModel:
                        where Team A - Team B = expected spread. Higher = more spread between teams.
             asymmetric_garbage: If True, only trailing team's garbage time plays are down-weighted.
                               Leading team keeps full weight (they earned the blowout through efficiency).
+            time_decay: Per-week decay factor for play weights. 1.0 = no decay (all weeks equal).
+                       0.95 = 5% decay per week (Week 1 plays get ~0.54 weight by Week 12).
+                       Formula: weight *= decay ^ (max_week - play_week)
         """
         self.ridge_alpha = ridge_alpha
         self.efficiency_weight = efficiency_weight
@@ -159,6 +163,7 @@ class EfficiencyFoundationModel:
         self.turnover_prior_strength = turnover_prior_strength
         self.garbage_time_weight = garbage_time_weight
         self.asymmetric_garbage = asymmetric_garbage
+        self.time_decay = time_decay
 
         self.team_ratings: dict[str, TeamEFMRating] = {}
 
@@ -220,6 +225,14 @@ class EfficiencyFoundationModel:
             df["weight"] = df["is_garbage_time"].apply(
                 lambda gt: self.garbage_time_weight if gt else 1.0
             )
+
+        # Apply time decay if enabled (decay < 1.0)
+        if self.time_decay < 1.0 and "week" in df.columns:
+            max_week = df["week"].max()
+            # Weight = decay ^ (max_week - play_week)
+            # Recent plays (max_week) get weight 1.0, older plays get less
+            df["time_weight"] = self.time_decay ** (max_week - df["week"])
+            df["weight"] = df["weight"] * df["time_weight"]
 
         return df
 
