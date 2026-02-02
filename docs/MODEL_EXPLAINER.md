@@ -148,14 +148,18 @@ By analyzing every play individually:
 
 ### Multi-Year Results
 
-| Years | MAE | ATS % |
-|-------|-----|-------|
-| 2022-2025 | 12.51 | 51.3% |
+| Years | MAE | Overall ATS % |
+|-------|-----|---------------|
+| 2022-2025 | 12.48 | 51.3% |
 
-| Confidence Level | Record | ATS % |
-|------------------|--------|-------|
-| 3+ pt edge | 691-625 | 52.5% |
-| 5+ pt edge | 457-346 | 56.9% |
+#### ATS Performance by Edge Threshold
+
+| Edge | vs Closing Line | vs Opening Line |
+|------|-----------------|-----------------|
+| 3+ pts | 52.1% (684-630) | **55.0%** (763-624) |
+| 5+ pts | 56.9% (449-340) | **58.3%** (500-358) |
+
+**Why opening lines are easier to beat:** Opening lines contain more inefficiencies. By closing, sharp money has moved lines toward true value. JP+ captures some of the same information that sharps use, so we see better performance against openers.
 
 ### Accuracy by Game Margin
 

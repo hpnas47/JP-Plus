@@ -370,11 +370,18 @@ SpreadGenerator
 
 | Metric | Value |
 |--------|-------|
-| **MAE** | 12.51 |
+| **MAE** | 12.48 |
 | **ATS Record** | ~1260-1195 |
 | **ATS %** | 51.3% |
-| **3+ pt edge** | 52.5% (691-625) |
-| **5+ pt edge** | 56.9% (457-346) |
+
+#### ATS by Edge Threshold (vs Opening and Closing Lines)
+
+| Edge | vs Closing Line | vs Opening Line |
+|------|-----------------|-----------------|
+| **3+ pts** | 52.1% (684-630) | **55.0%** (763-624) |
+| **5+ pts** | 56.9% (449-340) | **58.3%** (500-358) |
+
+Opening lines contain more inefficiencies; by closing, sharp money has moved lines toward true value.
 
 #### ATS by Season Phase
 | Phase | Record | ATS % |
