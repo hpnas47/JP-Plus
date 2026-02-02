@@ -34,6 +34,7 @@ from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
+from src.adjustments.qb_adjustment import QBInjuryAdjuster
 from src.predictions.spread_generator import SpreadGenerator
 from src.predictions.vegas_comparison import VegasComparison
 from src.reports.excel_export import ExcelExporter
@@ -85,6 +86,13 @@ def parse_args():
         "--debug",
         action="store_true",
         help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--qb-out",
+        nargs="+",
+        default=[],
+        metavar="TEAM",
+        help="Teams whose starting QB is out (e.g., --qb-out 'Georgia' 'Texas')",
     )
     return parser.parse_args()
 
@@ -243,6 +251,7 @@ def run_predictions(
     week: int,
     wait_for_data: bool = True,
     send_notifications: bool = True,
+    qb_out_teams: list[str] = None,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -251,10 +260,12 @@ def run_predictions(
         week: Week to predict
         wait_for_data: Whether to wait for data availability
         send_notifications: Whether to send notifications
+        qb_out_teams: List of teams whose starting QB is out
 
     Returns:
         Dictionary with results summary
     """
+    qb_out_teams = qb_out_teams or []
     settings = get_settings()
     notifier = Notifier() if send_notifications else None
 
@@ -351,6 +362,18 @@ def run_predictions(
         fbs_teams = {t.school for t in fbs_teams_list}
         logger.info(f"Loaded {len(fbs_teams)} FBS teams")
 
+        # Initialize QB injury adjuster if any QBs flagged as out
+        qb_adjuster = None
+        if qb_out_teams:
+            logger.info(f"Initializing QB injury adjuster for: {qb_out_teams}")
+            qb_adjuster = QBInjuryAdjuster(
+                api_key=settings.cfbd_api_key,
+                year=year,
+            )
+            for team in qb_out_teams:
+                qb_adjuster.flag_qb_out(team)
+            qb_adjuster.print_depth_charts()
+
         # Build spread generator
         spread_gen = SpreadGenerator(
             ridge_model=ridge_model,
@@ -364,6 +387,7 @@ def run_predictions(
             fbs_teams=fbs_teams,
             fcs_penalty_elite=settings.fcs_penalty_elite if hasattr(settings, 'fcs_penalty_elite') else 18.0,
             fcs_penalty_standard=settings.fcs_penalty_standard if hasattr(settings, 'fcs_penalty_standard') else 32.0,
+            qb_adjuster=qb_adjuster,
         )
 
         # Fetch upcoming games
@@ -487,6 +511,7 @@ def main():
         week=week,
         wait_for_data=not args.no_wait,
         send_notifications=not args.no_notify,
+        qb_out_teams=args.qb_out,
     )
 
     if results["success"]:

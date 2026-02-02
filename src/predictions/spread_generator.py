@@ -16,6 +16,7 @@ from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
+from src.adjustments.qb_adjustment import QBInjuryAdjuster
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class SpreadComponents:
     luck_adjustment: float = 0.0
     fcs_adjustment: float = 0.0  # Penalty when FBS plays FCS
     pace_adjustment: float = 0.0  # Compression for triple-option teams
+    qb_adjustment: float = 0.0  # Adjustment when starting QB is out
 
 
 @dataclass
@@ -124,6 +126,7 @@ class PredictedSpread:
             "luck_adj": self.components.luck_adjustment,
             "fcs_adj": self.components.fcs_adjustment,
             "pace_adj": self.components.pace_adjustment,
+            "qb_adj": self.components.qb_adjustment,
         }
 
 
@@ -159,6 +162,7 @@ class SpreadGenerator:
         fcs_penalty_elite: Optional[float] = None,
         fcs_penalty_standard: Optional[float] = None,
         elite_fcs_teams: Optional[set[str]] = None,
+        qb_adjuster: Optional[QBInjuryAdjuster] = None,
     ):
         """Initialize spread generator with model components.
 
@@ -177,6 +181,7 @@ class SpreadGenerator:
             fcs_penalty_elite: Points for elite FCS teams (default: 18.0)
             fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
             elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS)
+            qb_adjuster: QB injury adjuster (optional, for QB-out adjustments)
         """
         self.ridge_model = ridge_model or RidgeRatingsModel()
         self.luck_regressor = luck_regressor or LuckRegressor()
@@ -199,6 +204,9 @@ class SpreadGenerator:
             # Tiered mode (default)
             self.fcs_penalty_elite = fcs_penalty_elite if fcs_penalty_elite is not None else self.DEFAULT_FCS_PENALTY_ELITE
             self.fcs_penalty_standard = fcs_penalty_standard if fcs_penalty_standard is not None else self.DEFAULT_FCS_PENALTY_STANDARD
+
+        # QB injury adjuster (optional)
+        self.qb_adjuster = qb_adjuster
 
     def _get_pace_adjustment(
         self, home_team: str, away_team: str, spread: float
@@ -438,6 +446,13 @@ class SpreadGenerator:
             home_team, away_team, spread
         )
         spread += components.pace_adjustment
+
+        # QB injury adjustment (when starter is flagged as out)
+        if self.qb_adjuster:
+            components.qb_adjustment = self.qb_adjuster.get_adjustment(
+                home_team, away_team
+            )
+            spread += components.qb_adjustment
 
         # Convert to win probability
         win_prob = self._spread_to_probability(spread)

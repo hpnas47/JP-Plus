@@ -114,6 +114,72 @@
   - `run_weekly.py`: Now fetches FBS teams and passes to SpreadGenerator
   - Ensures pace adjustment and tiered FCS penalties work across all execution paths
 
+- **Implemented QB Injury Adjustment System** - Manual flagging of starter injuries with pre-computed drop-offs
+  - **Problem:** QB injuries are the single biggest source of MAE error, not handled by model
+  - **Solution:** Minimal viable implementation with manual flagging
+  - **New module:** `src/adjustments/qb_adjustment.py`
+    - `QBInjuryAdjuster` class computes starter/backup PPA differentials
+    - Uses CFBD `get_predicted_points_added_by_player_season` for QB PPA
+    - Identifies starter by volume (most pass attempts)
+    - Calculates point adjustment: `PPA_drop × 30 plays/game`
+  - **CLI integration:** `--qb-out TEAM` flag in `run_weekly.py`
+    - Example: `python scripts/run_weekly.py --qb-out Georgia Texas`
+  - **Sample depth charts (2024):**
+    | Team | Starter | PPA | Backup | PPA | Adjustment |
+    |------|---------|-----|--------|-----|------------|
+    | Georgia | Beck | 0.353 | Stockton | 0.125 | **-6.8 pts** |
+    | Ohio State | Howard | 0.575 | Brown | 0.243 | **-10.0 pts** |
+    | Texas | Ewers | 0.322 | A. Manning | 0.589 | **+8.0 pts** |
+    | Alabama | Milroe | 0.321 | Simpson | 0.215 | **-3.2 pts** |
+  - **Note:** Texas is unusual - Arch Manning backup is BETTER than Ewers starter
+  - **Data limitation:** CFBD has no injury reports; requires manual flagging
+  - **Updated files:** `spread_generator.py` (added `qb_adjustment` component), `run_weekly.py` (added `--qb-out` flag)
+
+- **Tested Havoc Rate vs Turnover Margin - Not Implemented** - Havoc doesn't improve ATS predictions
+  - **Hypothesis:** Replace/augment turnovers (10% weight) with Havoc Rate (TFLs, sacks, PBUs, forced fumbles)
+    - Havoc is a "sticky skill" while turnover recovery is ~50% luck
+    - Expected havoc to be more predictive of future ATS success
+  - **Data source:** CFBD API `get_havoc_stats()` endpoint provides:
+    - Front-7 havoc (sacks, TFLs)
+    - DB havoc (PBUs, interceptions)
+    - Total havoc rate per game
+  - **Correlation analysis (2024):**
+    | Metric | Correlation |
+    |--------|-------------|
+    | Havoc → Turnovers Forced | r = 0.425 (strong) |
+    | Havoc → Turnover Margin | r = 0.148 (weak) |
+    | DB Havoc → Margin | r = 0.230 |
+    | Front-7 Havoc → Margin | r = 0.096 |
+  - **Interpretation:** Havoc IS predictive of forcing turnovers (skill), but turnover margin adds significant luck noise
+  - **ATS Backtest (2022-2024, 1631 games):**
+    | Metric Differential | Correlation with Cover |
+    |--------------------|----------------------|
+    | Havoc | r = -0.013 |
+    | Turnover Margin | r = -0.024 |
+  - **Finding:** Neither metric provides ATS edge - Vegas already prices both
+  - **When Havoc and TO disagree:** ~48% cover rate either way - no predictive value
+  - **Conclusion:** Havoc's theoretical advantage (skill vs luck) doesn't translate to ATS improvement
+  - **Decision:** Keep current 10% turnover weight with Bayesian shrinkage. Shrinkage already handles luck noise. Added `get_havoc_stats()` to CFBD client for future use.
+
+- **Tested Style Mismatch Adjustment - Not Implemented** - Rush/pass matchup profiles don't improve predictions
+  - **Hypothesis:** Split rush/pass ratings could capture matchup advantages Vegas misses
+    - Rush-heavy offense vs weak rush defense → boost prediction
+    - Pass-heavy offense vs weak pass defense → boost prediction
+  - **Implementation tested:**
+    - Calculate team style profiles (rush share, rush/pass SR, defensive rush/pass SR allowed)
+    - Apply adjustment when extreme styles meet weak defenses (thresholds: >52% rush-heavy, <42% pass-heavy)
+    - Scale adjustments by severity (max ±4 points)
+  - **Backtest results (2022-2024, walk-forward):**
+    | Config | Games | ATS | MAE |
+    |--------|-------|-----|-----|
+    | Baseline (Vegas only) | 641 | 48.3% (304-326-11) | 12.14 |
+    | With mismatch adjustment | 641 | 48.1% (303-327-11) | 12.23 |
+  - **Finding:** Style mismatch adjustment made predictions WORSE
+    - ATS: -0.2pp (1 fewer win)
+    - MAE: +0.09 (higher error)
+  - **Conclusion:** Vegas already prices style matchups efficiently. Aggregate efficiency metrics (Success Rate, IsoPPP) capture matchup dependencies implicitly. Adding explicit rush/pass splits introduces noise without signal.
+  - **Decision:** Not implemented. Keeps model simpler without sacrificing accuracy.
+
 ---
 
 ## Session: February 1, 2026 (Evening)

@@ -424,3 +424,32 @@ class CFBDClient:
         return self._call_with_retry(
             self.stats_api.get_player_returning_production, **kwargs
         )
+
+    def get_havoc_stats(
+        self,
+        year: int,
+        week: Optional[int] = None,
+        team: Optional[str] = None,
+        season_type: str = "regular",
+    ) -> list:
+        """Get havoc statistics (sacks, TFLs, PBUs) by game.
+
+        Args:
+            year: Season year
+            week: Week number (optional)
+            team: Filter by team (optional)
+            season_type: 'regular' or 'postseason'
+
+        Returns:
+            List of GameHavocStats objects with:
+            - team, opponent, gameId, week
+            - offense.havocRate, offense.frontSevenHavocRate, offense.dbHavocRate
+            - defense.havocRate, defense.frontSevenHavocRate, defense.dbHavocRate
+        """
+        kwargs = {"year": year, "season_type": season_type}
+        if week is not None:
+            kwargs["week"] = week
+        if team is not None:
+            kwargs["team"] = team
+
+        return self._call_with_retry(self.stats_api.get_game_havoc_stats, **kwargs)
