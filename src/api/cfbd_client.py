@@ -51,6 +51,7 @@ class CFBDClient:
         self._plays_api: Optional[cfbd.PlaysApi] = None
         self._teams_api: Optional[cfbd.TeamsApi] = None
         self._stats_api: Optional[cfbd.StatsApi] = None
+        self._ratings_api: Optional[cfbd.RatingsApi] = None
 
         # Retry settings
         self.max_retries = settings.max_retries
@@ -91,6 +92,12 @@ class CFBDClient:
         if self._stats_api is None:
             self._stats_api = cfbd.StatsApi(cfbd.ApiClient(self.configuration))
         return self._stats_api
+
+    @property
+    def ratings_api(self) -> cfbd.RatingsApi:
+        if self._ratings_api is None:
+            self._ratings_api = cfbd.RatingsApi(cfbd.ApiClient(self.configuration))
+        return self._ratings_api
 
     def _call_with_retry(self, func: callable, *args, **kwargs) -> Any:
         """Execute API call with exponential backoff retry on rate limits."""
@@ -410,7 +417,11 @@ class CFBDClient:
 
     def get_sp_ratings(self, year: int) -> list:
         """Get SP+ ratings for teams."""
-        return self._call_with_retry(self.metrics_api.get_sp_ratings, year=year)
+        return self._call_with_retry(self.ratings_api.get_sp, year=year)
+
+    def get_fpi_ratings(self, year: int) -> list:
+        """Get ESPN FPI ratings for teams."""
+        return self._call_with_retry(self.ratings_api.get_fpi, year=year)
 
     def get_team_talent(self, year: int) -> list:
         """Get team talent composite rankings."""
