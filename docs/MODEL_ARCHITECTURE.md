@@ -235,6 +235,34 @@ Triple-option teams (Army, Navy, Air Force, Kennesaw State) run ~55 plays/game v
 
 JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
 
+### Weather Adjustment (Totals)
+
+Weather significantly impacts game totals (over/under). JP+ fetches weather data from the CFBD API and applies adjustments based on three factors:
+
+| Factor | Threshold | Adjustment | Rationale |
+|--------|-----------|------------|-----------|
+| **Wind** | >10 mph | -0.3 pts/mph | Reduces passing efficiency, FG accuracy |
+| **Temperature** | <40°F | -0.15 pts/degree | Ball handling, pace reduction |
+| **Precipitation** | >0.02 in | -3.0 pts flat | Ball security, passing impact |
+| **Heavy Precip** | >0.05 in | -5.0 pts flat | Severe weather penalty |
+
+**Indoor games** (identified via `game_indoors` flag) receive no weather adjustment.
+
+**Caps:** Wind adjustment capped at -6.0 pts, temperature at -4.0 pts to prevent extreme values.
+
+**Example extreme weather games (2024 Week 11-15):**
+- Nebraska @ Iowa: 16°F, 7 mph wind → Temp adj: -3.6 pts
+- FAU @ Temple: 23 mph wind → Wind adj: -3.9 pts
+- Miami (OH) @ Ball State: Heavy rain (0.047 in) → Precip adj: -3.0 pts
+
+**Data source:** CFBD API `get_weather` endpoint provides:
+- `temperature` (°F), `wind_speed` (mph), `wind_direction` (degrees)
+- `precipitation` (inches), `snowfall` (inches)
+- `humidity` (%), `weather_condition` (text description)
+- `game_indoors` (boolean for dome games)
+
+**Status:** Weather adjustment module implemented for future totals prediction. Parameters are conservative estimates based on NFL weather studies (Marek 2015, Kacsmar 2016) and should be validated against historical CFB totals results before use in production.
+
 #### Key Files
 - `src/predictions/spread_generator.py` - Combines all components
 - `src/adjustments/home_field.py` - Team-specific and conference HFA values
@@ -242,6 +270,7 @@ JP+ compresses spreads by 10% toward zero when a triple-option team is involved 
 - `src/adjustments/altitude.py` - Altitude adjustment
 - `src/adjustments/situational.py` - Situational factors
 - `src/adjustments/qb_adjustment.py` - QB injury adjustment system
+- `src/adjustments/weather.py` - Weather adjustments for totals
 
 ---
 
@@ -386,7 +415,10 @@ CFBD API
     ├── Transfer Portal (player movements, ratings)
     ├── Player Usage (prior-year PPA by player)
     ├── Returning Production (% PPA returning)
-    └── Team Info (FBS teams, conferences)
+    ├── Team Info (FBS teams, conferences)
+    ├── Weather (temperature, wind, precipitation, indoor flag)
+    ├── SP+ Ratings (external benchmark)
+    └── FPI Ratings (ESPN, external benchmark)
     │
     ▼
 Preseason Priors
@@ -484,7 +516,8 @@ CFB Power Ratings Model/
 │   │   ├── travel.py            # Travel adjustments
 │   │   ├── altitude.py          # Altitude adjustments
 │   │   ├── situational.py       # Situational factors
-│   │   └── qb_adjustment.py     # QB injury adjustment system
+│   │   ├── qb_adjustment.py     # QB injury adjustment system
+│   │   └── weather.py           # Weather adjustments for totals
 │   └── predictions/
 │       ├── spread_generator.py  # Combines all components
 │       └── vegas_comparison.py  # Compare to Vegas lines
@@ -605,7 +638,7 @@ JP+ has a systematic mean error of approximately -6.7 points (predicting home te
 
 ### Medium Priority
 - [ ] Multi-year backtesting to validate stability
-- [ ] Weather impact modeling
+- [x] **Weather impact modeling** - ✅ DONE. Added `WeatherAdjuster` class that fetches weather data from CFBD API and calculates totals adjustments based on wind (>10 mph: -0.3 pts/mph), temperature (<40°F: -0.15 pts/degree), and precipitation (>0.02 in: -3.0 pts). Indoor games receive no adjustment. Ready for totals prediction integration.
 - [ ] Expand special teams beyond FG (punting, kickoffs, returns)
 
 ### Low Priority
@@ -640,6 +673,8 @@ JP+ has a systematic mean error of approximately -6.7 points (predicting home te
 ## Changelog
 
 ### February 2026
+- **Added Weather Adjustment Module** - New `WeatherAdjuster` class for totals prediction. Fetches weather data from CFBD API (`get_weather` endpoint) and calculates adjustments based on wind speed (>10 mph: -0.3 pts/mph, capped at -6.0), temperature (<40°F: -0.15 pts/degree, capped at -4.0), and precipitation (>0.02 in: -3.0 pts, >0.05 in: -5.0 pts). Indoor games (`game_indoors=True`) receive no adjustment. Added `get_weather()` method to `CFBDClient`. Weather data includes temperature, wind speed/direction, precipitation, snowfall, humidity, and weather condition text. Analysis of 2024 late-season games showed: 19/757 indoor games, temperatures ranging 16°F-86°F, wind up to 26 mph, 39 games with precipitation.
+- **Added FPI Ratings Comparison** - New `scripts/compare_ratings.py` for 3-way JP+ vs FPI vs SP+ validation. Added `get_fpi_ratings()` and fixed `get_sp_ratings()` in CFBD client to use correct `RatingsApi` endpoint. Initial 2025 comparison shows JP+ correlates r=0.956 with FPI, r=0.937 with SP+. Key divergence: JP+ ranks Ohio State #1, Indiana #2; FPI/SP+ have Indiana #1.
 - **Fixed Sign Convention Bugs** - Complete audit found 2 bugs: (1) `spread_generator.py:386` had `home_is_favorite = prelim_spread < 0` (wrong, should be `> 0`), causing rivalry boost to be applied to favorites instead of underdogs; (2) `html_report.py:250` had inverted CSS class logic. Backtest comparison: 3+ edge ATS improved from 53.3% to **54.0%** (+0.7%, +8 net wins). MAE improved from 12.39 to 12.37. Documented sign conventions in SESSION_LOG Rules section.
 - **Investigated Mercy Rule Dampener (NOT implemented)** - Theory: coaches tap brakes in blowouts, so apply non-linear dampening to extreme spreads. Finding: Bias exists (-38.7 mean error on 21+ spreads) and dampening improves MAE (-1.66), BUT hurts ATS (-2.8pp). Our large edges are correct directionally even when magnitude is off. Decision: Accept worse MAE to maintain betting edge.
 - **Investigated Pace-Based Margin Scaling (NOT implemented)** - Theory suggested fast games should have larger margins (more plays to compound efficiency edge). Empirical analysis showed opposite: fast games have smaller margins (R²=2.2%), JP+ over-predicts (not under-predicts) fast games, and ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Decision: Do not implement.
