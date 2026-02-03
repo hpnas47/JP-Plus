@@ -84,6 +84,16 @@
 
 - **Updated Rule 4 (Modeling Philosophy)** - The -6.7 mean error is now FIXED via neutral-field regression. The model no longer has systematic home bias.
 
+- **Fixed P0.1: Trajectory Leakage** - Fixed data leakage in `calculate_trajectory_modifiers()`
+  - **Bug:** Recent years calculation used `range(current_year - 1 + 1, current_year + 1)` which equals `[current_year]`
+  - **Fix:** Changed to `range(current_year - 1, current_year)` which equals `[current_year - 1]`
+  - **Result:** For 2024 predictions, now uses:
+    - Baseline: 2020, 2021, 2022 (3 years before recent)
+    - Recent: 2023 (1 year before current_year)
+    - NOT used: 2024 (current year being predicted)
+  - **Logging:** Added explicit log message showing year ranges: "Trajectory modifiers for 2024: baseline years [2020-2022], recent years [2023-2023] (current year 2024 NOT included)"
+  - **Verified:** Test case confirms correct behavior (uses prior year data, not current year)
+
 ---
 
 ## Session: February 2, 2026

@@ -377,31 +377,53 @@ class HomeFieldAdvantage:
         Rising programs get HFA boost (better crowds, more energy).
         Declining programs get HFA penalty.
 
+        IMPORTANT: This uses only data from years STRICTLY PRIOR to current_year.
+        For predicting 2024 games, we use:
+          - Baseline: 2020, 2021, 2022 (3 years before recent)
+          - Recent: 2023 (1 year before current_year)
+        This prevents leakage of current-season results into predictions.
+
         Args:
             team_records: Dict mapping team -> {year: (wins, losses)}
                 Example: {"Vanderbilt": {2022: (5, 7), 2023: (2, 10), 2024: (7, 5)}}
-            current_year: The current/most recent season year
+            current_year: The season being predicted (NOT included in calculation)
 
         Returns:
             Dictionary mapping team name to trajectory modifier (-0.5 to +0.5)
         """
         modifiers = {}
 
+        # Calculate year ranges (strictly prior to current_year)
+        # Recent: the TRAJECTORY_RECENT_YEARS years immediately before current_year
+        # Baseline: the TRAJECTORY_BASELINE_YEARS years before the recent period
+        recent_start = current_year - TRAJECTORY_RECENT_YEARS
+        recent_end = current_year  # exclusive, so this is [recent_start, current_year)
+        baseline_start = recent_start - TRAJECTORY_BASELINE_YEARS
+        baseline_end = recent_start  # exclusive
+
+        # Log the year ranges to prove no current-year data is used
+        logger.info(
+            f"Trajectory modifiers for {current_year}: "
+            f"baseline years [{baseline_start}-{baseline_end - 1}], "
+            f"recent years [{recent_start}-{recent_end - 1}] "
+            f"(current year {current_year} NOT included)"
+        )
+
         for team, records in team_records.items():
             # Get baseline win pct (older years)
             baseline_wins = 0
             baseline_games = 0
-            for year in range(current_year - TRAJECTORY_BASELINE_YEARS - TRAJECTORY_RECENT_YEARS,
-                              current_year - TRAJECTORY_RECENT_YEARS):
+            for year in range(baseline_start, baseline_end):
                 if year in records:
                     w, l = records[year]
                     baseline_wins += w
                     baseline_games += w + l
 
-            # Get recent win pct
+            # Get recent win pct (years immediately before current_year)
+            # CRITICAL: Does NOT include current_year to prevent leakage
             recent_wins = 0
             recent_games = 0
-            for year in range(current_year - TRAJECTORY_RECENT_YEARS + 1, current_year + 1):
+            for year in range(recent_start, recent_end):
                 if year in records:
                     w, l = records[year]
                     recent_wins += w

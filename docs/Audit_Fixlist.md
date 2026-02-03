@@ -22,13 +22,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## P0 — Must Fix (can change ATS materially / leakage risk)
 
-- [ ] **P0.1 Fix trajectory leakage (current-year record used)**
+- [x] **P0.1 Fix trajectory leakage (current-year record used)** ✅ COMPLETE
   - **Files:** `src/adjustments/home_field.py`
-  - **Issue:** `calculate_trajectory_modifiers()` includes `current_year` in “recent” window; leaks info into walk-forward.
+  - **Issue:** `calculate_trajectory_modifiers()` includes `current_year` in "recent" window; leaks info into walk-forward.
   - **Acceptance criteria:** Trajectory for season `Y` uses only years `< Y`. Add guard/log proving it.
   - **AI nudge prompt:**
-    > Audit `HomeFieldAdvantage.calculate_trajectory_modifiers()` end-to-end and ensure trajectory modifiers for a season are computed using only seasons strictly prior to that season. Make the implementation match the documented intent (“calculate once at season start using prior year as recent”), and add a guard/log that proves no current-year results were used.
-  - **Notes:**
+    > Audit `HomeFieldAdvantage.calculate_trajectory_modifiers()` end-to-end and ensure trajectory modifiers for a season are computed using only seasons strictly prior to that season. Make the implementation match the documented intent ("calculate once at season start using prior year as recent"), and add a guard/log that proves no current-year results were used.
+  - **Notes:** FIXED 2026-02-03. Changed recent years range from `[current_year]` to `[current_year - 1]`. For 2024 predictions: baseline=2020-2022, recent=2023 (NOT 2024). Added logging that explicitly shows year ranges and confirms current year is NOT included. Verified with test showing correct behavior.
 
 - [ ] **P0.2 Key ATS + Vegas lookups by `game_id` (not team names)**
   - **Files:** `scripts/backtest.py`, `src/predictions/vegas_comparison.py`
@@ -253,7 +253,7 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## Suggested fix order (Top 10)
 
-1. P0.1 Trajectory leakage
+1. ~~P0.1 Trajectory leakage~~ ✅ DONE
 2. P0.2 game_id joins for ATS + VegasComparison
 3. P0.3 EFM scaling/double-normalization + rounding contamination
 4. P0.4 robust season data fetching (no silent truncation)
