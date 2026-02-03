@@ -110,13 +110,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## P2 — Engine correctness & feature completeness (improves MAE / long-run ATS)
 
-- [ ] **P2.1 Add home/away context for EFM ridge (neutral-field coefficients)**
+- [x] **P2.1 Add home/away context for EFM ridge (neutral-field coefficients)** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`, `scripts/backtest.py` (play ingestion)
-  - **Issue:** EFM ridge doesn’t isolate implicit HFA; team strength becomes home-contaminated.
+  - **Issue:** EFM ridge doesn't isolate implicit HFA; team strength becomes home-contaminated.
   - **Acceptance criteria:** Ridge separates home effect from team strength; play rows contain home/away context.
   - **AI nudge prompt:**
     > Update EFM opponent adjustment so team strength is estimated as a neutral-field latent parameter and home/away effects are separated. Ensure play ingestion provides enough context to determine whether the offense is home or away for each play, and add diagnostics proving the home effect is being captured separately.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added `home_team` field to efficiency_plays in backtest.py. Modified `_ridge_adjust_metric()` to add home indicator column to design matrix (+1 home, -1 away, 0 neutral). Model now learns implicit HFA separately (~0.006 SR, ~0.02 IsoPPP ≈ 0.8 pts). Mean error improved from -6.7 to ~0. Commit: 1b2164e.
 
 - [ ] **P2.2 Fix ridge intercept handling to avoid double-counting baseline**
   - **Files:** `src/models/efficiency_foundation_model.py`
@@ -253,15 +253,15 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## Suggested fix order (Top 10)
 
-1. P0.1 Trajectory leakage  
-2. P0.2 game_id joins for ATS + VegasComparison  
-3. P0.3 EFM scaling/double-normalization + rounding contamination  
-4. P0.4 robust season data fetching (no silent truncation)  
-5. P1.1/P1.2 travel direction + tz logic  
-6. P1.5 unify turnover play types  
-7. P2.1 home/away context + isolate implicit HFA in EFM ridge  
-8. P2.2 intercept handling  
-9. P2.3/P2.8 IsoPPP weighting + play filtering + distance=0 fix  
+1. P0.1 Trajectory leakage
+2. P0.2 game_id joins for ATS + VegasComparison
+3. P0.3 EFM scaling/double-normalization + rounding contamination
+4. P0.4 robust season data fetching (no silent truncation)
+5. P1.1/P1.2 travel direction + tz logic
+6. P1.5 unify turnover play types
+7. ~~P2.1 home/away context + isolate implicit HFA in EFM ridge~~ ✅ DONE
+8. P2.2 intercept handling
+9. P2.3/P2.8 IsoPPP weighting + play filtering + distance=0 fix
 10. P2.5 normalization of O/D components
 
 ---
