@@ -260,6 +260,7 @@ def fetch_season_plays(
                         "yards_to_goal": play.yards_to_goal,
                         "offense_score": play.offense_score or 0,
                         "defense_score": play.defense_score or 0,
+                        "home_team": play.home,  # For neutral-field ridge regression
                     })
         except Exception as e:
             logger.debug(f"Error fetching plays for week {week}: {e}")

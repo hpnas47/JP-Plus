@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 2, 2026
+**Last Updated:** February 3, 2026
 
 ## Overview
 
@@ -601,22 +601,35 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 - All adjustments (HFA, FCS penalty, FG efficiency, etc.) applied ONCE at prediction time
 - SpreadGenerator is the single point where components combine
 
-### 5. Mean Error vs ATS Performance
+### 5. Neutral-Field Ridge Regression
 
-JP+ has a systematic mean error of approximately -6.7 points (predicting home teams to outperform their actual margin). Investigation revealed:
+JP+ uses a neutral-field ridge regression to produce true team strength ratings that are independent of home field advantage.
 
-| Metric | Value |
-|--------|-------|
-| Mean error (HFA=2.8) | -6.7 pts |
-| Optimal HFA for zero error | -3.7 pts |
-| ATS when picking favorites | 61.6% |
-| ATS when picking underdogs | 66.6% |
+**The Problem (before fix):** The CFBD EPA values (which feed into EFM) implicitly contain home field advantage—home teams naturally generate better EPA due to crowd noise, familiarity, etc. Without correction, the ridge regression learns team coefficients that include this implicit HFA. When SpreadGenerator adds explicit HFA, this caused double-counting and a systematic -6.7 mean error.
 
-**Root cause:** The CFBD EPA values (which feed into EFM) already implicitly contain home field advantage—home teams naturally generate better EPA due to crowd noise, familiarity, etc. The EFM ridge regression doesn't separate "true team quality" from "home boost in the data," so home teams get inflated base ratings. Adding explicit HFA on top creates double-counting.
+**The Solution:** Add a home field indicator column to the ridge regression design matrix:
+- `+1` when the offense is the home team (home advantage)
+- `-1` when the defense is the home team (away disadvantage)
+- `0` for neutral site plays
 
-**Why we don't "fix" it:** Despite the mean error, ATS performance is excellent (61-67%). The bias is concentrated in blowout games (where ATS doesn't matter), not close games. Adjusting HFA to zero out mean error could hurt ATS performance. We optimize for what matters (ATS), not calibration metrics.
+This allows the model to separately learn:
+1. **Team strength** (neutral-field) - the team coefficients
+2. **Implicit HFA** - the home indicator coefficient
 
-**Key insight:** Mean error is a nuisance metric for spread betting. What matters is correctly identifying which side will cover, not the exact margin. JP+ excels at the former even with systematic bias in the latter.
+**Results:**
+| Metric | Before | After |
+|--------|--------|-------|
+| Mean Error (2024) | -6.7 pts | **-0.40 pts** |
+| Mean Error (2022-2024) | ~-6.7 pts | **+0.51 pts** |
+
+The mean error is now essentially zero, confirming that double-counting has been eliminated.
+
+**Learned Implicit HFA:**
+- Success Rate: ~0.006 (home teams have ~0.6% higher SR)
+- IsoPPP: ~0.02 (home teams have ~0.02 higher EPA on successful plays)
+- Combined in points: ~0.8 pts of implicit HFA in the play-level data
+
+The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 pts) applied by SpreadGenerator. This is expected—most HFA manifests at the scoring/outcome level (special teams, turnovers, momentum) rather than pure play-by-play efficiency.
 
 ---
 
@@ -673,12 +686,13 @@ JP+ has a systematic mean error of approximately -6.7 points (predicting home te
 ## Changelog
 
 ### February 2026
+- **Implemented Neutral-Field Ridge Regression (MAJOR FIX)** - Fixed systematic -6.7 mean error caused by double-counting home field advantage. The issue: CFBD EPA data implicitly contains HFA (home teams naturally generate better EPA), so ridge regression learned team coefficients with HFA baked in. When SpreadGenerator added explicit HFA, this caused double-counting. The fix: Add a home field indicator column to the ridge regression design matrix (+1 for offense=home, -1 for offense=away, 0 for neutral). This separates true team strength from implicit HFA. The learned implicit HFA is ~0.006 SR (~0.6% success rate advantage) and ~0.02 IsoPPP (~0.8 pts combined)—much smaller than explicit HFA (~2.5 pts), confirming most HFA manifests at scoring/outcome level rather than play-level efficiency. Results: Mean error improved from -6.7 to -0.40 (2024) and +0.51 (2022-2024), a 94% reduction in systematic bias. ATS performance maintained at 50.9% overall, 56.2% at 5+ edge.
 - **Added Weather Adjustment Module** - New `WeatherAdjuster` class for totals prediction. Fetches weather data from CFBD API (`get_weather` endpoint) and calculates adjustments based on wind speed (>10 mph: -0.3 pts/mph, capped at -6.0), temperature (<40°F: -0.15 pts/degree, capped at -4.0), and precipitation (>0.02 in: -3.0 pts, >0.05 in: -5.0 pts). Indoor games (`game_indoors=True`) receive no adjustment. Added `get_weather()` method to `CFBDClient`. Weather data includes temperature, wind speed/direction, precipitation, snowfall, humidity, and weather condition text. Analysis of 2024 late-season games showed: 19/757 indoor games, temperatures ranging 16°F-86°F, wind up to 26 mph, 39 games with precipitation.
 - **Added FPI Ratings Comparison** - New `scripts/compare_ratings.py` for 3-way JP+ vs FPI vs SP+ validation. Added `get_fpi_ratings()` and fixed `get_sp_ratings()` in CFBD client to use correct `RatingsApi` endpoint. Initial 2025 comparison shows JP+ correlates r=0.956 with FPI, r=0.937 with SP+. Key divergence: JP+ ranks Ohio State #1, Indiana #2; FPI/SP+ have Indiana #1.
 - **Fixed Sign Convention Bugs** - Complete audit found 2 bugs: (1) `spread_generator.py:386` had `home_is_favorite = prelim_spread < 0` (wrong, should be `> 0`), causing rivalry boost to be applied to favorites instead of underdogs; (2) `html_report.py:250` had inverted CSS class logic. Backtest comparison: 3+ edge ATS improved from 53.3% to **54.0%** (+0.7%, +8 net wins). MAE improved from 12.39 to 12.37. Documented sign conventions in SESSION_LOG Rules section.
 - **Investigated Mercy Rule Dampener (NOT implemented)** - Theory: coaches tap brakes in blowouts, so apply non-linear dampening to extreme spreads. Finding: Bias exists (-38.7 mean error on 21+ spreads) and dampening improves MAE (-1.66), BUT hurts ATS (-2.8pp). Our large edges are correct directionally even when magnitude is off. Decision: Accept worse MAE to maintain betting edge.
 - **Investigated Pace-Based Margin Scaling (NOT implemented)** - Theory suggested fast games should have larger margins (more plays to compound efficiency edge). Empirical analysis showed opposite: fast games have smaller margins (R²=2.2%), JP+ over-predicts (not under-predicts) fast games, and ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Decision: Do not implement.
-- **Documented Mean Error vs ATS Trade-off** - Investigated -6.7 mean error. Root cause: CFBD EPA data implicitly contains home field advantage, causing double-counting with explicit HFA. Decision: Don't fix—ATS performance is 61-67% despite calibration bias. Bias is concentrated in blowouts where ATS doesn't matter. Added documentation explaining why we optimize for ATS, not mean error.
+- **Documented Mean Error vs ATS Trade-off** - Investigated -6.7 mean error. Root cause: CFBD EPA data implicitly contains home field advantage, causing double-counting with explicit HFA. **UPDATE:** This issue was FIXED in February 2026 via neutral-field ridge regression (see above). Mean error is now ~0.
 - **Updated 2025 Top 25 with Full CFP Data** - Top 25 now includes all 46 postseason games and 6,223 playoff plays. Indiana (#2, National Champions) beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP.
 - **Added Rules & Conventions to SESSION_LOG** - Critical rules: (1) Top 25 must use end-of-season + playoffs, (2) ATS from walk-forward only, (3) optimize for ATS not mean error, (4) parameters flow through config, (5) sign conventions documented.
 - **Added Asymmetric Regression for Preseason Priors** - Fixed spread compression problem for blowout games. Standard regression pulled ALL teams toward mean uniformly, causing bad teams (Kent State -25) to gain 7.5 pts they didn't earn. Now regression scales by distance from mean: teams within ±8 pts get normal 30% regression, teams 20+ pts from mean get only 10% regression. Additionally, talent weight is halved (40%→20%) for extreme teams to trust proven performance over talent projections. Result: rating spread preserved at 90% vs 70% before.

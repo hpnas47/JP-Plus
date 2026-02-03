@@ -175,6 +175,10 @@ class EfficiencyFoundationModel:
         self.turnover_margin: dict[str, float] = {}  # Per-game turnover margin (raw, before shrinkage)
         self.team_games_played: dict[str, int] = {}  # Games played per team (for TO shrinkage)
 
+        # Learned implicit HFA from ridge regression (for validation/logging)
+        self.learned_hfa_sr: Optional[float] = None  # Implicit HFA in success rate
+        self.learned_hfa_isoppp: Optional[float] = None  # Implicit HFA in IsoPPP
+
     def _prepare_plays(self, plays_df: pd.DataFrame) -> pd.DataFrame:
         """Filter and prepare plays for analysis.
 
@@ -295,17 +299,28 @@ class EfficiencyFoundationModel:
         self,
         plays_df: pd.DataFrame,
         metric_col: str,
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    ) -> tuple[dict[str, float], dict[str, float], Optional[float]]:
         """Use ridge regression to opponent-adjust a metric.
 
         Per spec: Y = metric value, X = sparse Team/Opponent IDs
+
+        NEUTRAL-FIELD REGRESSION: If home_team column is present, we add a home
+        field indicator to the design matrix. This allows the model to separately
+        learn:
+        1. Team strength (neutral-field) - the team coefficients
+        2. Implicit home field advantage - the home indicator coefficient
+
+        Without this, team coefficients contain implicit HFA from the data
+        (EPA/success rates are higher for home teams), causing double-counting
+        when SpreadGenerator adds explicit HFA.
 
         Args:
             plays_df: Prepared plays with the metric column
             metric_col: Name of column to adjust (e.g., 'is_success')
 
         Returns:
-            Tuple of (off_adjusted, def_adjusted) dicts
+            Tuple of (off_adjusted, def_adjusted, learned_hfa) dicts
+            learned_hfa is the implicit HFA coefficient (None if no home_team data)
         """
         # Get all teams
         all_teams = sorted(set(plays_df["offense"]) | set(plays_df["defense"]))
@@ -314,22 +329,38 @@ class EfficiencyFoundationModel:
         n_plays = len(plays_df)
 
         if n_plays == 0:
-            return {}, {}
+            return {}, {}, None
+
+        # Check if we have home team info for neutral-field regression
+        has_home_info = "home_team" in plays_df.columns
 
         # Build design matrix
-        # Column i = offensive contribution of team i
-        # Column n_teams + i = defensive contribution of team i
-        X = np.zeros((n_plays, 2 * n_teams))
+        # Columns: [off_team_0, ..., off_team_n, def_team_0, ..., def_team_n, (home_indicator)]
+        n_cols = 2 * n_teams + (1 if has_home_info else 0)
+        X = np.zeros((n_plays, n_cols))
 
         offenses = plays_df["offense"].values
         defenses = plays_df["defense"].values
         weights = plays_df["weight"].values if "weight" in plays_df.columns else np.ones(n_plays)
 
-        for i, (off, def_) in enumerate(zip(offenses, defenses)):
+        if has_home_info:
+            home_teams = plays_df["home_team"].values
+        else:
+            home_teams = [None] * n_plays
+
+        for i, (off, def_, home) in enumerate(zip(offenses, defenses, home_teams)):
             off_idx = team_to_idx[off]
             def_idx = team_to_idx[def_]
             X[i, off_idx] = 1.0  # Offense contributes positively
             X[i, n_teams + def_idx] = -1.0  # Defense reduces (good D = lower success)
+
+            # Home field indicator: +1 if offense is home, -1 if away, 0 if neutral
+            if has_home_info and home is not None:
+                if off == home:
+                    X[i, -1] = 1.0  # Offense is home team
+                elif def_ == home:
+                    X[i, -1] = -1.0  # Defense is home team (offense is away)
+                # else: neutral site or unknown, leave as 0
 
         # Target: the metric value (e.g., success = 1/0)
         if metric_col == "is_success":
@@ -345,18 +376,29 @@ class EfficiencyFoundationModel:
         coefficients = model.coef_
         intercept = model.intercept_
 
+        # Separate home coefficient from team coefficients
+        learned_hfa = None
+        if has_home_info:
+            learned_hfa = coefficients[-1]
+            team_coefficients = coefficients[:-1]
+            logger.info(
+                f"Ridge adjust {metric_col}: intercept={intercept:.4f}, "
+                f"implicit_HFA={learned_hfa:.4f} (neutral-field regression)"
+            )
+        else:
+            team_coefficients = coefficients
+            logger.info(f"Ridge adjust {metric_col}: intercept={intercept:.4f} (no home info)")
+
         off_adjusted = {}
         def_adjusted = {}
 
         for team, idx in team_to_idx.items():
-            # Offensive rating: intercept + off_coef
-            off_adjusted[team] = intercept + coefficients[idx]
+            # Offensive rating: intercept + off_coef (now neutral-field)
+            off_adjusted[team] = intercept + team_coefficients[idx]
             # Defensive rating: intercept - def_coef (negative because good D has negative coef)
-            def_adjusted[team] = intercept - coefficients[n_teams + idx]
+            def_adjusted[team] = intercept - team_coefficients[n_teams + idx]
 
-        logger.info(f"Ridge adjust {metric_col}: intercept={intercept:.4f}")
-
-        return off_adjusted, def_adjusted
+        return off_adjusted, def_adjusted, learned_hfa
 
     def _calculate_turnover_margin(
         self,
@@ -450,21 +492,25 @@ class EfficiencyFoundationModel:
 
         # Opponent-adjust Success Rate via ridge regression
         # This is the key: regress on SUCCESS RATE, not margins
+        # NEUTRAL-FIELD: If home_team is present, regression separates team skill from HFA
         logger.info("Ridge adjusting Success Rate...")
-        adj_off_sr, adj_def_sr = self._ridge_adjust_metric(prepared, "is_success")
+        adj_off_sr, adj_def_sr, self.learned_hfa_sr = self._ridge_adjust_metric(
+            prepared, "is_success"
+        )
 
         # Opponent-adjust IsoPPP (EPA on successful plays)
         # Only use successful plays for this
         successful_plays = prepared[prepared["is_success"]].copy()
         if len(successful_plays) > 1000 and "ppa" in successful_plays.columns:
             logger.info("Ridge adjusting IsoPPP...")
-            adj_off_isoppp, adj_def_isoppp = self._ridge_adjust_metric(
+            adj_off_isoppp, adj_def_isoppp, self.learned_hfa_isoppp = self._ridge_adjust_metric(
                 successful_plays, "ppa"
             )
         else:
             logger.warning("Insufficient successful plays for IsoPPP adjustment, using raw")
             adj_off_isoppp = raw_off_isoppp
             adj_def_isoppp = raw_def_isoppp
+            self.learned_hfa_isoppp = None
 
         # Store adjusted values
         self.off_success_rate = adj_off_sr

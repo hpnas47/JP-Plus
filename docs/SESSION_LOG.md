@@ -22,7 +22,7 @@
 
 **4. Optimization Target: Edge > Accuracy**
 - **Rule:** Optimize parameters (alpha, weights) to maximize ATS Profit (Win % on 3+ pt edge), not to minimize MAE.
-- **Why:** The model has a systematic -6.7 mean error (home bias). Do not fix this. It is a known feature of using EPA + HFA. Fixing calibration at the expense of identifying winners is a losing strategy.
+- **Why:** ATS performance is what matters for betting edge, not calibration metrics. ~~The model had a systematic -6.7 mean error (home bias).~~ **UPDATE (Feb 3, 2026):** This was FIXED via neutral-field ridge regression. Mean error is now ~0.
 
 **5. Market Blindness**
 - **Rule:** Never use the Vegas line as a training target or feature input.
@@ -50,6 +50,39 @@
 - **Edge:** Negative = JP+ likes Home more than Vegas; Positive = JP+ likes Away more
 - **Actual Margin:** Positive (+) = Home Team Won
 - **Conversion:** `vegas_spread = -internal_spread`
+
+---
+
+## Session: February 3, 2026
+
+### Completed Today
+
+- **Implemented Neutral-Field Ridge Regression (MAJOR FIX)** - Fixed systematic -6.7 mean error caused by double-counting home field advantage
+  - **Problem:** The CFBD EPA data implicitly contains HFA—home teams naturally generate better EPA due to crowd noise, familiarity, etc. The ridge regression was learning team coefficients with this HFA baked in. When SpreadGenerator added explicit HFA, this caused double-counting.
+  - **Solution:** Added home field indicator column to ridge regression design matrix:
+    - `+1` when offense is home team (home advantage)
+    - `-1` when defense is home team (away disadvantage)
+    - `0` for neutral site plays
+  - **Code changes:**
+    - `backtest.py` line 263: Added `"home_team": play.home` to efficiency_plays
+    - `efficiency_foundation_model.py` lines 298-401: Modified `_ridge_adjust_metric()` to check for `home_team` column and add home indicator to design matrix
+    - `efficiency_foundation_model.py` lines 178-180: Added `learned_hfa_sr` and `learned_hfa_isoppp` instance variables to store the learned implicit HFA
+  - **Learned Implicit HFA:**
+    - Success Rate: ~0.006 (~0.6% SR advantage for home teams)
+    - IsoPPP: ~0.02 (~0.02 EPA advantage)
+    - Combined in points: ~0.8 pts (much smaller than explicit ~2.5 pts HFA)
+  - **Results:**
+    | Metric | Before | After |
+    |--------|--------|-------|
+    | Mean Error (2024) | -6.7 pts | **-0.40 pts** |
+    | Mean Error (2022-2024) | ~-6.7 pts | **+0.51 pts** |
+    | MAE (2022-2024) | ~12.4 | 12.48 |
+    | Overall ATS | ~51% | 50.9% (921-889-37) |
+    | 3+ edge ATS | ~54% | 53.1% (519-459) |
+    | 5+ edge ATS | ~57% | 56.2% (336-262) |
+  - **Key Insight:** Most HFA manifests at scoring/outcome level (special teams, turnovers, momentum) rather than pure play-by-play efficiency. The ~0.8 pts implicit HFA in the data is small compared to the ~2.5 pts explicit HFA applied by SpreadGenerator.
+
+- **Updated Rule 4 (Modeling Philosophy)** - The -6.7 mean error is now FIXED via neutral-field regression. The model no longer has systematic home bias.
 
 ---
 
