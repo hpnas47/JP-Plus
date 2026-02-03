@@ -75,6 +75,22 @@
     - Yale @ Harvard: -5.2 pts (17 mph wind + light rain)
   - **Status:** Ready for totals integration. Parameters are conservative estimates based on NFL weather studies.
 
+- **Field Position Component - EXPLORED, TABLED** - Investigated adding field position as a JP+ component (SP+ uses 10% weight)
+  - **Data source:** CFBD DrivesApi provides start_yardline for all drives
+  - **Raw field position problem:** Heavily confounded by schedule - good teams have WORSE raw FP (r = -0.56 with SP+)
+  - **Opponent-adjusted FP:** Still negatively correlated (r = -0.63) - confounding persists
+  - **Return Game Rating (cleaner signal):** Used punt return yards and coverage data
+    - Weak correlation with team quality (r = +0.20) - good, means it's different signal
+    - Weak correlation with overperformance (r = +0.06) - concerning for predictive value
+    - Top 30 return teams: +5.3 ranks overperformance
+    - Bottom 30 return teams: -0.7 ranks overperformance
+  - **Root causes of confounding:**
+    1. Good teams score more TDs → receive more kickoffs at own 25
+    2. Good teams face better punters/coverage units
+    3. Good teams force turnovers deeper in opponent territory
+  - **Decision:** TABLED. Signal too weak to justify complexity. Will revisit with proper ATS backtest if needed.
+  - **Note:** SP+ uses 10% for field position, but JP+ may not need it if Vegas already prices it
+
 - **Added FPI Ratings Comparison** - 3-way validation of JP+ vs FPI vs SP+ (`scripts/compare_ratings.py`)
   - **Purpose:** External benchmark for JP+ ratings quality
   - **Implementation:** Added `get_fpi_ratings()` to CFBD client, fixed `get_sp_ratings()` to use correct `RatingsApi` endpoint
