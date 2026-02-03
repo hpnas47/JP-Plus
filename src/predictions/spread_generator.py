@@ -381,8 +381,9 @@ class SpreadGenerator:
         # Situational adjustments
         if week is not None and schedule_df is not None:
             # Determine who's favored for rivalry boost
+            # Convention: positive spread = home favored
             prelim_spread = components.base_margin + components.home_field
-            home_is_favorite = prelim_spread < 0
+            home_is_favorite = prelim_spread > 0
 
             adj, _ = self.situational.get_matchup_adjustment(
                 home_team=home_team,

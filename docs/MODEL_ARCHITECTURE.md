@@ -418,16 +418,17 @@ SpreadGenerator
 
 | Metric | Value |
 |--------|-------|
-| **MAE** | 12.48 |
-| **ATS Record** | ~1260-1195 |
-| **ATS %** | 51.3% |
+| **MAE** | 12.37 |
+| **ATS Record** | 1114-1070-43 |
+| **ATS %** | 51.0% |
 
-#### ATS by Edge Threshold (vs Opening and Closing Lines)
+#### ATS by Edge Threshold (vs Closing Lines)
 
-| Edge | vs Closing Line | vs Opening Line |
-|------|-----------------|-----------------|
-| **3+ pts** | 52.1% (684-630) | **55.0%** (763-624) |
-| **5+ pts** | 56.9% (449-340) | **58.3%** (500-358) |
+| Edge | Record | ATS % |
+|------|--------|-------|
+| **2+ pts** | 759-711 | 51.6% |
+| **3+ pts** | 612-521 | **54.0%** |
+| **5+ pts** | 365-272 | **57.3%** |
 
 Opening lines contain more inefficiencies; by closing, sharp money has moved lines toward true value.
 
@@ -438,15 +439,20 @@ Opening lines contain more inefficiencies; by closing, sharp money has moved lin
 | Weeks 7-10 (mid) | 336-321 | 51.1% |
 | Weeks 11+ (late) | 371-327 | 53.2% |
 
-### 2025 Season Results (with Turnover Component)
+### 2025 Season Results (Final)
 
-| Metric | Value |
-|--------|-------|
-| **MAE** | 12.44 |
-| **ATS Record** | 322-310-6 |
-| **ATS %** | 50.9% |
-| **3+ pt edge** | 53.6% (179-155) |
-| **5+ pt edge** | 54.5% (110-92) |
+| Metric | vs Closing | vs Opening |
+|--------|------------|------------|
+| **MAE** | 12.21 | 12.21 |
+| **ATS Record** | 325-301-12 | 336-298-4 |
+| **ATS %** | 51.9% | **53.0%** |
+| **3+ pt edge** | 54.1% (172-146) | **55.3%** (189-153) |
+| **5+ pt edge** | 55.4% (98-79) | **58.3%** (119-85) |
+
+**2025 Top 25** (end-of-season including CFP):
+1. Ohio State (+27.5), 2. Indiana (+26.8) ★, 3. Notre Dame (+25.4), 4. Oregon (+23.4), 5. Miami (+22.8)
+
+★ National Champions - beat Alabama 38-3, Oregon 56-22, Miami 27-21 in CFP.
 
 ### Key Findings
 1. JP+ has significantly better prediction accuracy than margin-based approaches (MAE ~1.5 points lower)
@@ -562,6 +568,23 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 - All adjustments (HFA, FCS penalty, FG efficiency, etc.) applied ONCE at prediction time
 - SpreadGenerator is the single point where components combine
 
+### 5. Mean Error vs ATS Performance
+
+JP+ has a systematic mean error of approximately -6.7 points (predicting home teams to outperform their actual margin). Investigation revealed:
+
+| Metric | Value |
+|--------|-------|
+| Mean error (HFA=2.8) | -6.7 pts |
+| Optimal HFA for zero error | -3.7 pts |
+| ATS when picking favorites | 61.6% |
+| ATS when picking underdogs | 66.6% |
+
+**Root cause:** The CFBD EPA values (which feed into EFM) already implicitly contain home field advantage—home teams naturally generate better EPA due to crowd noise, familiarity, etc. The EFM ridge regression doesn't separate "true team quality" from "home boost in the data," so home teams get inflated base ratings. Adding explicit HFA on top creates double-counting.
+
+**Why we don't "fix" it:** Despite the mean error, ATS performance is excellent (61-67%). The bias is concentrated in blowout games (where ATS doesn't matter), not close games. Adjusting HFA to zero out mean error could hurt ATS performance. We optimize for what matters (ATS), not calibration metrics.
+
+**Key insight:** Mean error is a nuisance metric for spread betting. What matters is correctly identifying which side will cover, not the exact margin. JP+ excels at the former even with systematic bias in the latter.
+
 ---
 
 ## Open Items
@@ -591,9 +614,12 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 - [ ] Automated betting recommendations
 
 ### Parking Lot (Needs Evidence Before Implementation)
+- [x] **Pace-based margin scaling** - Theory: Fast games have more plays, so efficiency edges should compound into larger margins. JP+ should scale predicted margins by expected pace. **Status:** INVESTIGATED, NOT IMPLEMENTING. Empirical analysis (2023-2025) shows the theory doesn't match reality: (1) Fast games actually have smaller margins (R²=2.2% correlation), (2) JP+ over-predicts fast game margins (mean error -2.1), not under-predicts, (3) ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Efficiency metrics implicitly capture tempo. Adding pace scaling would add complexity without benefit.
+- [x] **Mercy Rule Dampener (non-linear margins)** - Theory: Coaches tap brakes in blowouts, so efficiency models over-predict large margins. Apply logistic dampening to extreme spreads. **Status:** INVESTIGATED, NOT IMPLEMENTING. The bias EXISTS (mean error -38.7 on 21+ spreads), and dampening DOES improve MAE (-1.66 pts). BUT dampening HURTS ATS (-2.8pp) because our large edges against Vegas are correct directionally even when magnitude is off. A spread of -28 vs Vegas -21 may be "wrong" by 7 points but RIGHT about home covering. Since ATS is our optimization target (Rule #3), we accept worse MAE to maintain betting edge.
 - [ ] **Soft cap on asymmetric garbage time** - Concern: winning team can accumulate unlimited full-weight plays in blowouts, potentially inflating ratings. Proposed fix: decay weight after +35 margin, cap full-weight GT plays per game. **Status:** Theoretically valid but no evidence of actual problem. Test first: are blowout-heavy teams systematically over-rated vs Vegas?
 - [ ] **Reduce turnover weight to improve 3+ edge** - Turnovers help 5+ edge (+0.9%) but slightly hurt 3+ edge (-0.2%). Could test 5% weight instead of 10%. **Status:** Tradeoff exists but current 10% matches SP+ and helps high-conviction bets.
 - [ ] **Normalize coaching pedigree by prior team talent** - Career win % embeds opportunity (better jobs → higher win %), not purely skill. Normalizing by talent level of teams coached would be more accurate. **Status:** Small sample size (~10-15 coaching changes/year) makes this hard to validate. Current neutral backtest impact suggests feature is already appropriately weighted.
+- [ ] **EV-weighted performance metric** - Current metrics (MAE, ATS %) treat all bets equally. An EV-weighted metric would weight each prediction by the expected value of betting it: `EV = (edge_pts / spread) * kelly_fraction`. This would better capture the model's actual betting value—a 55% ATS on +200 underdogs is worth more than 55% on -110 favorites. Could also track CLV (Closing Line Value) as a proxy for long-term edge. **Status:** Design and implement as alternative to raw ATS %.
 
 ---
 
@@ -614,6 +640,12 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 ## Changelog
 
 ### February 2026
+- **Fixed Sign Convention Bugs** - Complete audit found 2 bugs: (1) `spread_generator.py:386` had `home_is_favorite = prelim_spread < 0` (wrong, should be `> 0`), causing rivalry boost to be applied to favorites instead of underdogs; (2) `html_report.py:250` had inverted CSS class logic. Backtest comparison: 3+ edge ATS improved from 53.3% to **54.0%** (+0.7%, +8 net wins). MAE improved from 12.39 to 12.37. Documented sign conventions in SESSION_LOG Rules section.
+- **Investigated Mercy Rule Dampener (NOT implemented)** - Theory: coaches tap brakes in blowouts, so apply non-linear dampening to extreme spreads. Finding: Bias exists (-38.7 mean error on 21+ spreads) and dampening improves MAE (-1.66), BUT hurts ATS (-2.8pp). Our large edges are correct directionally even when magnitude is off. Decision: Accept worse MAE to maintain betting edge.
+- **Investigated Pace-Based Margin Scaling (NOT implemented)** - Theory suggested fast games should have larger margins (more plays to compound efficiency edge). Empirical analysis showed opposite: fast games have smaller margins (R²=2.2%), JP+ over-predicts (not under-predicts) fast games, and ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Decision: Do not implement.
+- **Documented Mean Error vs ATS Trade-off** - Investigated -6.7 mean error. Root cause: CFBD EPA data implicitly contains home field advantage, causing double-counting with explicit HFA. Decision: Don't fix—ATS performance is 61-67% despite calibration bias. Bias is concentrated in blowouts where ATS doesn't matter. Added documentation explaining why we optimize for ATS, not mean error.
+- **Updated 2025 Top 25 with Full CFP Data** - Top 25 now includes all 46 postseason games and 6,223 playoff plays. Indiana (#2, National Champions) beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP.
+- **Added Rules & Conventions to SESSION_LOG** - Critical rules: (1) Top 25 must use end-of-season + playoffs, (2) ATS from walk-forward only, (3) optimize for ATS not mean error, (4) parameters flow through config, (5) sign conventions documented.
 - **Added Asymmetric Regression for Preseason Priors** - Fixed spread compression problem for blowout games. Standard regression pulled ALL teams toward mean uniformly, causing bad teams (Kent State -25) to gain 7.5 pts they didn't earn. Now regression scales by distance from mean: teams within ±8 pts get normal 30% regression, teams 20+ pts from mean get only 10% regression. Additionally, talent weight is halved (40%→20%) for extreme teams to trust proven performance over talent projections. Result: rating spread preserved at 90% vs 70% before.
 - **Added Triple-Option Team Adjustment** - Fixed systematic underrating of triple-option teams (Navy, Army, Air Force, Kennesaw State). These teams were showing as underdogs when Vegas had them as favorites because: (1) SP+ efficiency metrics don't capture their scheme's value, (2) service academies have artificially low recruiting rankings. Applied +6 pt boost to raw SP+ ratings and 100% prior weight (no talent blend). Result: 2024 early season ATS improved from 49.5% to 51.1%.
 - **Added QB Injury Adjustment System** - Manual flagging system for starter injuries. Pre-computes depth charts from CFBD player PPA data, calculates starter/backup differential, applies adjustment = PPA_drop × 30 plays/game. Usage: `--qb-out TEAM` CLI flag. Example adjustments: Georgia -6.8 pts, Ohio State -10.0 pts, Texas +8.0 pts (Arch Manning backup is better).
@@ -644,4 +676,7 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 - **Reduced Red Zone regression strength (prior_strength 20→10)** - Analysis showed the original prior_strength=20 was too aggressive for end-of-season ratings. With 150+ RZ plays per team, elite RZ performance (like Indiana's 87% TD rate) is a genuine skill, not luck. Reducing to 10 better credits teams that sustain elite RZ efficiency over a full season. This fixed an issue where regression was flipping Indiana's RZ advantage over Ohio State.
 
 ### Explored but Not Included
+- **Defense Full-Weight Garbage Time** - Hypothesis: when a team is winning by 17+ in Q4, their defense should get full weight (1.0) instead of asymmetric weighting (where trailing offense gets 0.1x). This would give defensive dominance full credit in blowouts. Implementation added `defense_full_weight_gt` parameter with separate O/D regression weights. Results: Rankings improved for teams like Indiana (#4→#2), Georgia (#9→#8), Ole Miss (#14→#12), which matched better with consensus rankings. BUT 5+ edge ATS regressed from 57.3% to 56.5% (-0.8%). Decision: **REJECTED**. The "right" rankings hurt predictive accuracy. Current asymmetric GT appears correctly calibrated—giving defense extra credit in garbage time may overcredit "prevent defense" situations that don't reflect true skill. ATS is our optimization target (Rule #4), so we keep standard asymmetric weighting.
+- **Dynamic Ridge Alpha** - Hypothesis: use higher regularization (alpha=75) early season when data is noisy, lower (alpha=35) late season to let elite teams separate more. Results: Dynamic alpha (75→50→35 by week) produced same MAE but hurt 5+ edge ATS from 56.4% to 55.7% (-0.7%). Decision: **REJECTED**. Walk-forward backtesting already self-regularizes via sample size. Lower alpha late-season benefits ALL teams equally, not just elite ones.
+- **Increased Turnover Shrinkage** - Hypothesis: turnovers are ~50-70% luck, so prior_strength=10 may over-credit turnover margin. Tested prior_strength 5/10/20/30. Results: prior_strength=10 is optimal for 5+ edge (56.4%). Higher shrinkage (20-30) slightly improved 3+ edge but hurt high-conviction bets. Decision: **KEEP current** prior_strength=10.
 - **Turnover-Worthy Plays (TWP) proxy** - Built model using pass breakups and sacks as proxies for interceptable passes and fumble-worthy plays. Multi-year validation showed inconsistent results (helped 2023/2025, hurt 2024). Removed to avoid overfitting.

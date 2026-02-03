@@ -247,7 +247,7 @@ HTML_TEMPLATE = """
                     <tr {% if game.is_value %}class="value-play"{% endif %}>
                         <td>{{ game.away_team }}</td>
                         <td>{{ game.home_team }}</td>
-                        <td class="spread {% if game.spread < 0 %}home{% else %}away{% endif %}">
+                        <td class="spread {% if game.spread > 0 %}home{% else %}away{% endif %}">
                             {{ game.spread }}
                         </td>
                         <td>{{ game.vegas_spread if game.vegas_spread else 'N/A' }}</td>

@@ -1392,23 +1392,28 @@ def main():
         return
 
     model_type = "EFM" if args.use_efm else "Ridge"
-    logger.info(f"Running backtest for years: {args.years} using {model_type}")
-    logger.info(
-        f"Start week: {args.start_week}, Alpha: {args.alpha}, "
-        f"HFA: {args.hfa}, Decay: {args.decay}"
-    )
-    logger.info(f"Preseason priors: {'disabled' if args.no_priors else 'enabled'}")
-    logger.info(f"Transfer portal: {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
-    logger.info(f"ATS line type: {'opening' if args.opening_line else 'closing'}")
+    # Print full config for transparency (Rule 8: Parameter Synchronization)
+    print("\n" + "=" * 60)
+    print("BACKTEST CONFIGURATION")
+    print("=" * 60)
+    print(f"  Model:              {model_type}")
+    print(f"  Years:              {args.years}")
+    print(f"  Start week:         {args.start_week}")
+    print(f"  ATS line type:      {'opening' if args.opening_line else 'closing'}")
+    print(f"  Ridge alpha:        {args.alpha}")
+    print(f"  Preseason priors:   {'disabled' if args.no_priors else 'enabled'}")
+    print(f"  Transfer portal:    {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
     if args.use_efm:
-        logger.info(
-            f"EFM weights: efficiency={args.efm_efficiency_weight}, "
-            f"explosiveness={args.efm_explosiveness_weight}, "
-            f"turnover={args.efm_turnover_weight}"
-        )
-        logger.info(f"EFM asymmetric garbage time: {not args.no_asymmetric_garbage}")
+        print(f"  HFA:                team-specific (fallback={args.hfa})")
+        print(f"  EFM weights:        SR={args.efm_efficiency_weight}, IsoPPP={args.efm_explosiveness_weight}, TO={args.efm_turnover_weight}")
+        print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
+        print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
     else:
-        logger.info(f"Turnover scrub factor: {args.to_scrub_factor}")
+        print(f"  HFA:                {args.hfa} (flat)")
+        print(f"  Decay:              {args.decay}")
+        print(f"  Margin cap:         {args.margin_cap}")
+        print(f"  TO scrub factor:    {args.to_scrub_factor}")
+    print("=" * 60 + "\n")
 
     results = run_backtest(
         years=args.years,
