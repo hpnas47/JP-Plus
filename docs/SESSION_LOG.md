@@ -94,6 +94,16 @@
   - **Logging:** Added explicit log message showing year ranges: "Trajectory modifiers for 2024: baseline years [2020-2022], recent years [2023-2023] (current year 2024 NOT included)"
   - **Verified:** Test case confirms correct behavior (uses prior year data, not current year)
 
+- **Fixed P0.2: Game ID Matching for ATS** - Refactored Vegas line matching to use `game_id` instead of `(home_team, away_team)`
+  - **Problem:** Team name matching can fail on rematches, naming drift (e.g., "Miami" vs "Miami (FL)"), and neutral-site home/away flips
+  - **Changes:**
+    1. Added `game_id` to prediction results in both `walk_forward_predict` and `walk_forward_predict_efm`
+    2. Refactored `calculate_ats_results()` to match by `game_id` using O(1) dict lookup
+    3. Added sanity report logging: "ATS line matching: X/Y predictions matched (Z%), N unmatched"
+    4. Updated `VegasComparison` to support `game_id` matching via `get_line_by_id()` and updated `get_line()` to prefer `game_id` when provided
+  - **Result:** 100% match rate (631/631 in 2024 test)
+  - **Files changed:** `scripts/backtest.py`, `src/predictions/vegas_comparison.py`
+
 ---
 
 ## Session: February 2, 2026

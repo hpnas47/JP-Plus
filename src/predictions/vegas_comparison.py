@@ -71,7 +71,9 @@ class VegasComparison:
         )
         self.provider = provider or settings.vegas_provider
 
-        self.lines: dict[tuple[str, str], VegasLine] = {}
+        # Lines indexed by game_id (preferred) and by (home_team, away_team) (fallback)
+        self.lines_by_id: dict[int, VegasLine] = {}
+        self.lines: dict[tuple[str, str], VegasLine] = {}  # Legacy fallback
 
     def fetch_lines(
         self,
@@ -131,21 +133,41 @@ class VegasComparison:
             )
 
             vegas_lines.append(vl)
-            self.lines[(game.home_team, game.away_team)] = vl
+            self.lines_by_id[vl.game_id] = vl  # Primary: by game_id
+            self.lines[(game.home_team, game.away_team)] = vl  # Fallback: by team names
 
         logger.info(f"Fetched {len(vegas_lines)} Vegas lines for {year} week {week}")
         return vegas_lines
 
-    def get_line(self, home_team: str, away_team: str) -> Optional[VegasLine]:
-        """Get Vegas line for a specific matchup.
+    def get_line_by_id(self, game_id: int) -> Optional[VegasLine]:
+        """Get Vegas line by game_id (preferred method).
 
         Args:
-            home_team: Home team name
-            away_team: Away team name
+            game_id: CFBD game ID
 
         Returns:
             VegasLine or None if not found
         """
+        return self.lines_by_id.get(game_id)
+
+    def get_line(self, home_team: str, away_team: str, game_id: Optional[int] = None) -> Optional[VegasLine]:
+        """Get Vegas line for a specific matchup.
+
+        Prefers game_id matching if provided, falls back to team name matching.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+            game_id: Optional game_id for reliable matching
+
+        Returns:
+            VegasLine or None if not found
+        """
+        # Prefer game_id matching (reliable)
+        if game_id is not None and game_id in self.lines_by_id:
+            return self.lines_by_id[game_id]
+
+        # Fall back to team name matching (legacy)
         return self.lines.get((home_team, away_team))
 
     def compare_prediction(

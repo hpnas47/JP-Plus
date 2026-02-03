@@ -30,13 +30,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Audit `HomeFieldAdvantage.calculate_trajectory_modifiers()` end-to-end and ensure trajectory modifiers for a season are computed using only seasons strictly prior to that season. Make the implementation match the documented intent ("calculate once at season start using prior year as recent"), and add a guard/log that proves no current-year results were used.
   - **Notes:** FIXED 2026-02-03. Changed recent years range from `[current_year]` to `[current_year - 1]`. For 2024 predictions: baseline=2020-2022, recent=2023 (NOT 2024). Added logging that explicitly shows year ranges and confirms current year is NOT included. Verified with test showing correct behavior.
 
-- [ ] **P0.2 Key ATS + Vegas lookups by `game_id` (not team names)**
+- [x] **P0.2 Key ATS + Vegas lookups by `game_id` (not team names)** ✅ COMPLETE
   - **Files:** `scripts/backtest.py`, `src/predictions/vegas_comparison.py`
   - **Issue:** `(home_team, away_team)` matching can mis-assign lines (rematches, naming drift, neutral-site home/away flips).
   - **Acceptance criteria:** Predictions carry `game_id`; lines matched by `game_id`; report match rate and list unmatched.
   - **AI nudge prompt:**
     > Refactor all Vegas line lookups and ATS evaluation to be keyed on `game_id` rather than `(home_team, away_team)`. Ensure predictions carry `game_id` through the entire pipeline (predictions output, ATS results, value plays). Add a sanity report showing the % of predictions successfully matched to a betting line and list unmatched games.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added `game_id` to prediction results in both `walk_forward_predict` and `walk_forward_predict_efm`. Refactored `calculate_ats_results()` to match by `game_id` using O(1) dict lookup. Added sanity report logging match rate and unmatched games. Updated `VegasComparison` to support `game_id` matching via `get_line_by_id()` and updated `get_line()` to prefer `game_id` when provided. Test shows 100% match rate (631/631).
 
 - [ ] **P0.3 Remove EFM double-normalization / scaling from rounded outputs**
   - **Files:** `scripts/backtest.py` (EFM path), `src/models/efficiency_foundation_model.py`
@@ -254,7 +254,7 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 ## Suggested fix order (Top 10)
 
 1. ~~P0.1 Trajectory leakage~~ ✅ DONE
-2. P0.2 game_id joins for ATS + VegasComparison
+2. ~~P0.2 game_id joins for ATS + VegasComparison~~ ✅ DONE
 3. P0.3 EFM scaling/double-normalization + rounding contamination
 4. P0.4 robust season data fetching (no silent truncation)
 5. P1.1/P1.2 travel direction + tz logic

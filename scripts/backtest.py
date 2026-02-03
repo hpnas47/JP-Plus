@@ -488,6 +488,7 @@ def walk_forward_predict(
                 actual_margin = game["home_points"] - game["away_points"]
 
                 results.append({
+                    "game_id": game["id"],  # For reliable Vegas line matching
                     "year": game["year"],
                     "week": pred_week,
                     "home_team": game["home_team"],
@@ -705,6 +706,7 @@ def walk_forward_predict_efm(
                 actual_margin = game["home_points"] - game["away_points"]
 
                 results.append({
+                    "game_id": game["id"],  # For reliable Vegas line matching
                     "year": game["year"],
                     "week": pred_week,
                     "home_team": game["home_team"],
@@ -727,28 +729,55 @@ def calculate_ats_results(
 ) -> pd.DataFrame:
     """Calculate against-the-spread results.
 
+    Uses game_id for reliable matching between predictions and betting lines.
+    This avoids issues with team name drift, rematches, and neutral site swaps.
+
     Args:
-        predictions: List of prediction dictionaries
-        betting_df: Polars DataFrame with Vegas lines (must have spread_close and spread_open columns)
+        predictions: List of prediction dictionaries (must include game_id)
+        betting_df: Polars DataFrame with Vegas lines (must have game_id, spread_close, spread_open)
         use_opening_line: If True, use opening lines; if False, use closing lines (default)
 
     Returns:
         Pandas DataFrame with ATS results
     """
     results = []
+    unmatched_games = []
     spread_col = "spread_open" if use_opening_line else "spread_close"
 
-    for pred in predictions:
-        # Find matching Vegas line (Polars filtering is fast)
-        line_match = betting_df.filter(
-            (pl.col("home_team") == pred["home_team"])
-            & (pl.col("away_team") == pred["away_team"])
-        )
+    # Build lookup dict from betting_df for O(1) matching by game_id
+    betting_lookup = {}
+    for row in betting_df.iter_rows(named=True):
+        betting_lookup[row["game_id"]] = row
 
-        if len(line_match) == 0:
+    for pred in predictions:
+        game_id = pred.get("game_id")
+
+        # Match by game_id (reliable) rather than (home_team, away_team) (fragile)
+        if game_id is None or game_id not in betting_lookup:
+            # Track unmatched for sanity report
+            unmatched_games.append({
+                "game_id": game_id,
+                "home_team": pred.get("home_team"),
+                "away_team": pred.get("away_team"),
+                "week": pred.get("week"),
+                "year": pred.get("year"),
+            })
             continue
 
-        vegas_spread = line_match[0, spread_col]  # Vegas: negative = home favored
+        line_data = betting_lookup[game_id]
+        vegas_spread = line_data[spread_col]
+
+        if vegas_spread is None:
+            unmatched_games.append({
+                "game_id": game_id,
+                "home_team": pred.get("home_team"),
+                "away_team": pred.get("away_team"),
+                "week": pred.get("week"),
+                "year": pred.get("year"),
+                "reason": f"missing {spread_col}",
+            })
+            continue
+
         actual_margin = pred["actual_margin"]  # Positive = home won
         model_spread = pred["predicted_spread"]  # Our model: positive = home favored
 
@@ -783,6 +812,33 @@ def calculate_ats_results(
             "ats_win": ats_win,
             "ats_push": ats_push,
         })
+
+    # Sanity report: log match rate and unmatched games
+    total_predictions = len(predictions)
+    matched = len(results)
+    unmatched = len(unmatched_games)
+    match_rate = matched / total_predictions if total_predictions > 0 else 0
+
+    logger.info(
+        f"ATS line matching: {matched}/{total_predictions} predictions matched ({match_rate:.1%}), "
+        f"{unmatched} unmatched"
+    )
+
+    if unmatched_games and unmatched <= 20:
+        # Log details for small numbers of unmatched
+        for game in unmatched_games[:10]:
+            reason = game.get("reason", "no betting line")
+            logger.debug(
+                f"  Unmatched: {game.get('away_team')} @ {game.get('home_team')} "
+                f"(week {game.get('week')}, game_id={game.get('game_id')}) - {reason}"
+            )
+        if unmatched > 10:
+            logger.debug(f"  ... and {unmatched - 10} more unmatched games")
+    elif unmatched > 20:
+        logger.warning(
+            f"High unmatched rate: {unmatched} games without betting lines. "
+            "Check game_id alignment between games and betting data."
+        )
 
     return pd.DataFrame(results)
 
