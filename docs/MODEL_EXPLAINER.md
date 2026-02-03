@@ -95,6 +95,7 @@ After calculating base ratings, JP+ adjusts for:
 - **FCS opponent penalty** (tiered: +18 pts for elite FCS, +32 pts for standard FCS)
 - **FG efficiency differential** (kicker PAAE difference between teams)
 - **Pace adjustment** (spread compression for triple-option teams)
+- **Weather adjustment** (for totals: wind, cold, and precipitation penalties)
 
 **Team-Specific HFA:** Not all home fields are equal. LSU at night (4.0 pts) is much tougher than playing at Kent State (1.75 pts). JP+ uses curated HFA values for ~50 teams based on stadium environment, with conference-based defaults for others.
 
@@ -105,6 +106,22 @@ After calculating base ratings, JP+ adjusts for:
 **Pace Adjustment (Triple-Option):** Triple-option teams (Army, Navy, Air Force, Kennesaw State) run significantly fewer plays per game (~55 vs ~70 for standard offenses). This creates more variance in outcomes—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001). To account for this reduced game volume, JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
 
 **Triple-Option Rating Boost:** Triple-option teams (especially service academies) are systematically underrated by efficiency metrics like SP+ because EPA calculations don't fully capture their scheme's value. Additionally, service academies have artificially low recruiting rankings due to unique constraints (service commitment, physical requirements) that don't reflect their actual competitiveness. JP+ applies a +6 point boost to raw SP+ ratings for these teams and uses 100% prior rating (no talent blend) to correct this systematic bias.
+
+**Weather Adjustment (Totals):** Weather significantly impacts game totals. JP+ fetches weather data from the CFBD API and applies adjustments for totals prediction:
+
+| Factor | Threshold | Adjustment |
+|--------|-----------|------------|
+| Wind | >10 mph | -0.3 pts per mph above threshold (cap: -6.0) |
+| Temperature | <40°F | -0.15 pts per degree below threshold (cap: -4.0) |
+| Precipitation | >0.02 inches | -3.0 pts flat penalty |
+| Heavy Precipitation | >0.05 inches | -5.0 pts flat penalty |
+
+Indoor (dome) games receive no weather adjustment. The precipitation penalty only applies when the weather condition indicates actual rain or snow—fog or humidity that registers small precipitation values is excluded.
+
+Example extreme weather adjustments (2024):
+- UNLV @ San Jose State (22 mph wind + heavy rain): **-8.5 pts**
+- Nebraska @ Iowa (16°F cold): **-3.6 pts**
+- Yale @ Harvard (17 mph wind + light rain): **-5.2 pts**
 
 ### Preseason Priors
 
@@ -263,8 +280,10 @@ JP+ exposes separate offensive, defensive, and special teams ratings via `get_ra
 All data comes from the College Football Data API (collegefootballdata.com), which provides:
 - Game scores and locations
 - Play-by-play data with EPA values
-- Vegas betting lines
+- Vegas betting lines (spreads and totals)
 - Team rosters and recruiting rankings
+- Weather data (temperature, wind, precipitation, indoor flag)
+- SP+ and FPI ratings (for external comparison/validation)
 
 ---
 

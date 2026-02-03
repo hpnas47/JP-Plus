@@ -57,6 +57,36 @@
 
 ### Completed Today
 
+- **Added Weather Adjustment Module** - New module for totals prediction (`src/adjustments/weather.py`)
+  - **Purpose:** Weather significantly impacts game totals (over/under). This prepares JP+ for totals prediction.
+  - **Data Source:** CFBD API `get_weather()` endpoint - provides temperature, wind speed/direction, precipitation, snowfall, humidity, indoor flag
+  - **Adjustments:**
+    | Factor | Threshold | Adjustment | Cap |
+    |--------|-----------|------------|-----|
+    | Wind | >10 mph | -0.3 pts/mph | -6.0 |
+    | Temperature | <40°F | -0.15 pts/degree | -4.0 |
+    | Precipitation | >0.02 in | -3.0 pts | — |
+    | Heavy Precip | >0.05 in | -5.0 pts | — |
+  - **Smart precip logic:** Only applies rain penalty when `weather_condition` indicates actual rain/snow (not fog/humidity)
+  - **Indoor detection:** Dome games (`game_indoors=True`) receive no adjustment
+  - **Example extreme games (2024):**
+    - UNLV @ San Jose State: -8.5 pts (22 mph wind + heavy rain)
+    - Nebraska @ Iowa: -3.6 pts (16°F cold)
+    - Yale @ Harvard: -5.2 pts (17 mph wind + light rain)
+  - **Status:** Ready for totals integration. Parameters are conservative estimates based on NFL weather studies.
+
+- **Added FPI Ratings Comparison** - 3-way validation of JP+ vs FPI vs SP+ (`scripts/compare_ratings.py`)
+  - **Purpose:** External benchmark for JP+ ratings quality
+  - **Implementation:** Added `get_fpi_ratings()` to CFBD client, fixed `get_sp_ratings()` to use correct `RatingsApi` endpoint
+  - **2025 Correlation Results:**
+    | Comparison | Rating r | Rank r |
+    |------------|----------|--------|
+    | JP+ vs FPI | 0.956 | 0.947 |
+    | JP+ vs SP+ | 0.937 | 0.934 |
+    | FPI vs SP+ | 0.970 | 0.965 |
+  - **Key Divergence:** JP+ has Ohio State #1, Indiana #2; FPI/SP+ have Indiana #1
+  - **JP+ unique Top 25:** James Madison (#17), Florida State (#22)
+
 - **Calibration Centering Experiment** - Tested whether fixing -6.7 mean error helps or hurts ATS
   - **Hypothesis:** Model's "calibration debt" (double-counting HFA) is a structural risk that could backfire
   - **Test:** Swept HFA from +2.5 (current) to -4.0 (centered, ~0 mean error)
