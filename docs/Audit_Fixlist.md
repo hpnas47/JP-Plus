@@ -38,13 +38,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Refactor all Vegas line lookups and ATS evaluation to be keyed on `game_id` rather than `(home_team, away_team)`. Ensure predictions carry `game_id` through the entire pipeline (predictions output, ATS results, value plays). Add a sanity report showing the % of predictions successfully matched to a betting line and list unmatched games.
   - **Notes:** FIXED 2026-02-03. Added `game_id` to prediction results in both `walk_forward_predict` and `walk_forward_predict_efm`. Refactored `calculate_ats_results()` to match by `game_id` using O(1) dict lookup. Added sanity report logging match rate and unmatched games. Updated `VegasComparison` to support `game_id` matching via `get_line_by_id()` and updated `get_line()` to prefer `game_id` when provided. Test shows 100% match rate (631/631).
 
-- [ ] **P0.3 Remove EFM double-normalization / scaling from rounded outputs**
+- [x] **P0.3 Remove EFM double-normalization / scaling from rounded outputs** ✅ COMPLETE
   - **Files:** `scripts/backtest.py` (EFM path), `src/models/efficiency_foundation_model.py`
   - **Issue:** Backtest rescales EFM ratings using `get_ratings_df()` (rounded) and EFM already normalizes internally.
   - **Acceptance criteria:** No scaling uses rounded values; only one normalization path exists; weekly rating scale is stable.
   - **AI nudge prompt:**
     > Review how EFM ratings are normalized/scaled across `EfficiencyFoundationModel` and the EFM walk-forward backtest. Eliminate double-normalization and ensure numeric scaling never uses rounded/presentation outputs. Confirm weekly rating scale and predicted spreads are stable and comparable week-to-week.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Removed second normalization in `walk_forward_predict_efm()` that was rescaling from std=12 to std=10 using rounded DataFrame values. Now uses `efm.get_rating(team)` directly for full precision. EFM's `_normalize_ratings()` (std=12.0) is now the ONLY normalization. Test verified: full precision std=12.0000 stable across weeks 4-8, means centered at 0, rounding error minimal (<0.05).
 
 - [ ] **P0.4 Prevent silent season truncation on exceptions**
   - **Files:** `scripts/backtest.py` (`fetch_season_data`, `fetch_season_plays`)
@@ -255,7 +255,7 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 1. ~~P0.1 Trajectory leakage~~ ✅ DONE
 2. ~~P0.2 game_id joins for ATS + VegasComparison~~ ✅ DONE
-3. P0.3 EFM scaling/double-normalization + rounding contamination
+3. ~~P0.3 EFM scaling/double-normalization + rounding contamination~~ ✅ DONE
 4. P0.4 robust season data fetching (no silent truncation)
 5. P1.1/P1.2 travel direction + tz logic
 6. P1.5 unify turnover play types

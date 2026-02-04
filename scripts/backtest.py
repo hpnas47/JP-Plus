@@ -593,18 +593,15 @@ def walk_forward_predict_efm(
 
         efm.calculate_ratings(train_plays_pd, train_games_pd)
 
-        # Get ratings and filter to FBS
-        ratings_df = efm.get_ratings_df()
-        fbs_ratings = ratings_df[ratings_df["team"].isin(fbs_teams)].copy()
-
-        # Rescale to SP+ range (mean ~0, std ~10)
-        current_mean = fbs_ratings["overall"].mean()
-        current_std = fbs_ratings["overall"].std()
-        target_std = 10.0
-        scale_factor = target_std / current_std if current_std > 0 else 1.0
-
-        fbs_ratings["overall_scaled"] = (fbs_ratings["overall"] - current_mean) * scale_factor
-        team_ratings = dict(zip(fbs_ratings["team"], fbs_ratings["overall_scaled"]))
+        # Get ratings directly from EFM (full precision, already normalized to std=12)
+        # IMPORTANT: Do NOT use get_ratings_df() here - it rounds to 1 decimal place
+        # EFM._normalize_ratings() already scales to rating_std (default 12.0)
+        # No second normalization needed - use ratings as-is
+        team_ratings = {
+            team: efm.get_rating(team)
+            for team in fbs_teams
+            if team in efm.team_ratings
+        }
 
         # Blend with preseason priors if available
         if preseason_priors is not None and preseason_priors.preseason_ratings:

@@ -104,6 +104,18 @@
   - **Result:** 100% match rate (631/631 in 2024 test)
   - **Files changed:** `scripts/backtest.py`, `src/predictions/vegas_comparison.py`
 
+- **Fixed P0.3: Remove EFM Double-Normalization** - Eliminated scaling from rounded outputs
+  - **Problem:** EFM's `_normalize_ratings()` scaled to std=12.0, then backtest's `walk_forward_predict_efm()` was rescaling to std=10.0 using values from `get_ratings_df()` (rounded to 1 decimal). This introduced:
+    1. Double-normalization (std=12 → std=10)
+    2. Rounding contamination (full precision → 1 decimal → rescaled)
+  - **Fix:** Removed the second normalization block in `walk_forward_predict_efm()`. Now uses `efm.get_rating(team)` directly for full precision ratings.
+  - **Verification:** Test script confirmed:
+    - Full precision std = 12.0000 stable across weeks 4-8
+    - Means centered at 0.0000 (max deviation 0.0000)
+    - Rounding error minimal (max difference 0.048 between full precision and rounded DF)
+  - **Key insight:** EFM's `_normalize_ratings()` (std=12.0) is now the ONLY normalization. `get_ratings_df()` is for presentation only, not for calculations.
+  - **Files changed:** `scripts/backtest.py`
+
 ---
 
 ## Session: February 2, 2026
