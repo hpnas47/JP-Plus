@@ -1,6 +1,7 @@
-"""Spread generator combining all model components."""
+"""Spread generator combining EFM ratings with adjustment layers."""
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -8,10 +9,6 @@ import pandas as pd
 
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
-# Legacy models
-from src.models.legacy.ridge_model import RidgeRatingsModel
-from src.models.legacy.luck_regression import LuckRegressor
-from src.models.legacy.early_down_model import EarlyDownModel
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
@@ -20,14 +17,10 @@ from src.adjustments.qb_adjustment import QBInjuryAdjuster
 from src.adjustments.diagnostics import (
     AdjustmentStackDiagnostics,
     extract_stack_from_prediction,
-    HIGH_STACK_THRESHOLD,
 )
 
 logger = logging.getLogger(__name__)
 
-# Elite FCS teams (based on 2022-2024 performance vs FBS)
-# These teams average +2 to +15 margin vs FBS (compared to +30 for average FCS)
-# Criteria: avg margin < 20 with multiple FBS games, or FCS playoff regulars
 # Triple-option / slow-pace teams that require spread compression
 # These teams have ~30% worse MAE due to fewer possessions per game
 # Spreads should be compressed toward 0 to account for reduced game volume
@@ -38,6 +31,9 @@ TRIPLE_OPTION_TEAMS = frozenset({
     "Kennesaw State",
 })
 
+# Elite FCS teams (based on 2022-2024 performance vs FBS)
+# These teams average +2 to +15 margin vs FBS (compared to +30 for average FCS)
+# Criteria: avg margin < 20 with multiple FBS games, or FCS playoff regulars
 ELITE_FCS_TEAMS = frozenset({
     # Top performers vs FBS (data-driven)
     "Sacramento State",
@@ -70,15 +66,13 @@ ELITE_FCS_TEAMS = frozenset({
 class SpreadComponents:
     """Breakdown of spread components."""
 
-    base_margin: float = 0.0  # From ridge model
+    base_margin: float = 0.0  # From EFM ratings differential
     home_field: float = 0.0
     situational: float = 0.0
     travel: float = 0.0
     altitude: float = 0.0
     special_teams: float = 0.0
     finishing_drives: float = 0.0
-    early_down: float = 0.0
-    luck_adjustment: float = 0.0
     fcs_adjustment: float = 0.0  # Penalty when FBS plays FCS
     pace_adjustment: float = 0.0  # Compression for triple-option teams
     qb_adjustment: float = 0.0  # Adjustment when starting QB is out
@@ -158,8 +152,6 @@ class PredictedSpread:
             "correlated_stack": self.components.correlated_stack,  # P2.11: HFA+travel+altitude
             "special_teams": self.components.special_teams,
             "finishing_drives": self.components.finishing_drives,
-            "early_down": self.components.early_down,
-            "luck_adj": self.components.luck_adjustment,
             "fcs_adj": self.components.fcs_adjustment,
             "pace_adj": self.components.pace_adjustment,
             "qb_adj": self.components.qb_adjustment,
@@ -168,12 +160,14 @@ class PredictedSpread:
 
 class SpreadGenerator:
     """
-    Generate predicted spreads by combining all model components.
+    Generate predicted spreads by combining EFM ratings with adjustment layers.
 
     Formula:
     spread = base_margin + hfa + situational + travel + altitude +
-             special_teams_diff + finishing_drives_diff + luck_adjustment +
-             fcs_adjustment
+             special_teams_diff + finishing_drives_diff + fcs_adjustment
+
+    Base margin comes from EFM overall ratings differential (home - away).
+    All other components are adjustment layers applied on top.
 
     Special Teams Integration (P2.7):
     -----------------------------
@@ -197,48 +191,40 @@ class SpreadGenerator:
 
     def __init__(
         self,
-        ridge_model: Optional[RidgeRatingsModel] = None,
-        luck_regressor: Optional[LuckRegressor] = None,
+        ratings: Optional[dict[str, float]] = None,
         special_teams: Optional[SpecialTeamsModel] = None,
         finishing_drives: Optional[FinishingDrivesModel] = None,
-        early_down: Optional[EarlyDownModel] = None,
         home_field: Optional[HomeFieldAdvantage] = None,
         situational: Optional[SituationalAdjuster] = None,
         travel: Optional[TravelAdjuster] = None,
         altitude: Optional[AltitudeAdjuster] = None,
         fbs_teams: Optional[set[str]] = None,
-        fcs_penalty: Optional[float] = None,
         fcs_penalty_elite: Optional[float] = None,
         fcs_penalty_standard: Optional[float] = None,
         elite_fcs_teams: Optional[set[str]] = None,
         qb_adjuster: Optional[QBInjuryAdjuster] = None,
         track_diagnostics: bool = False,
     ):
-        """Initialize spread generator with model components.
+        """Initialize spread generator with EFM ratings and adjustment layers.
 
         Args:
-            ridge_model: Core ratings model
-            luck_regressor: Luck regression model
-            special_teams: Special teams model
-            finishing_drives: Finishing drives model
-            early_down: Early-down success rate model
+            ratings: Dict mapping team names to EFM overall ratings
+            special_teams: Special teams model for FG/punt/kickoff differential
+            finishing_drives: Finishing drives model for red zone efficiency
             home_field: Home field advantage calculator
-            situational: Situational adjuster
-            travel: Travel adjuster
-            altitude: Altitude adjuster
+            situational: Situational adjuster (bye weeks, letdown, lookahead, rivalry)
+            travel: Travel adjuster (timezone, distance)
+            altitude: Altitude adjuster (high elevation venues)
             fbs_teams: Set of FBS team names for FCS detection
-            fcs_penalty: DEPRECATED - use fcs_penalty_elite/standard instead
             fcs_penalty_elite: Points for elite FCS teams (default: 18.0)
             fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
             elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS)
             qb_adjuster: QB injury adjuster (optional, for QB-out adjustments)
             track_diagnostics: If True, track adjustment stacks for P2.11 analysis
         """
-        self.ridge_model = ridge_model or RidgeRatingsModel()
-        self.luck_regressor = luck_regressor or LuckRegressor()
+        self.ratings = ratings or {}
         self.special_teams = special_teams or SpecialTeamsModel()
         self.finishing_drives = finishing_drives or FinishingDrivesModel()
-        self.early_down = early_down or EarlyDownModel()
         self.home_field = home_field or HomeFieldAdvantage()
         self.situational = situational or SituationalAdjuster()
         self.travel = travel or TravelAdjuster()
@@ -246,15 +232,9 @@ class SpreadGenerator:
         self.fbs_teams = fbs_teams or set()
         self.elite_fcs_teams = elite_fcs_teams if elite_fcs_teams is not None else ELITE_FCS_TEAMS
 
-        # Support legacy single fcs_penalty parameter
-        if fcs_penalty is not None:
-            # Legacy mode: use single penalty for all FCS
-            self.fcs_penalty_elite = fcs_penalty
-            self.fcs_penalty_standard = fcs_penalty
-        else:
-            # Tiered mode (default)
-            self.fcs_penalty_elite = fcs_penalty_elite if fcs_penalty_elite is not None else self.DEFAULT_FCS_PENALTY_ELITE
-            self.fcs_penalty_standard = fcs_penalty_standard if fcs_penalty_standard is not None else self.DEFAULT_FCS_PENALTY_STANDARD
+        # FCS penalties
+        self.fcs_penalty_elite = fcs_penalty_elite if fcs_penalty_elite is not None else self.DEFAULT_FCS_PENALTY_ELITE
+        self.fcs_penalty_standard = fcs_penalty_standard if fcs_penalty_standard is not None else self.DEFAULT_FCS_PENALTY_STANDARD
 
         # QB injury adjuster (optional)
         self.qb_adjuster = qb_adjuster
@@ -262,6 +242,20 @@ class SpreadGenerator:
         # P2.11: Adjustment stack diagnostics
         self.track_diagnostics = track_diagnostics
         self.diagnostics = AdjustmentStackDiagnostics() if track_diagnostics else None
+
+    def _get_base_margin(self, home_team: str, away_team: str) -> float:
+        """Get base margin from EFM ratings differential.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+
+        Returns:
+            Expected point margin (home - away) on neutral field
+        """
+        home_rating = self.ratings.get(home_team, 0.0)
+        away_rating = self.ratings.get(away_team, 0.0)
+        return home_rating - away_rating
 
     def _get_pace_adjustment(
         self, home_team: str, away_team: str, spread: float
@@ -281,7 +275,6 @@ class SpreadGenerator:
         Returns:
             Pace adjustment (added to spread to compress it toward 0)
         """
-        # Check if either team runs triple-option
         home_is_triple = home_team in TRIPLE_OPTION_TEAMS
         away_is_triple = away_team in TRIPLE_OPTION_TEAMS
 
@@ -289,7 +282,6 @@ class SpreadGenerator:
             return 0.0
 
         # Compression factor: reduce spread magnitude by 10%
-        # This accounts for fewer possessions = more variance
         compression = 0.10
 
         # If both teams are triple-option, apply double compression
@@ -297,8 +289,6 @@ class SpreadGenerator:
             compression = 0.15
 
         # Adjustment moves spread toward 0
-        # If spread is positive (home favored), adjustment is negative
-        # If spread is negative (away favored), adjustment is positive
         return -spread * compression
 
     def _get_fcs_adjustment(self, home_team: str, away_team: str) -> float:
@@ -346,12 +336,7 @@ class SpreadGenerator:
         """
         # Logistic approximation: each point of spread ~ 3% win probability
         # Calibrated to historical data
-        import math
-
-        # Spread of 0 = 50% (with small home edge already in spread)
-        # k parameter controls steepness (higher = more confident predictions)
         k = 0.15
-
         prob = 1 / (1 + math.exp(-k * spread))
         return prob
 
@@ -369,14 +354,8 @@ class SpreadGenerator:
         Returns:
             Confidence level: "Low", "Medium", or "High"
         """
-        # Factors that reduce confidence:
-        # - Close game (small spread)
-        # - Large situational adjustments
-        # - Large luck adjustments
-
         abs_spread = abs(spread)
         abs_situational = abs(components.situational)
-        abs_luck = abs(components.luck_adjustment)
 
         # Score confidence factors
         score = 0
@@ -389,7 +368,8 @@ class SpreadGenerator:
         if abs_situational <= 1:
             score += 1
 
-        if abs_luck <= 2:
+        # Large correlated stacks reduce confidence
+        if abs(components.correlated_stack) <= 4:
             score += 1
 
         if score >= 3:
@@ -422,10 +402,8 @@ class SpreadGenerator:
         """
         components = SpreadComponents()
 
-        # Base margin from ridge model
-        components.base_margin = self.ridge_model.predict_margin(
-            home_team, away_team, neutral_site=True  # Get raw margin without HFA
-        )
+        # Base margin from EFM ratings (neutral field)
+        components.base_margin = self._get_base_margin(home_team, away_team)
 
         # Home field advantage
         if not neutral_site:
@@ -436,7 +414,6 @@ class SpreadGenerator:
         # Situational adjustments
         if week is not None and schedule_df is not None:
             # Determine who's favored for rivalry boost
-            # Convention: positive spread = home favored
             prelim_spread = components.base_margin + components.home_field
             home_is_favorite = prelim_spread > 0
 
@@ -458,33 +435,20 @@ class SpreadGenerator:
         alt_adj, _ = self.altitude.get_detailed_adjustment(home_team, away_team)
         components.altitude = alt_adj
 
-        # Special teams differential (P2.7: applied as adjustment layer, not in base_margin)
-        # This is the ONLY place ST is applied - EFM.overall_rating does not include ST
+        # Special teams differential (P2.7: applied as adjustment layer)
         components.special_teams = self.special_teams.get_matchup_differential(
             home_team, away_team
         )
 
-        # Finishing drives differential
+        # Finishing drives differential (red zone efficiency)
         components.finishing_drives = self.finishing_drives.get_matchup_differential(
             home_team, away_team
         )
 
-        # Early-down success rate differential
-        components.early_down = self.early_down.get_matchup_differential(
-            home_team, away_team
-        )
-
-        # Luck adjustments
-        home_luck = self.luck_regressor.get_luck_adjustment(home_team)
-        away_luck = self.luck_regressor.get_luck_adjustment(away_team)
-        components.luck_adjustment = home_luck - away_luck
-
         # FCS adjustment (when FBS plays FCS)
         components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
 
-        # Calculate total spread (positive = home favored, internal convention)
-        # Note: Standard Vegas convention is negative = home favored
-        # We keep positive = home favored internally and negate when comparing to Vegas
+        # Calculate total spread (positive = home favored)
         spread = (
             components.base_margin
             + components.home_field
@@ -493,8 +457,6 @@ class SpreadGenerator:
             + components.altitude
             + components.special_teams
             + components.finishing_drives
-            + components.early_down
-            + components.luck_adjustment
             + components.fcs_adjustment
         )
 
@@ -517,13 +479,12 @@ class SpreadGenerator:
         # Determine confidence
         confidence = self._determine_confidence(spread, components)
 
-        # Store full precision values internally
-        # Rounding is done at display/reporting time (see PredictedSpread.to_dict())
+        # Create prediction
         prediction = PredictedSpread(
             home_team=home_team,
             away_team=away_team,
-            spread=spread,  # Full precision for MAE/ATS calculations
-            home_win_probability=win_prob,  # Full precision
+            spread=spread,
+            home_win_probability=win_prob,
             components=components,
             confidence=confidence,
         )
@@ -532,7 +493,6 @@ class SpreadGenerator:
         if self.diagnostics is not None:
             stack = extract_stack_from_prediction(prediction)
             self.diagnostics.add_game(stack)
-            # Log warning for extreme stacks
             if stack.is_extreme_stack:
                 logger.warning(
                     f"Extreme adjustment stack ({stack.correlated_stack:.1f} pts): "
@@ -598,11 +558,7 @@ class SpreadGenerator:
         return df
 
     def log_stack_diagnostics(self) -> None:
-        """Log adjustment stack diagnostics summary (P2.11).
-
-        Call this after making predictions to see high-stack games
-        and distribution statistics.
-        """
+        """Log adjustment stack diagnostics summary (P2.11)."""
         if self.diagnostics is None:
             logger.info("Diagnostics not enabled (set track_diagnostics=True)")
             return
@@ -613,15 +569,7 @@ class SpreadGenerator:
         predictions_df: pd.DataFrame,
         results_df: pd.DataFrame,
     ) -> dict:
-        """Evaluate prediction errors for high-stack vs low-stack games (P2.11).
-
-        Args:
-            predictions_df: DataFrame with predictions
-            results_df: DataFrame with actual results
-
-        Returns:
-            Dict with error analysis
-        """
+        """Evaluate prediction errors for high-stack vs low-stack games (P2.11)."""
         if self.diagnostics is None:
             return {"error": "Diagnostics not enabled"}
         return self.diagnostics.evaluate_errors(predictions_df, results_df)
@@ -638,11 +586,7 @@ class SpreadGenerator:
         self.diagnostics.log_error_analysis(predictions_df, results_df)
 
     def get_high_stack_games(self) -> list:
-        """Get games with high correlated stacks (>5 pts).
-
-        Returns:
-            List of AdjustmentStack objects for high-stack games
-        """
+        """Get games with high correlated stacks (>5 pts)."""
         if self.diagnostics is None:
             return []
         return self.diagnostics.get_high_stack_games()

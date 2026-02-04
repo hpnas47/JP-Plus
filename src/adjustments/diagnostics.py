@@ -45,8 +45,6 @@ class AdjustmentStack:
     situational: float = 0.0
     special_teams: float = 0.0
     finishing_drives: float = 0.0
-    early_down: float = 0.0
-    luck: float = 0.0
     fcs: float = 0.0
     pace: float = 0.0
     qb: float = 0.0
@@ -67,8 +65,6 @@ class AdjustmentStack:
             + self.situational
             + self.special_teams
             + self.finishing_drives
-            + self.early_down
-            + self.luck
             + self.fcs
             + self.pace
             + self.qb
@@ -96,8 +92,6 @@ class AdjustmentStack:
             "situational": self.situational,
             "special_teams": self.special_teams,
             "finishing_drives": self.finishing_drives,
-            "early_down": self.early_down,
-            "luck": self.luck,
             "fcs": self.fcs,
             "pace": self.pace,
             "qb": self.qb,
@@ -437,8 +431,6 @@ def extract_stack_from_prediction(prediction) -> AdjustmentStack:
         situational=c.situational,
         special_teams=c.special_teams,
         finishing_drives=c.finishing_drives,
-        early_down=c.early_down,
-        luck=c.luck_adjustment,
         fcs=c.fcs_adjustment,
         pace=c.pace_adjustment,
         qb=c.qb_adjustment,

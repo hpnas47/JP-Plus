@@ -33,10 +33,6 @@ from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
-# Legacy models (kept for comparison, EFM recommended instead)
-from src.models.legacy.ridge_model import RidgeRatingsModel, TeamRatings
-from src.models.legacy.luck_regression import LuckRegressor
-from src.models.legacy.early_down_model import EarlyDownModel
 from src.models.finishing_drives import FinishingDrivesModel
 from src.models.special_teams import SpecialTeamsModel
 from src.predictions.spread_generator import SpreadGenerator
@@ -355,192 +351,6 @@ def build_game_turnovers(
 
 
 def walk_forward_predict(
-    games_df: pd.DataFrame,
-    start_week: int = 4,
-    ridge_alpha: float = 150,
-    preseason_priors: Optional[PreseasonPriors] = None,
-    hfa_value: float = 2.8,
-    decay_rate: float = 0.005,
-    prior_weight: int = 8,
-    margin_cap: int = 38,
-    plays_df: Optional[pd.DataFrame] = None,
-    turnover_df: Optional[pd.DataFrame] = None,
-    to_scrub_factor: float = 0.5,
-    fbs_teams: Optional[set[str]] = None,
-    fcs_penalty_elite: float = 18.0,
-    fcs_penalty_standard: float = 32.0,
-) -> list[dict]:
-    """Perform walk-forward prediction through a season.
-
-    For each week from start_week onward:
-    1. Train ridge model on all games through previous week
-    2. Blend with preseason priors (weighted by games played)
-    3. Generate predictions using SpreadGenerator which applies:
-       - Base margin (ridge ratings)
-       - Home field advantage
-       - Luck adjustment (as differential)
-       - Early-down efficiency (as differential)
-       - Travel/altitude/situational adjustments
-    4. Record predictions vs actual results
-
-    NOTE: To avoid double-counting, luck and early-down are NOT baked into
-    base ratings. They are applied as separate components at prediction time
-    by SpreadGenerator.
-
-    Args:
-        games_df: All games for the season
-        start_week: First week to start predictions (need data to train)
-        ridge_alpha: Ridge regression alpha parameter
-        preseason_priors: Preseason ratings to blend with in-season model
-        hfa_value: Fixed home field advantage in points
-        decay_rate: Recency decay rate for weighting games
-        prior_weight: games_for_full_weight for preseason blending
-        margin_cap: Cap game margins at this value (reduces blowout distortion)
-        plays_df: Play-by-play data for early-down success rate model
-        turnover_df: Per-game net home turnover margins from build_game_turnovers()
-        to_scrub_factor: How much turnover noise to remove from margins (0-1).
-                        0.0 = no scrub, 1.0 = full scrub.
-        fbs_teams: Set of FBS team names for FCS detection
-        fcs_penalty_elite: Points for elite FCS teams (default: 18.0)
-        fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
-
-    Returns:
-        List of prediction result dictionaries
-    """
-    results = []
-    max_week = games_df["week"].max()
-
-    for pred_week in range(start_week, max_week + 1):
-        # Training data: all games before this week
-        train_df = games_df[games_df["week"] < pred_week].copy()
-
-        if len(train_df) < 50:
-            logger.warning(f"Week {pred_week}: insufficient training data, skipping")
-            continue
-
-        # Compute raw margin
-        if "margin" not in train_df.columns:
-            train_df["margin"] = train_df["home_points"] - train_df["away_points"]
-
-        # Scrub turnover noise from margins before capping
-        if to_scrub_factor > 0 and turnover_df is not None and not turnover_df.empty:
-            to_lookup = turnover_df.set_index("game_id")["net_home_to_margin"]
-            scrub = train_df["id"].map(to_lookup).fillna(0) * POINTS_PER_TURNOVER * to_scrub_factor
-            train_df["margin"] = train_df["margin"] - scrub
-
-        # Cap blowout margins to reduce distortion from garbage time
-        train_df["margin"] = train_df["margin"].clip(-margin_cap, margin_cap)
-        # Adjust points to match capped margin (keep home_points, adjust away_points)
-        train_df["away_points"] = train_df["home_points"] - train_df["margin"]
-
-        # Process training data with specified decay rate
-        recency_weighter = RecencyWeighter(decay_rate=decay_rate)
-        processor = DataProcessor(recency_weighter=recency_weighter)
-        processed = processor.process_games(train_df, apply_recency_weights=True)
-
-        # Fit model with consistent HFA for both training and prediction
-        model = RidgeRatingsModel(alpha=ridge_alpha, fixed_hfa=hfa_value)
-        model.fit(processed)
-
-        # Get team ratings
-        ratings_df = model.get_all_ratings()
-        team_ratings = dict(zip(ratings_df["team"], ratings_df["overall"]))
-
-        # Blend with preseason priors if available
-        if preseason_priors is not None and preseason_priors.preseason_ratings:
-            games_played = pred_week - 1  # Weeks of data used for training
-            blended = preseason_priors.blend_with_inseason(
-                team_ratings, games_played, games_for_full_weight=prior_weight
-            )
-            # Update model ratings with blended values
-            for team, rating in blended.items():
-                model.ratings[team] = TeamRatings(
-                    team=team, offense=rating, defense=0.0
-                )
-            logger.debug(
-                f"Week {pred_week}: blended preseason "
-                f"(preseason weight={1 - min(games_played/prior_weight, 1.0):.0%})"
-            )
-
-        # Use consistent HFA value for prediction
-        hfa = HomeFieldAdvantage(base_hfa=hfa_value)
-        for team in model.ratings.keys():
-            hfa.team_hfa[team] = hfa_value
-
-        # Calculate luck regression (applied as differential at prediction time, NOT baked into ratings)
-        luck = LuckRegressor(skip_turnover_luck=(to_scrub_factor > 0))
-        luck.calculate_all_teams(processed)
-
-        # Calculate early-down model (applied as differential at prediction time, NOT baked into ratings)
-        early_down = EarlyDownModel()
-        if plays_df is not None and not plays_df.empty:
-            train_plays = plays_df[plays_df["week"] < pred_week]
-            if len(train_plays) > 0:
-                early_down.calculate_all_teams(train_plays)
-
-        # Build rankings from model ratings for situational adjustments
-        team_ratings = {
-            team: model.ratings[team].offense for team in model.ratings
-        }
-        sorted_teams = sorted(team_ratings.items(), key=lambda x: x[1], reverse=True)
-        rankings = {team: rank + 1 for rank, (team, _) in enumerate(sorted_teams)}
-
-        # Build spread generator - pass all component models
-        # NOTE: Luck and early-down are applied as differentials at prediction time
-        # to avoid double-counting (they are NOT in base ratings)
-        situational = SituationalAdjuster()
-        spread_gen = SpreadGenerator(
-            ridge_model=model,
-            luck_regressor=luck,
-            early_down=early_down,
-            home_field=hfa,
-            situational=situational,
-            travel=TravelAdjuster(),
-            altitude=AltitudeAdjuster(),
-            fbs_teams=fbs_teams,
-            fcs_penalty_elite=fcs_penalty_elite,
-            fcs_penalty_standard=fcs_penalty_standard,
-        )
-
-        # Predict this week's games
-        week_games = games_df[games_df["week"] == pred_week]
-
-        for _, game in week_games.iterrows():
-            try:
-                pred = spread_gen.predict_spread(
-                    home_team=game["home_team"],
-                    away_team=game["away_team"],
-                    neutral_site=game["neutral_site"],
-                    week=pred_week,
-                    schedule_df=games_df,
-                    rankings=rankings,
-                )
-
-                actual_margin = game["home_points"] - game["away_points"]
-
-                results.append({
-                    "game_id": game["id"],  # For reliable Vegas line matching
-                    "year": game["year"],
-                    "week": pred_week,
-                    "home_team": game["home_team"],
-                    "away_team": game["away_team"],
-                    "predicted_spread": pred.spread,
-                    "actual_margin": actual_margin,
-                    "error": pred.spread - actual_margin,
-                    "abs_error": abs(pred.spread - actual_margin),
-                    # P2.11: Track correlated adjustment stack (HFA + travel + altitude)
-                    "correlated_stack": pred.components.correlated_stack,
-                    "hfa": pred.components.home_field,
-                    "travel": pred.components.travel,
-                    "altitude": pred.components.altitude,
-                })
-            except Exception as e:
-                logger.debug(f"Error predicting {game['away_team']} @ {game['home_team']}: {e}")
-
-    return results
-
-
-def walk_forward_predict_efm(
     games_df: pl.DataFrame,
     efficiency_plays_df: pl.DataFrame,
     fbs_teams: set[str],
@@ -654,25 +464,6 @@ def walk_forward_predict_efm(
                 f"(preseason weight={1 - min(games_played/prior_weight, 1.0):.0%})"
             )
 
-        # Create a simple wrapper that mimics RidgeRatingsModel for SpreadGenerator
-        class EFMWrapper:
-            """Wrapper to make EFM compatible with SpreadGenerator."""
-
-            def __init__(self, ratings: dict[str, float]):
-                self.ratings = {
-                    team: TeamRatings(team=team, offense=rating, defense=0.0)
-                    for team, rating in ratings.items()
-                }
-
-            def predict_margin(
-                self, home_team: str, away_team: str, neutral_site: bool = False
-            ) -> float:
-                home_r = self.ratings.get(home_team, TeamRatings(home_team, 0, 0)).offense
-                away_r = self.ratings.get(away_team, TeamRatings(away_team, 0, 0)).offense
-                return home_r - away_r
-
-        efm_wrapper = EFMWrapper(team_ratings)
-
         # Initialize HFA with team-specific values and trajectory modifiers
         hfa = HomeFieldAdvantage(base_hfa=hfa_value)
         # Calculate trajectory modifiers if we have records
@@ -725,16 +516,12 @@ def walk_forward_predict_efm(
                 for team, st_rating in special_teams.team_ratings.items():
                     efm.set_special_teams_rating(team, st_rating.overall_rating)
 
-        # Build spread generator with EFM as base model
-        # NOTE: EFM is the foundation - no luck/early-down needed since it's built on efficiency
-        # Finishing drives IS included to capture regressed RZ efficiency differential
+        # Build spread generator with EFM ratings
         situational = SituationalAdjuster()
         spread_gen = SpreadGenerator(
-            ridge_model=efm_wrapper,
-            luck_regressor=LuckRegressor(),  # Empty - EFM doesn't need luck adjustment
-            early_down=EarlyDownModel(),  # Empty - EFM already includes efficiency
+            ratings=team_ratings,
             finishing_drives=finishing,  # Regressed RZ efficiency
-            special_teams=special_teams,  # FG efficiency differential
+            special_teams=special_teams,  # FG/Punt/Kickoff efficiency differential
             home_field=hfa,
             situational=situational,
             travel=TravelAdjuster(),
@@ -1145,44 +932,36 @@ def run_backtest(
     ridge_alpha: float = 50.0,
     use_priors: bool = True,
     hfa_value: float = 2.5,
-    decay_rate: float = 0.005,
     prior_weight: int = 8,
-    margin_cap: int = 38,
     season_data: Optional[dict] = None,
-    to_scrub_factor: float = 0.5,
-    use_efm: bool = False,
-    efm_efficiency_weight: float = 0.54,
-    efm_explosiveness_weight: float = 0.36,
-    efm_turnover_weight: float = 0.10,
-    efm_garbage_time_weight: float = 0.1,
-    efm_asymmetric_garbage: bool = True,
+    efficiency_weight: float = 0.54,
+    explosiveness_weight: float = 0.36,
+    turnover_weight: float = 0.10,
+    garbage_time_weight: float = 0.1,
+    asymmetric_garbage: bool = True,
     fcs_penalty_elite: float = 18.0,
     fcs_penalty_standard: float = 32.0,
     use_portal: bool = True,
     portal_scale: float = 0.15,
     use_opening_line: bool = False,
 ) -> dict:
-    """Run full backtest across specified years.
+    """Run full backtest across specified years using EFM.
 
     Args:
         years: List of years to backtest
         start_week: First week to start predictions
-        ridge_alpha: Ridge regression alpha (for both ridge and EFM opponent adjustment)
+        ridge_alpha: Ridge regression alpha for EFM opponent adjustment
         use_priors: Whether to use preseason priors
-        hfa_value: Fixed home field advantage in points
-        decay_rate: Recency decay rate (only for ridge model)
+        hfa_value: Base home field advantage in points
         prior_weight: games_for_full_weight for preseason blending
-        margin_cap: Cap game margins at this value (only for ridge model)
         season_data: Pre-fetched season data (for sweep caching)
-        to_scrub_factor: How much turnover noise to remove from margins (only for ridge model)
-        use_efm: Use Efficiency Foundation Model instead of ridge
-        efm_efficiency_weight: EFM success rate weight (default 0.54)
-        efm_explosiveness_weight: EFM IsoPPP weight (default 0.36)
-        efm_turnover_weight: EFM turnover margin weight (default 0.10)
-        efm_garbage_time_weight: EFM garbage time play weight (default 0.1)
-        efm_asymmetric_garbage: Only penalize trailing team in garbage time (default True)
-        fcs_penalty_elite: Points for elite FCS teams (default 18.0, EFM only)
-        fcs_penalty_standard: Points for standard FCS teams (default 32.0, EFM only)
+        efficiency_weight: EFM success rate weight (default 0.54)
+        explosiveness_weight: EFM IsoPPP weight (default 0.36)
+        turnover_weight: EFM turnover margin weight (default 0.10)
+        garbage_time_weight: EFM garbage time play weight (default 0.1)
+        asymmetric_garbage: Only penalize trailing team in garbage time (default True)
+        fcs_penalty_elite: Points for elite FCS teams (default 18.0)
+        fcs_penalty_standard: Points for standard FCS teams (default 32.0)
         use_portal: Whether to incorporate transfer portal into preseason priors
         portal_scale: How much to weight portal impact (default 0.15)
         use_opening_line: If True, use opening lines for ATS; if False, use closing lines (default)
@@ -1200,62 +979,40 @@ def run_backtest(
         )
 
     # Build team records for trajectory calculation (need ~4 years before earliest year)
-    if use_efm:
-        client = CFBDClient()
-        trajectory_years = list(range(min(years) - 4, max(years) + 1))
-        team_records = build_team_records(client, trajectory_years)
-        logger.info(f"Built team records for trajectory ({len(team_records)} teams, years {trajectory_years[0]}-{trajectory_years[-1]})")
-    else:
-        team_records = None
+    client = CFBDClient()
+    trajectory_years = list(range(min(years) - 4, max(years) + 1))
+    team_records = build_team_records(client, trajectory_years)
+    logger.info(f"Built team records for trajectory ({len(team_records)} teams, years {trajectory_years[0]}-{trajectory_years[-1]})")
 
     all_predictions = []
     all_ats = []
 
     for year in years:
-        logger.info(f"\nBacktesting {year} season {'(EFM)' if use_efm else '(Ridge)'}...")
+        logger.info(f"\nBacktesting {year} season...")
 
         games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
 
-        if use_efm:
-            # Walk-forward predictions using EFM
-            predictions = walk_forward_predict_efm(
-                games_df,
-                efficiency_plays_df,
-                fbs_teams,
-                start_week,
-                preseason_priors=priors,
-                hfa_value=hfa_value,
-                prior_weight=prior_weight,
-                ridge_alpha=ridge_alpha,
-                efficiency_weight=efm_efficiency_weight,
-                explosiveness_weight=efm_explosiveness_weight,
-                turnover_weight=efm_turnover_weight,
-                garbage_time_weight=efm_garbage_time_weight,
-                asymmetric_garbage=efm_asymmetric_garbage,
-                team_records=team_records,
-                year=year,
-                fcs_penalty_elite=fcs_penalty_elite,
-                fcs_penalty_standard=fcs_penalty_standard,
-                st_plays_df=st_plays_df,
-            )
-        else:
-            # Walk-forward predictions using ridge model (legacy - needs pandas)
-            predictions = walk_forward_predict(
-                games_df.to_pandas(),
-                start_week,
-                ridge_alpha,
-                preseason_priors=priors,
-                hfa_value=hfa_value,
-                decay_rate=decay_rate,
-                prior_weight=prior_weight,
-                margin_cap=margin_cap,
-                plays_df=plays_df.to_pandas() if plays_df is not None else None,
-                turnover_df=turnover_df.to_pandas() if turnover_df is not None else None,
-                to_scrub_factor=to_scrub_factor,
-                fbs_teams=fbs_teams,
-                fcs_penalty_elite=fcs_penalty_elite,
-                fcs_penalty_standard=fcs_penalty_standard,
-            )
+        # Walk-forward predictions using EFM
+        predictions = walk_forward_predict(
+            games_df,
+            efficiency_plays_df,
+            fbs_teams,
+            start_week,
+            preseason_priors=priors,
+            hfa_value=hfa_value,
+            prior_weight=prior_weight,
+            ridge_alpha=ridge_alpha,
+            efficiency_weight=efficiency_weight,
+            explosiveness_weight=explosiveness_weight,
+            turnover_weight=turnover_weight,
+            garbage_time_weight=garbage_time_weight,
+            asymmetric_garbage=asymmetric_garbage,
+            team_records=team_records,
+            year=year,
+            fcs_penalty_elite=fcs_penalty_elite,
+            fcs_penalty_standard=fcs_penalty_standard,
+            st_plays_df=st_plays_df,
+        )
         all_predictions.extend(predictions)
 
         # Calculate ATS
@@ -1286,161 +1043,87 @@ def run_sweep(
     years: list[int],
     start_week: int = 4,
     use_priors: bool = True,
-    use_efm: bool = False,
 ) -> pd.DataFrame:
-    """Run grid search over key parameters.
+    """Run grid search over EFM parameters.
 
-    Tests combinations of alpha, decay, and hfa to find optimal settings.
+    Tests combinations of alpha, hfa, and efficiency_weight to find optimal settings.
 
     Args:
         years: List of years to backtest
         start_week: First week to start predictions
         use_priors: Whether to use preseason priors
-        use_efm: Use Efficiency Foundation Model instead of ridge
 
     Returns:
         DataFrame with results for each parameter combination
     """
     from itertools import product
 
-    if use_efm:
-        # EFM sweep: alpha, hfa, efficiency_weight
-        # Note: turnover_weight is fixed at 0.10, so efficiency + explosiveness = 0.90
-        alphas = [50, 100, 200]
-        hfas = [2.0, 2.5, 3.0]
-        eff_weights = [0.50, 0.54, 0.60]  # These are efficiency weights (explosiveness = 0.90 - eff)
-        turnover_weight = 0.10  # Fixed at 10%
+    # EFM sweep: alpha, hfa, efficiency_weight
+    # Note: turnover_weight is fixed at 0.10, so efficiency + explosiveness = 0.90
+    alphas = [50, 100, 200]
+    hfas = [2.0, 2.5, 3.0]
+    eff_weights = [0.50, 0.54, 0.60]  # These are efficiency weights (explosiveness = 0.90 - eff)
+    turnover_weight = 0.10  # Fixed at 10%
 
-        combos = list(product(alphas, hfas, eff_weights))
-        total = len(combos)
+    combos = list(product(alphas, hfas, eff_weights))
+    total = len(combos)
 
-        print(f"\nSweeping {total} EFM parameter combinations...")
-        print(f"alpha:           {alphas}")
-        print(f"hfa:             {hfas}")
-        print(f"efficiency_wt:   {eff_weights}")
-        print(f"turnover_wt:     {turnover_weight} (fixed)")
-        print()
+    print(f"\nSweeping {total} EFM parameter combinations...")
+    print(f"alpha:           {alphas}")
+    print(f"hfa:             {hfas}")
+    print(f"efficiency_wt:   {eff_weights}")
+    print(f"turnover_wt:     {turnover_weight} (fixed)")
+    print()
 
-        # Pre-fetch all season data once
-        cached_data = fetch_all_season_data(years, use_priors=use_priors)
+    # Pre-fetch all season data once
+    cached_data = fetch_all_season_data(years, use_priors=use_priors)
 
-        sweep_results = []
+    sweep_results = []
 
-        for i, (alpha, hfa, eff_wt) in enumerate(combos, 1):
-            try:
-                result = run_backtest(
-                    years=years,
-                    start_week=start_week,
-                    season_data=cached_data,
-                    ridge_alpha=alpha,
-                    use_priors=use_priors,
-                    hfa_value=hfa,
-                    use_efm=True,
-                    efm_efficiency_weight=eff_wt,
-                    efm_explosiveness_weight=0.90 - eff_wt,  # 0.90 = 1.0 - turnover_weight
-                    efm_turnover_weight=turnover_weight,
-                )
-                metrics = result["metrics"]
+    for i, (alpha, hfa, eff_wt) in enumerate(combos, 1):
+        try:
+            result = run_backtest(
+                years=years,
+                start_week=start_week,
+                season_data=cached_data,
+                ridge_alpha=alpha,
+                use_priors=use_priors,
+                hfa_value=hfa,
+                efficiency_weight=eff_wt,
+                explosiveness_weight=0.90 - eff_wt,  # 0.90 = 1.0 - turnover_weight
+                turnover_weight=turnover_weight,
+            )
+            metrics = result["metrics"]
 
-                ats_w, ats_l, ats_pct, roi = 0, 0, 0.0, 0.0
-                if "ats_record" in metrics:
-                    parts = metrics["ats_record"].split("-")
-                    ats_w = int(parts[0])
-                    ats_l = int(parts[1])
-                    ats_pct = metrics["ats_win_rate"]
-                    roi = metrics["roi"]
+            ats_w, ats_l, ats_pct, roi = 0, 0, 0.0, 0.0
+            if "ats_record" in metrics:
+                parts = metrics["ats_record"].split("-")
+                ats_w = int(parts[0])
+                ats_l = int(parts[1])
+                ats_pct = metrics["ats_win_rate"]
+                roi = metrics["roi"]
 
-                sweep_results.append({
-                    "model": "EFM",
-                    "alpha": alpha,
-                    "hfa": hfa,
-                    "eff_wt": eff_wt,
-                    "MAE": round(metrics["mae"], 2),
-                    "ATS_W": ats_w,
-                    "ATS_L": ats_l,
-                    "ATS%": round(ats_pct * 100, 1),
-                    "ROI": round(roi * 100, 1),
-                })
+            sweep_results.append({
+                "alpha": alpha,
+                "hfa": hfa,
+                "eff_wt": eff_wt,
+                "MAE": round(metrics["mae"], 2),
+                "ATS_W": ats_w,
+                "ATS_L": ats_l,
+                "ATS%": round(ats_pct * 100, 1),
+                "ROI": round(roi * 100, 1),
+            })
 
-                print(
-                    f"  [{i:3d}/{total}] alpha={alpha:>3.0f}  hfa={hfa:.1f}  "
-                    f"eff_wt={eff_wt:.2f}  "
-                    f"MAE={metrics['mae']:.2f}  "
-                    f"ATS={ats_w}-{ats_l} ({ats_pct:.1%})  ROI={roi:.1%}"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Error with alpha={alpha}, hfa={hfa}, eff_wt={eff_wt}: {e}"
-                )
-    else:
-        # Ridge sweep
-        alphas = [10, 100, 300]
-        decays = [0.005, 0.015]
-        hfas = [2.5, 3.0, 3.5]
-        to_scrub_factors = [0.0, 0.5, 1.0]
-
-        combos = list(product(alphas, decays, hfas, to_scrub_factors))
-        total = len(combos)
-
-        print(f"\nSweeping {total} Ridge parameter combinations...")
-        print(f"alpha:          {alphas}")
-        print(f"decay:          {decays}")
-        print(f"hfa:            {hfas}")
-        print(f"to_scrub_factor: {to_scrub_factors}")
-        print()
-
-        # Pre-fetch all season data once (avoids re-fetching for each combo)
-        cached_data = fetch_all_season_data(years, use_priors=use_priors)
-
-        sweep_results = []
-
-        for i, (alpha, decay, hfa, tosf) in enumerate(combos, 1):
-            try:
-                result = run_backtest(
-                    years=years,
-                    start_week=start_week,
-                    season_data=cached_data,
-                    ridge_alpha=alpha,
-                    use_priors=use_priors,
-                    hfa_value=hfa,
-                    decay_rate=decay,
-                    to_scrub_factor=tosf,
-                    use_efm=False,
-                )
-                metrics = result["metrics"]
-
-                ats_w, ats_l, ats_pct, roi = 0, 0, 0.0, 0.0
-                if "ats_record" in metrics:
-                    parts = metrics["ats_record"].split("-")
-                    ats_w = int(parts[0])
-                    ats_l = int(parts[1])
-                    ats_pct = metrics["ats_win_rate"]
-                    roi = metrics["roi"]
-
-                sweep_results.append({
-                    "model": "Ridge",
-                    "alpha": alpha,
-                    "decay": decay,
-                    "hfa": hfa,
-                    "to_scrub": tosf,
-                    "MAE": round(metrics["mae"], 2),
-                    "ATS_W": ats_w,
-                    "ATS_L": ats_l,
-                    "ATS%": round(ats_pct * 100, 1),
-                    "ROI": round(roi * 100, 1),
-                })
-
-                print(
-                    f"  [{i:3d}/{total}] alpha={alpha:>3.0f}  decay={decay:.3f}  "
-                    f"hfa={hfa:.1f}  tosf={tosf:.1f}  "
-                    f"MAE={metrics['mae']:.2f}  "
-                    f"ATS={ats_w}-{ats_l} ({ats_pct:.1%})  ROI={roi:.1%}"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Error with alpha={alpha}, decay={decay}, hfa={hfa}, "
-                    f"tosf={tosf}: {e}"
-                )
+            print(
+                f"  [{i:3d}/{total}] alpha={alpha:>3.0f}  hfa={hfa:.1f}  "
+                f"eff_wt={eff_wt:.2f}  "
+                f"MAE={metrics['mae']:.2f}  "
+                f"ATS={ats_w}-{ats_l} ({ats_pct:.1%})  ROI={roi:.1%}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Error with alpha={alpha}, hfa={hfa}, eff_wt={eff_wt}: {e}"
+            )
 
     df = pd.DataFrame(sweep_results)
     df = df.sort_values("ATS%", ascending=False).reset_index(drop=True)
@@ -1498,7 +1181,7 @@ def print_results(results: dict) -> None:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Backtest CFB Power Ratings Model")
+    parser = argparse.ArgumentParser(description="Backtest CFB Power Ratings Model (EFM)")
     parser.add_argument(
         "--years",
         type=int,
@@ -1516,37 +1199,19 @@ def main():
         "--alpha",
         type=float,
         default=50.0,
-        help="Ridge regression alpha parameter (default: 50.0)",
+        help="Ridge regression alpha for opponent adjustment (default: 50.0)",
     )
     parser.add_argument(
         "--hfa",
         type=float,
         default=2.5,
-        help="Home field advantage in points (default: 2.5)",
-    )
-    parser.add_argument(
-        "--decay",
-        type=float,
-        default=0.005,
-        help="Recency decay rate (default: 0.005)",
+        help="Base home field advantage in points (default: 2.5)",
     )
     parser.add_argument(
         "--prior-weight",
         type=int,
         default=8,
         help="Games for full preseason prior weight (default: 8)",
-    )
-    parser.add_argument(
-        "--margin-cap",
-        type=int,
-        default=38,
-        help="Cap game margins at this value (default: 38, use 999 to disable)",
-    )
-    parser.add_argument(
-        "--to-scrub-factor",
-        type=float,
-        default=0.5,
-        help="Turnover margin scrub factor (default: 0.5 = half scrub, 0.0 = disabled, 1.0 = full)",
     )
     parser.add_argument(
         "--output",
@@ -1562,47 +1227,42 @@ def main():
     parser.add_argument(
         "--sweep",
         action="store_true",
-        help="Run parameter sweep (grid search over alpha, decay, hfa)",
+        help="Run parameter sweep (grid search over alpha, hfa, efficiency weight)",
     )
     parser.add_argument(
-        "--use-efm",
-        action="store_true",
-        help="Use Efficiency Foundation Model instead of margin-based ridge",
-    )
-    parser.add_argument(
-        "--efm-efficiency-weight",
+        "--efficiency-weight",
         type=float,
         default=0.54,
-        help="EFM: weight for success rate component (default: 0.54)",
+        help="Weight for success rate component (default: 0.54)",
     )
     parser.add_argument(
-        "--efm-explosiveness-weight",
+        "--explosiveness-weight",
         type=float,
         default=0.36,
-        help="EFM: weight for IsoPPP component (default: 0.36)",
+        help="Weight for IsoPPP component (default: 0.36)",
     )
     parser.add_argument(
-        "--efm-turnover-weight",
+        "--turnover-weight",
         type=float,
         default=0.10,
-        help="EFM: weight for turnover margin component (default: 0.10)",
+        help="Weight for turnover margin component (default: 0.10)",
     )
     parser.add_argument(
         "--no-asymmetric-garbage",
         action="store_true",
-        help="EFM: disable asymmetric garbage time (penalize both teams equally in garbage time)",
+        help="Disable asymmetric garbage time (penalize both teams equally)",
     )
     parser.add_argument(
         "--fcs-penalty-elite",
         type=float,
         default=18.0,
-        help="EFM: points for elite FCS teams (default: 18.0)",
+        help="Points for elite FCS teams (default: 18.0)",
     )
     parser.add_argument(
         "--fcs-penalty-standard",
         type=float,
         default=32.0,
-        help="EFM: points for standard FCS teams (default: 32.0)",
+        help="Points for standard FCS teams (default: 32.0)",
     )
     parser.add_argument(
         "--no-portal",
@@ -1628,10 +1288,9 @@ def main():
             years=args.years,
             start_week=args.start_week,
             use_priors=not args.no_priors,
-            use_efm=args.use_efm,
         )
         print("\n" + "=" * 80)
-        print(f"SWEEP RESULTS ({'EFM' if args.use_efm else 'Ridge'}) - sorted by ATS%")
+        print("SWEEP RESULTS (EFM) - sorted by ATS%")
         print("=" * 80)
         print(sweep_df.to_string(index=False))
 
@@ -1640,28 +1299,20 @@ def main():
             print(f"\nSweep results saved to {args.output}")
         return
 
-    model_type = "EFM" if args.use_efm else "Ridge"
-    # Print full config for transparency (Rule 8: Parameter Synchronization)
+    # Print full config for transparency
     print("\n" + "=" * 60)
-    print("BACKTEST CONFIGURATION")
+    print("BACKTEST CONFIGURATION (EFM)")
     print("=" * 60)
-    print(f"  Model:              {model_type}")
     print(f"  Years:              {args.years}")
     print(f"  Start week:         {args.start_week}")
     print(f"  ATS line type:      {'opening' if args.opening_line else 'closing'}")
     print(f"  Ridge alpha:        {args.alpha}")
     print(f"  Preseason priors:   {'disabled' if args.no_priors else 'enabled'}")
     print(f"  Transfer portal:    {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
-    if args.use_efm:
-        print(f"  HFA:                team-specific (fallback={args.hfa})")
-        print(f"  EFM weights:        SR={args.efm_efficiency_weight}, IsoPPP={args.efm_explosiveness_weight}, TO={args.efm_turnover_weight}")
-        print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
-        print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
-    else:
-        print(f"  HFA:                {args.hfa} (flat)")
-        print(f"  Decay:              {args.decay}")
-        print(f"  Margin cap:         {args.margin_cap}")
-        print(f"  TO scrub factor:    {args.to_scrub_factor}")
+    print(f"  HFA:                team-specific (fallback={args.hfa})")
+    print(f"  EFM weights:        SR={args.efficiency_weight}, IsoPPP={args.explosiveness_weight}, TO={args.turnover_weight}")
+    print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
+    print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
     print("=" * 60 + "\n")
 
     results = run_backtest(
@@ -1670,15 +1321,11 @@ def main():
         ridge_alpha=args.alpha,
         use_priors=not args.no_priors,
         hfa_value=args.hfa,
-        decay_rate=args.decay,
         prior_weight=args.prior_weight,
-        margin_cap=args.margin_cap,
-        to_scrub_factor=args.to_scrub_factor,
-        use_efm=args.use_efm,
-        efm_efficiency_weight=args.efm_efficiency_weight,
-        efm_explosiveness_weight=args.efm_explosiveness_weight,
-        efm_turnover_weight=args.efm_turnover_weight,
-        efm_asymmetric_garbage=not args.no_asymmetric_garbage,
+        efficiency_weight=args.efficiency_weight,
+        explosiveness_weight=args.explosiveness_weight,
+        turnover_weight=args.turnover_weight,
+        asymmetric_garbage=not args.no_asymmetric_garbage,
         fcs_penalty_elite=args.fcs_penalty_elite,
         fcs_penalty_standard=args.fcs_penalty_standard,
         use_portal=not args.no_portal,

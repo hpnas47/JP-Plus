@@ -27,9 +27,8 @@ from src.data.processors import DataProcessor
 from src.data.validators import DataValidator
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
-# Legacy models
-from src.models.legacy.ridge_model import RidgeRatingsModel
-from src.models.legacy.luck_regression import LuckRegressor
+from src.models.efficiency_foundation_model import EfficiencyFoundationModel
+from src.models.preseason_priors import PreseasonPriors
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
@@ -296,6 +295,12 @@ def run_predictions(
                         f"Data not available after waiting for {year} week {week-1}"
                     )
 
+        # Fetch FBS teams for FCS detection (needed before EFM)
+        logger.info("Fetching FBS teams...")
+        fbs_teams_list = client.get_fbs_teams(year)
+        fbs_teams = {t.school for t in fbs_teams_list}
+        logger.info(f"Loaded {len(fbs_teams)} FBS teams")
+
         # Fetch current season data
         logger.info("Fetching current season game data...")
         current_games_df = fetch_games_data(client, year, week - 1)
@@ -320,24 +325,52 @@ def run_predictions(
         else:
             combined_for_hfa = current_games_df
 
-        # Build and fit ridge model
-        logger.info("Fitting ridge regression model...")
-        ridge_model = RidgeRatingsModel(alpha=settings.ridge_alpha)
-        ridge_model.fit(processed_games)
+        # Fetch play-by-play data for EFM
+        logger.info("Fetching play-by-play data for efficiency model...")
+        plays_data = []
+        for w in range(1, week):
+            try:
+                week_plays = client.get_plays(year, w)
+                for play in week_plays:
+                    plays_data.append({
+                        "game_id": play.game_id,
+                        "offense": play.offense,
+                        "defense": play.defense,
+                        "down": play.down,
+                        "distance": play.distance,
+                        "yards_gained": play.yards_gained,
+                        "ppa": play.ppa,
+                        "play_type": play.play_type,
+                        "period": play.period,
+                        "home_score": play.home_score,
+                        "away_score": play.away_score,
+                        "yards_to_goal": getattr(play, "yards_to_goal", None),
+                    })
+            except Exception as e:
+                logger.warning(f"Error fetching plays for week {w}: {e}")
 
-        # Get team ratings for other components
-        ratings_df = ridge_model.get_all_ratings()
-        team_ratings = dict(zip(ratings_df["team"], ratings_df["overall"]))
+        plays_df = pd.DataFrame(plays_data)
+        logger.info(f"Fetched {len(plays_df)} plays for EFM training")
+
+        # Build EFM model
+        logger.info("Fitting Efficiency Foundation Model...")
+        efm = EfficiencyFoundationModel(
+            ridge_alpha=settings.ridge_alpha if hasattr(settings, 'ridge_alpha') else 50.0,
+        )
+        efm.calculate_ratings(plays_df, current_games_df)
+
+        # Get team ratings from EFM
+        team_ratings = {
+            team: efm.get_rating(team)
+            for team in fbs_teams
+            if team in efm.team_ratings
+        }
+        ratings_df = efm.get_ratings_df()
 
         # Calculate HFA
         logger.info("Calculating home field advantages...")
         hfa = HomeFieldAdvantage()
         hfa.calculate_all_team_hfa(combined_for_hfa, team_ratings)
-
-        # Luck regression
-        logger.info("Calculating luck adjustments...")
-        luck = LuckRegressor()
-        luck.calculate_all_teams(processed_games)
 
         # Special teams (simplified without detailed data)
         logger.info("Calculating special teams ratings...")
@@ -356,12 +389,6 @@ def run_predictions(
         travel = TravelAdjuster()
         altitude = AltitudeAdjuster()
 
-        # Fetch FBS teams for FCS detection
-        logger.info("Fetching FBS teams...")
-        fbs_teams_list = client.get_fbs_teams(year)
-        fbs_teams = {t.school for t in fbs_teams_list}
-        logger.info(f"Loaded {len(fbs_teams)} FBS teams")
-
         # Initialize QB injury adjuster if any QBs flagged as out
         qb_adjuster = None
         if qb_out_teams:
@@ -376,8 +403,7 @@ def run_predictions(
 
         # Build spread generator
         spread_gen = SpreadGenerator(
-            ridge_model=ridge_model,
-            luck_regressor=luck,
+            ratings=team_ratings,
             special_teams=special_teams,
             finishing_drives=finishing,
             home_field=hfa,

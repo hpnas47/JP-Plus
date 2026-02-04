@@ -1,13 +1,10 @@
 """Model components package.
 
 Active models (EFM pipeline):
-- EfficiencyFoundationModel: Core rating engine
+- EfficiencyFoundationModel: Core rating engine using success rate, IsoPPP, and turnover margin
 - FinishingDrivesModel: Red zone efficiency
-- SpecialTeamsModel: Field goal efficiency
-- PreseasonPriors: Preseason ratings and adjustments
-
-Legacy models available in src.models.legacy:
-- RidgeRatingsModel, LuckRegressor, EarlyDownModel
+- SpecialTeamsModel: Field goal, punt, and kickoff efficiency
+- PreseasonPriors: Preseason ratings and blending
 """
 
 from .efficiency_foundation_model import EfficiencyFoundationModel
