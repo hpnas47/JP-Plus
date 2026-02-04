@@ -261,7 +261,23 @@ Verified talent integration properly offsets portal losses:
 
 **Conclusion:** Blue Bloods hitting -12% portal cap show minimal final rating impact (~0.3 pts) because talent composite correctly captures elite recruiting offset.
 
-**Commit:** `ab84a9a`
+**6. Backtest Impact Analysis (2024-2025)**
+
+A/B comparison of portal logic impact on ATS performance:
+
+| Phase | Metric | With Portal | Without Portal | Δ |
+|-------|--------|-------------|----------------|---|
+| Calibration (1-3) | ATS % | 46.7% | 46.3% | +0.4% |
+| Calibration (1-3) | 5+ Edge | 47.5% | 48.2% | -0.7% |
+| Core (4-15) | ATS % | 51.3% | 51.2% | +0.1% |
+| Core (4-15) | 5+ Edge | **55.5%** | 54.8% | **+0.7%** |
+
+**Finding:** Portal logic has minimal but slightly positive impact on Core Season 5+ edge (+0.7%). The muted effect is expected because:
+1. Portal adjusts regression factor (indirect), not raw ratings
+2. Talent composite provides primary offset for Blue Bloods
+3. Preseason priors fade by week 8 as in-season data dominates
+
+**Commits:** `ab84a9a` (portal refactor), `b5beeb0` (backtest --end-week parameter)
 
 ### Scripts Added
 

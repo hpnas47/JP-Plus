@@ -554,6 +554,17 @@ Blue Bloods hitting the -12% portal cap show minimal final rating impact because
 
 The model correctly captures heavy portal losses while talent integration provides the expected offset.
 
+#### Backtest Impact (2024-2025)
+
+A/B comparison shows minimal but slightly positive effect on Core Season 5+ edge:
+
+| Phase | With Portal | Without Portal | Δ |
+|-------|-------------|----------------|---|
+| Calibration (1-3) 5+ Edge | 47.5% | 48.2% | -0.7% |
+| Core (4-15) 5+ Edge | **55.5%** | 54.8% | **+0.7%** |
+
+The muted effect is expected: portal adjusts regression factor (indirect), talent composite provides primary Blue Blood offset, and preseason priors fade by week 8.
+
 ### Coaching Change Regression
 
 When a new head coach arrives at an underperforming team (talent rank > performance rank), JP+ dampens the prior year's "drag" and weights talent more heavily. This captures the reality that a talented team stuck under a bad coach may improve significantly with new leadership.
