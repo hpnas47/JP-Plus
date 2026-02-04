@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 4, 2026
+**Last Updated:** February 4, 2026 (Transfer Portal Refactor)
 
 ## Overview
 
@@ -493,30 +493,66 @@ JP+ applies **asymmetric regression**: teams far from the mean regress less than
 
 ### Transfer Portal Adjustment
 
-The returning production metric only captures players who stayed—it doesn't account for incoming transfers. JP+ addresses this by fetching transfer portal data and calculating net production impact:
+The returning production metric only captures players who stayed—it doesn't account for incoming transfers. JP+ uses a **unit-level approach** with scarcity-based position weights and level-up discounts to value all portal activity (100% coverage vs the old 18% player-matching approach).
 
-1. **Fetch transfers** from CFBD API for the upcoming season
-2. **Match transfers** to prior-year player usage (PPA contribution)
-3. **Calculate net impact**: incoming_ppa - outgoing_ppa for each team
-4. **Adjust effective returning production**: base_returning + (net_portal × scale)
+#### Scarcity-Based Position Weights
+
+Reflects 2026 market reality where elite trench play is the primary driver of rating stability:
+
+| Tier | Position | Weight | Rationale |
+|------|----------|--------|-----------|
+| Premium | QB | 1.00 | Highest impact position |
+| Premium | OT | 0.90 | Elite blindside protector |
+| Anchor | EDGE | 0.75 | Premium pass rushers |
+| Anchor | IDL | 0.75 | Interior pressure + run stuffing |
+| Support | IOL | 0.60 | Interior OL (guards/centers) |
+| Support | LB, S | 0.55 | Run defense, coverage |
+| Skill | WR, CB | 0.45 | Higher replacement rate |
+| Skill | RB | 0.40 | Most replaceable skill position |
+
+#### Level-Up Discount (G5 → P4 Transfers)
+
+Players transferring from G5 to P4 conferences receive position-based discounts reflecting the competition gap:
+
+| Position Type | Discount | Rationale |
+|---------------|----------|-----------|
+| Trench (OT, IOL, IDL, LB, EDGE) | 25% | Physicality Tax - steep curve in P4 trench play |
+| Skill (WR, RB, CB, S) | 10% | Athleticism translates more easily |
+| P4 → P4 | 0% | No discount for lateral moves |
+| P4 → G5 | -10% | Boost for proven higher-level players |
+
+#### Continuity Tax
+
+Losing incumbents hurts more than raw talent value suggests (chemistry, scheme fit, experience). Outgoing player values are amplified by ~11% (factor of 0.90).
+
+#### Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `portal_scale` | 0.15 | How much to weight portal impact |
-| `portal_cap` | ±15% | Maximum adjustment to returning production |
+| `portal_scale` | 0.06 | Converts raw value to % impact |
+| `impact_cap` | ±12% | Maximum team-wide adjustment |
+| `continuity_tax` | 0.90 | Loss amplification factor |
 
-**Example 2024 Portal Winners:**
-- Missouri: +15% (gained significant portal production)
-- Washington: +15% (rebuilt through portal after title run losses)
-- Notre Dame: +11% (Riley Leonard transfer from Duke)
+#### Example 2024 Portal Winners/Losers
 
-**Example 2024 Portal Losers:**
-- New Mexico State: -12% (lost Diego Pavia to Vanderbilt)
-- Arizona State: -11% (roster turnover before Dillingham year 2)
+| Winners | Impact | Losers | Impact |
+|---------|--------|--------|--------|
+| Ole Miss | +12% | USC | -12% |
+| Colorado | +5% | Stanford | -12% |
+| SMU | +7% | Washington | -12% |
+| Rice | +8% | Texas | -12% |
 
-**Match rate:** ~18% of transfers match to prior-year PPA. Unmatched transfers (FCS players, walk-ons) are excluded.
+#### Blue Blood Validation
 
-**Backtest impact (2022-2025):** 5+ pt edge improved from 53.3% → 53.7% (+0.4%)
+Blue Bloods hitting the -12% portal cap show minimal final rating impact because their elite talent composite offsets the losses:
+
+| Team | Portal Impact | Talent Score | Rating Δ |
+|------|---------------|--------------|----------|
+| Alabama | -12% | +26.0 | -0.3 pts |
+| Ohio State | -12% | +24.6 | -0.3 pts |
+| Georgia | -12% | +25.2 | -0.4 pts |
+
+The model correctly captures heavy portal losses while talent integration provides the expected offset.
 
 ### Coaching Change Regression
 

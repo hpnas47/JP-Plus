@@ -166,7 +166,14 @@ In weeks 1-4, there's insufficient current-season data. JP+ blends in:
 
 **Returning Production Adjustment:** Teams returning most of their production (high % of PPA returning) keep more of their prior rating. Teams with heavy roster turnover regress more toward the mean. This prevents overvaluing teams that lost key players.
 
-**Transfer Portal Integration:** The returning production metric only counts players who stayed—but what about incoming transfers? JP+ fetches transfer portal data and calculates net production impact (incoming PPA minus outgoing PPA). This captures portal stars like Riley Leonard transferring to Notre Dame or Carson Beck moving to Miami. Top portal winners get a boost to their effective returning production; portal losers get a penalty.
+**Transfer Portal Integration:** The returning production metric only counts players who stayed—but what about incoming transfers? JP+ uses a **unit-level approach** that values 100% of portal activity using:
+
+- **Scarcity-based position weights:** OT (0.90) and QB (1.00) are premium; EDGE/IDL (0.75) are anchors; skill positions (WR, RB, CB) are 0.40-0.45 reflecting higher replacement rates
+- **Level-up discounts:** G5→P4 trench players get a 25% "physicality tax"; skill players get 10% discount; P4→P4 keeps full value
+- **Continuity tax:** Losing incumbents hurts ~11% more than raw value (chemistry, scheme fit)
+- **Impact cap:** ±12% maximum team-wide adjustment
+
+This captures portal stars like Carson Beck (4-star QB to Miami) while properly discounting G5 trench players moving up. Blue Bloods hitting the portal cap (Alabama, Georgia at -12%) show minimal final rating impact (~0.3 pts) because their elite talent composite provides the expected offset.
 
 **Coaching Change Regression:** When a talented team underperformed under a bad coach (think Florida under Napier), and a new coach arrives, JP+ "forgets" some of that underperformance. The model shifts weight from prior performance toward talent—essentially saying "this team *should* be better based on their roster."
 
