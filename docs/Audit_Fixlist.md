@@ -118,13 +118,18 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Update EFM opponent adjustment so team strength is estimated as a neutral-field latent parameter and home/away effects are separated. Ensure play ingestion provides enough context to determine whether the offense is home or away for each play, and add diagnostics proving the home effect is being captured separately.
   - **Notes:** FIXED 2026-02-03. Added `home_team` field to efficiency_plays in backtest.py. Modified `_ridge_adjust_metric()` to add home indicator column to design matrix (+1 home, -1 away, 0 neutral). Model now learns implicit HFA separately (~0.006 SR, ~0.02 IsoPPP ≈ 0.8 pts). Mean error improved from -6.7 to ~0. Commit: 1b2164e.
 
-- [ ] **P2.2 Fix ridge intercept handling to avoid double-counting baseline**
+- [x] **P2.2 Fix ridge intercept handling to avoid double-counting baseline** ✅ VERIFIED (NOT A BUG)
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** Intercept is effectively applied to both offense and defense outputs.
-  - **Acceptance criteria:** Clear interpretation; combining O/D doesn’t double-count baseline.
+  - **Acceptance criteria:** Clear interpretation; combining O/D doesn't double-count baseline.
   - **AI nudge prompt:**
     > Review how ridge regression coefficients and intercept are interpreted/extracted for offense and defense adjusted values. Ensure the baseline/intercept is handled consistently so combining offense and defense does not double-count any shared baseline component.
-  - **Notes:**
+  - **Notes:** VERIFIED 2026-02-03. Analysis confirms intercept handling is correct:
+    1. Both `off_adjusted` and `def_adjusted` include intercept, but it cancels when computing ratings: `overall ∝ (off_coef + def_coef)` with no intercept term.
+    2. Pre-normalization: `mean(off) ≈ 0`, `mean(def) ≈ 0` due to balanced ridge regression.
+    3. Normalization uses `current_mean/2` for O/D which correctly distributes residual mean from turnover component.
+    4. Formula `overall = off + def + 0.1*TO` holds exactly post-normalization (verified: error = 0.000000).
+    5. Added clarifying comment to `_normalize_ratings()` explaining why this works.
 
 - [ ] **P2.3 Make IsoPPP computation consistent with weights**
   - **Files:** `src/models/efficiency_foundation_model.py`

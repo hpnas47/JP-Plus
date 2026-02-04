@@ -130,6 +130,18 @@
   - **Result:** Backtests remain deterministic - missing data is now explicit and logged rather than silently dropped.
   - **Files changed:** `scripts/backtest.py`
 
+- **Verified P2.2: Ridge Intercept Handling** - Confirmed no double-counting of baseline
+  - **Concern:** Audit flagged that intercept is applied to both offense and defense outputs, potentially double-counting.
+  - **Analysis:**
+    1. Both `off_adjusted = intercept + off_coef` and `def_adjusted = intercept - def_coef`
+    2. When computing ratings: `overall ∝ (off_sr - def_sr) = off_coef + def_coef` - intercept cancels!
+    3. Pre-normalization means: `mean(off) ≈ 0`, `mean(def) ≈ 0` due to balanced ridge regression
+    4. Normalization uses `current_mean/2` for O/D, which correctly distributes turnover residual
+    5. Formula `overall = off + def + 0.1*TO` verified to hold exactly (error = 0.000000)
+  - **Conclusion:** NOT A BUG. The implementation is mathematically correct.
+  - **Action:** Added clarifying comment to `_normalize_ratings()` explaining the math.
+  - **Files changed:** `src/models/efficiency_foundation_model.py`, `docs/Audit_Fixlist.md`
+
 ---
 
 ## Session: February 2, 2026
