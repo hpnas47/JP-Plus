@@ -59,6 +59,14 @@
 - **Merge logic:** `src/api/betting_lines.py` combines both sources, preferring Odds API when available
 - **Cost:** 2 credits/week for ongoing captures (opening + closing)
 
+**11. Documentation Sync (Dual Repository)**
+- **Rule:** All documentation changes must be pushed to BOTH repositories:
+  1. `hpnas47/JP-Plus` (main code repo) - `docs/` directory
+  2. `hpnas47/JP-Plus-Docs` (docs-only repo) - root directory
+- **Files to sync:** `SESSION_LOG.md`, `MODEL_ARCHITECTURE.md`, `MODEL_EXPLAINER.md`, `Audit_Fixlist.md`
+- **Process:** After pushing to JP-Plus, copy updated docs to `/Users/jason/Documents/JP-Plus-Docs/` and push
+- **Why:** Keeps documentation accessible in dedicated repo for easy reference without full codebase
+
 ---
 
 ## Session: February 4, 2026
