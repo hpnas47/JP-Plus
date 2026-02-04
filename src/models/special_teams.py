@@ -385,9 +385,10 @@ class SpecialTeamsModel:
             return
 
         # Filter to field goal plays
-        fg_plays = plays_df[
-            plays_df["play_type"].str.contains("Field Goal", case=False, na=False)
-        ].copy()
+        # P3.5: Select only needed columns and copy once (drop unused columns early)
+        needed_cols = ["offense", "play_type", "play_text"]
+        fg_mask = plays_df["play_type"].str.contains("Field Goal", case=False, na=False)
+        fg_plays = plays_df.loc[fg_mask, needed_cols].copy()
 
         if fg_plays.empty:
             logger.warning("No field goal plays found")
@@ -406,7 +407,8 @@ class SpecialTeamsModel:
         fg_plays["made"] = fg_plays["play_type"].str.contains("Good", case=False, na=False)
 
         # Filter out plays without distance (can't evaluate)
-        fg_plays = fg_plays[fg_plays["distance"].notna()].copy()
+        # P3.5: No second .copy() - already working with a copy, just filter in place
+        fg_plays = fg_plays[fg_plays["distance"].notna()]
 
         if fg_plays.empty:
             logger.warning("No field goal plays with parseable distance")
@@ -515,9 +517,10 @@ class SpecialTeamsModel:
             return {}
 
         # Filter to punt plays
-        punt_plays = plays_df[
-            plays_df["play_type"].str.contains("Punt", case=False, na=False)
-        ].copy()
+        # P3.5: Select only needed columns and copy once (drop unused columns early)
+        needed_cols = ["offense", "play_type", "play_text"]
+        punt_mask = plays_df["play_type"].str.contains("Punt", case=False, na=False)
+        punt_plays = plays_df.loc[punt_mask, needed_cols].copy()
 
         if punt_plays.empty:
             logger.debug("No punt plays found")
@@ -561,7 +564,8 @@ class SpecialTeamsModel:
         punt_plays["return_yards"] = punt_plays["play_text"].apply(extract_return_yards)
 
         # Filter out plays without parseable gross yards
-        punt_plays = punt_plays[punt_plays["gross_yards"].notna()].copy()
+        # P3.5: No second .copy() - already working with a copy, just filter in place
+        punt_plays = punt_plays[punt_plays["gross_yards"].notna()]
 
         if punt_plays.empty:
             logger.debug("No punt plays with parseable distance")
@@ -649,10 +653,14 @@ class SpecialTeamsModel:
             return {}
 
         # Filter to kickoff plays (exclude touchdowns which are in play_type)
-        kickoff_plays = plays_df[
-            plays_df["play_type"].str.lower().str.contains("kickoff", na=False) &
-            ~plays_df["play_type"].str.lower().str.contains("touchdown", na=False)
-        ].copy()
+        # P3.5: Select only needed columns and copy once (drop unused columns early)
+        needed_cols = ["offense", "defense", "play_type", "play_text"]
+        play_type_lower = plays_df["play_type"].str.lower()
+        kickoff_mask = (
+            play_type_lower.str.contains("kickoff", na=False) &
+            ~play_type_lower.str.contains("touchdown", na=False)
+        )
+        kickoff_plays = plays_df.loc[kickoff_mask, needed_cols].copy()
 
         if kickoff_plays.empty:
             logger.debug("No kickoff plays found")

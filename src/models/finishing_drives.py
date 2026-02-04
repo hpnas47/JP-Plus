@@ -333,7 +333,8 @@ class FinishingDrivesModel:
             return
 
         # Filter to red zone plays
-        rz_plays = plays_df[plays_df["yards_to_goal"] <= 20].copy()
+        # P3.5: No .copy() needed - rz_plays is only read, not modified
+        rz_plays = plays_df[plays_df["yards_to_goal"] <= 20]
 
         if rz_plays.empty:
             return

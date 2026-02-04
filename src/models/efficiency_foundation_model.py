@@ -515,35 +515,42 @@ class EfficiencyFoundationModel:
                 f"but max_week={max_week}. Filter plays before calling calculate_ratings()."
             )
 
+        # P3.5: Build combined filter mask to avoid multiple intermediate DataFrames
+        # This reduces peak memory by filtering once instead of chaining df = df[mask]
+        keep_mask = np.ones(len(df), dtype=bool)
+
         # Filter to scrimmage plays only (P2.8 fix)
         # This excludes special teams, penalties, period markers, etc.
         if "play_type" in df.columns:
-            scrimmage_mask = df["play_type"].isin(SCRIMMAGE_PLAY_TYPES)
+            scrimmage_mask = df["play_type"].isin(SCRIMMAGE_PLAY_TYPES).values
             non_scrimmage_count = (~scrimmage_mask).sum()
             if non_scrimmage_count > 0:
-                # Log what's being filtered
-                filtered_types = df[~scrimmage_mask]["play_type"].value_counts()
+                # Log what's being filtered (before applying mask)
+                filtered_types = df.loc[~scrimmage_mask, "play_type"].value_counts()
                 logger.debug(
                     f"Filtering {non_scrimmage_count} non-scrimmage plays: "
                     f"{dict(filtered_types.head(5))}"
                 )
-            df = df[scrimmage_mask]
+            keep_mask &= scrimmage_mask
 
         # Filter plays with invalid distance (P2.8 fix)
         if "distance" in df.columns:
-            invalid_distance = df["distance"].isna() | (df["distance"] < 0)
-            invalid_count = invalid_distance.sum()
+            valid_distance = df["distance"].notna().values & (df["distance"].values >= 0)
+            invalid_count = (~valid_distance).sum()
             if invalid_count > 0:
                 logger.debug(f"Filtering {invalid_count} plays with invalid distance")
-            df = df[~invalid_distance]
+            keep_mask &= valid_distance
 
         # P2.9: Filter plays with NaN in required columns for success calculation
         required_for_success = ["down", "distance", "yards_gained", "offense_score", "defense_score"]
-        nan_mask = df[required_for_success].isna().any(axis=1)
+        nan_mask = df[required_for_success].isna().any(axis=1).values
         nan_count = nan_mask.sum()
         if nan_count > 0:
             logger.debug(f"Filtering {nan_count} plays with NaN in required columns")
-            df = df[~nan_mask]
+        keep_mask &= ~nan_mask
+
+        # Apply combined filter once (avoids multiple intermediate DataFrames)
+        df = df[keep_mask]
 
         filtered_count = initial_count - len(df)
         if filtered_count > 0:
@@ -632,8 +639,8 @@ class EfficiencyFoundationModel:
         """
         agg_start = time.time()
 
-        # Pre-compute weighted success column for efficiency
-        plays_df = plays_df.copy()
+        # P3.5: Compute weighted success without copying - caller passes a copy from _prepare_plays()
+        # Pre-compute weighted success column for efficiency (in-place assignment is safe here)
         plays_df["weighted_success"] = plays_df["is_success"].astype(float) * plays_df["weight"]
 
         # ===== OFFENSIVE METRICS (groupby offense) =====
@@ -1152,7 +1159,8 @@ class EfficiencyFoundationModel:
         # Opponent-adjust IsoPPP (EPA on successful plays)
         # Only use successful plays for this
         # Note: Uses different metric_col ("ppa") so cached separately from SR
-        successful_plays = prepared[prepared["is_success"]].copy()
+        # P3.5: No .copy() needed - _ridge_adjust_metric() only reads from DataFrame
+        successful_plays = prepared[prepared["is_success"]]
         if len(successful_plays) > 1000 and "ppa" in successful_plays.columns:
             logger.info("Ridge adjusting IsoPPP...")
             adj_off_isoppp, adj_def_isoppp, self.learned_hfa_isoppp = self._ridge_adjust_metric(

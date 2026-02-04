@@ -180,6 +180,31 @@
     - `yards_gained`: Accumulated in weighted sums
   - **Verification:** Backtest 2024 weeks 5-6 passed with identical ATS results
 
+- **P3.5: DataFrame Transformation Chain Optimization (Peak Memory Reduction)**
+  - **Problem:** Chained DataFrame operations (filter → copy → filter → copy) create multiple intermediate DataFrames with overlapping data, increasing peak memory usage
+  - **Solution:** Audit and refactor to minimize intermediate copies
+  - **Patterns optimized:**
+    | File | Before | After |
+    |------|--------|-------|
+    | `efficiency_foundation_model.py` | 4 chained `df = df[mask]` filters | Combined into single compound mask |
+    | `efficiency_foundation_model.py` | `plays_df.copy()` in `_calculate_raw_metrics` | Removed (caller already passes copy) |
+    | `efficiency_foundation_model.py` | `successful_plays = ...copy()` | Removed (read-only usage) |
+    | `special_teams.py` | Double `.copy()` (filter → copy → filter → copy) | Single copy with early column selection |
+    | `home_field.py` | `.copy()` for single-column addition | Compute derived Series directly on view |
+    | `finishing_drives.py` | `rz_plays = ...copy()` | Removed (read-only filtering) |
+  - **Key techniques:**
+    1. **Combined filter masks:** Build boolean mask with `&` then apply once
+    2. **Drop unused columns early:** `plays_df.loc[mask, needed_cols].copy()` reduces copy size
+    3. **Compute Series on view:** Avoid `.copy()` when only computing derived values
+    4. **Read-only patterns:** Skip `.copy()` when filtered DataFrame is only read
+  - **Files modified:**
+    1. `src/models/efficiency_foundation_model.py`: Combined filters, removed unnecessary copies
+    2. `src/models/special_teams.py`: Single copy with column selection, removed second copies
+    3. `src/adjustments/home_field.py`: Compute derived Series on views
+    4. `src/models/finishing_drives.py`: Removed read-only copy
+  - **Verification:** Backtest 2024 weeks 5-6 passed with identical results (MAE 12.60, ATS 51.0%)
+  - **No SettingWithCopyWarning:** Verified safe with `python -W all`
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints

@@ -163,15 +163,15 @@ class HomeFieldAdvantage:
             return self.base_hfa
 
         # Filter to games with scores
-        completed = games_df[
-            games_df["home_points"].notna() & games_df["away_points"].notna()
-        ].copy()
+        # P3.5: Avoid .copy() by computing derived values as Series directly
+        score_mask = games_df["home_points"].notna() & games_df["away_points"].notna()
+        completed = games_df[score_mask]
 
         if completed.empty:
             return self.base_hfa
 
-        # Calculate home margins
-        completed["home_margin"] = completed["home_points"] - completed["away_points"]
+        # Calculate home margins as Series (no DataFrame modification)
+        home_margin = completed["home_points"] - completed["away_points"]
 
         # If we have team ratings, adjust for team strength (VECTORIZED)
         # P3.3: Replaced iterrows with .map() for ~10x speedup
@@ -179,11 +179,11 @@ class HomeFieldAdvantage:
             home_rating = completed["home_team"].map(team_ratings).fillna(0)
             away_rating = completed["away_team"].map(team_ratings).fillna(0)
             expected_margin = home_rating - away_rating
-            adjusted_margin = completed["home_margin"] - expected_margin
+            adjusted_margin = home_margin - expected_margin
             return adjusted_margin.mean()
 
         # Simple average home margin (biased by schedule imbalances)
-        return completed["home_margin"].mean()
+        return home_margin.mean()
 
     def calculate_team_hfa(
         self,
@@ -204,16 +204,15 @@ class HomeFieldAdvantage:
             Team's HFA in points
         """
         # Get team's home games
-        home_games = games_df[
-            (games_df["home_team"] == team)
-            & games_df["home_points"].notna()
-        ].copy()
+        # P3.5: Avoid .copy() by computing derived values as Series directly
+        home_mask = (games_df["home_team"] == team) & games_df["home_points"].notna()
+        home_games = games_df[home_mask]
 
         if len(home_games) < min_home_games:
             return self.base_hfa
 
-        # Calculate home margin
-        home_games["home_margin"] = home_games["home_points"] - home_games["away_points"]
+        # Calculate home margin as Series (no DataFrame modification)
+        home_margin = home_games["home_points"] - home_games["away_points"]
 
         # Adjust for opponent strength if ratings available (VECTORIZED)
         # P3.3: Replaced iterrows with .map() for ~10x speedup
@@ -221,10 +220,10 @@ class HomeFieldAdvantage:
             team_rating = team_ratings.get(team, 0)
             away_rating = home_games["away_team"].map(team_ratings).fillna(0)
             expected_margin = team_rating - away_rating
-            adjusted_margin = home_games["home_margin"] - expected_margin
+            adjusted_margin = home_margin - expected_margin
             team_hfa = adjusted_margin.mean()
         else:
-            team_hfa = home_games["home_margin"].mean()
+            team_hfa = home_margin.mean()
 
         # Regress toward league average (avoid extreme values from small samples)
         regression_weight = min(len(home_games) / 20, 1.0)
@@ -292,26 +291,33 @@ class HomeFieldAdvantage:
             Dictionary mapping team names to calculated HFA values
         """
         # Filter to completed, non-neutral games
-        completed = games_df[
+        # P3.5: Avoid .copy() by computing derived values as Series directly
+        neutral_col = games_df.get("neutral_site", pd.Series(False, index=games_df.index))
+        completed_mask = (
             games_df["home_points"].notna() &
             games_df["away_points"].notna() &
-            (games_df.get("neutral_site", False) == False)
-        ].copy()
+            (neutral_col == False)
+        )
+        completed = games_df[completed_mask]
 
         if completed.empty:
             logger.warning("No completed home games for HFA calculation")
             return {}
 
-        completed["home_margin"] = completed["home_points"] - completed["away_points"]
+        # Calculate all derived Series without modifying DataFrame
+        home_margin = completed["home_points"] - completed["away_points"]
+        home_rating = completed["home_team"].map(team_ratings).fillna(0)
+        away_rating = completed["away_team"].map(team_ratings).fillna(0)
+        expected_margin = home_rating - away_rating
+        residual = home_margin - expected_margin
 
-        # Calculate residuals vectorized (P3.3: replaced iterrows with .map())
-        completed["home_rating"] = completed["home_team"].map(team_ratings).fillna(0)
-        completed["away_rating"] = completed["away_team"].map(team_ratings).fillna(0)
-        completed["expected_margin"] = completed["home_rating"] - completed["away_rating"]
-        completed["residual"] = completed["home_margin"] - completed["expected_margin"]
-
-        # Aggregate residuals by home team using groupby
-        residual_stats = completed.groupby("home_team").agg(
+        # Aggregate residuals by home team using groupby on Series
+        # Create a temporary DataFrame for aggregation (minimal columns)
+        residual_df = pd.DataFrame({
+            "home_team": completed["home_team"].values,
+            "residual": residual.values,
+        })
+        residual_stats = residual_df.groupby("home_team").agg(
             raw_hfa=("residual", "mean"),
             n_games=("residual", "count"),
         )
