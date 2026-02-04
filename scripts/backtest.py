@@ -565,6 +565,9 @@ def walk_forward_predict(
                     "hfa": pred.components.home_field,
                     "travel": pred.components.travel,
                     "altitude": pred.components.altitude,
+                    # P3.4: Track ratings for sanity check
+                    "home_rating": team_ratings.get(game["home_team"], 0.0),
+                    "away_rating": team_ratings.get(game["away_team"], 0.0),
                 })
             except Exception as e:
                 logger.debug(f"Error predicting {game['away_team']} @ {game['home_team']}: {e}")
@@ -654,9 +657,15 @@ def calculate_ats_results(
             ats_win = home_cover < 0
             ats_push = home_cover == 0
 
+        # Get both open and close spreads for P3.4 sanity report
+        spread_open = line_data.get("spread_open", vegas_spread)
+        spread_close = line_data.get("spread_close", vegas_spread)
+
         results.append({
             **pred,
             "vegas_spread": vegas_spread,
+            "spread_open": spread_open,
+            "spread_close": spread_close,
             "edge": abs(edge),
             "pick": "HOME" if model_pick_home else "AWAY",
             "ats_win": ats_win,
@@ -851,6 +860,64 @@ def log_stack_diagnostics(predictions_df: pd.DataFrame) -> None:
         logger.warning(f"  ⚠️  {analysis['warning']}")
     elif "status" in analysis:
         logger.info(f"  ✓ {analysis['status']}")
+
+
+def print_data_sanity_report(season_data: dict, years: list[int]) -> None:
+    """Print sanity report after data fetch (P3.4).
+
+    Reports:
+    - Expected vs actual game counts per year
+    - FBS team counts
+    - Betting line coverage rate
+    - Week coverage
+
+    Args:
+        season_data: Dict from fetch_all_season_data
+        years: List of years fetched
+    """
+    print("\n" + "=" * 60)
+    print("DATA SANITY REPORT")
+    print("=" * 60)
+
+    # Expected games per season (roughly 850-900 for FBS)
+    EXPECTED_GAMES_PER_YEAR = 870
+
+    for year in years:
+        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
+
+        n_games = len(games_df)
+        n_betting = len(betting_df)
+        n_efficiency = len(efficiency_plays_df)
+        n_fbs = len(fbs_teams)
+
+        # Game count check
+        game_pct = n_games / EXPECTED_GAMES_PER_YEAR * 100
+        game_status = "✓" if game_pct >= 95 else "⚠" if game_pct >= 80 else "✗"
+
+        # Betting coverage
+        betting_coverage = n_betting / n_games * 100 if n_games > 0 else 0
+        betting_status = "✓" if betting_coverage >= 90 else "⚠" if betting_coverage >= 70 else "✗"
+
+        # Week coverage
+        weeks_with_games = set(games_df["week"].unique().to_list()) if n_games > 0 else set()
+        weeks_with_plays = set(efficiency_plays_df["week"].unique().to_list()) if n_efficiency > 0 else set()
+        expected_weeks = set(range(1, 16))
+        missing_game_weeks = expected_weeks - weeks_with_games
+        missing_play_weeks = expected_weeks - weeks_with_plays
+
+        print(f"\n{year}:")
+        print(f"  {game_status} Games: {n_games:,} (expected ~{EXPECTED_GAMES_PER_YEAR}, {game_pct:.0f}%)")
+        print(f"  {betting_status} Betting lines: {n_betting:,} ({betting_coverage:.0f}% coverage)")
+        print(f"    FBS teams: {n_fbs}")
+        print(f"    Efficiency plays: {n_efficiency:,}")
+        if missing_game_weeks:
+            print(f"    ⚠ Missing game weeks: {sorted(missing_game_weeks)}")
+        if missing_play_weeks:
+            print(f"    ⚠ Missing play weeks: {sorted(missing_play_weeks)}")
+        if priors:
+            print(f"    Preseason priors: {len(priors.preseason_ratings)} teams")
+
+    print()
 
 
 def fetch_all_season_data(
@@ -1130,11 +1197,12 @@ def run_sweep(
     return df
 
 
-def print_results(results: dict) -> None:
+def print_results(results: dict, ats_df: pd.DataFrame = None) -> None:
     """Print backtest results to console.
 
     Args:
         results: Dictionary with backtest results from run_backtest
+        ats_df: Optional ATS results DataFrame for sanity reporting
     """
     print("\n" + "=" * 50)
     print("BACKTEST RESULTS")
@@ -1177,6 +1245,97 @@ def print_results(results: dict) -> None:
     if "correlated_stack" in predictions_df.columns:
         print(f"\nP2.11 Adjustment Stack Diagnostics:")
         log_stack_diagnostics(predictions_df)
+
+    # P3.4: Sanity Report
+    print_prediction_sanity_report(results, ats_df)
+
+
+def print_prediction_sanity_report(results: dict, ats_df: pd.DataFrame = None) -> None:
+    """Print prediction sanity metrics (P3.4).
+
+    Reports:
+    - Predictions per week
+    - Line match rate
+    - Open vs close line difference rate
+    - Rating distribution stats
+
+    Args:
+        results: Dictionary with backtest results
+        ats_df: Optional ATS results DataFrame
+    """
+    predictions_df = results["predictions"]
+    if predictions_df.empty:
+        return
+
+    print("\n" + "-" * 50)
+    print("SANITY CHECK")
+    print("-" * 50)
+
+    # Predictions per week
+    print("\nPredictions per week:")
+    week_counts = predictions_df.groupby("week").size()
+    weeks_low = week_counts[week_counts < 30].index.tolist()
+    weeks_high = week_counts[week_counts > 80].index.tolist()
+    print(f"  Total: {len(predictions_df):,} predictions across {len(week_counts)} weeks")
+    print(f"  Range: {week_counts.min()}-{week_counts.max()} per week")
+    if weeks_low:
+        print(f"  ⚠ Low weeks (<30): {weeks_low}")
+
+    # Line match rate (from ATS results)
+    if ats_df is not None and not ats_df.empty:
+        matched_games = len(ats_df)
+        total_predictions = len(predictions_df)
+        match_rate = matched_games / total_predictions * 100 if total_predictions > 0 else 0
+        match_status = "✓" if match_rate >= 95 else "⚠" if match_rate >= 80 else "✗"
+        print(f"\nBetting line matching:")
+        print(f"  {match_status} Match rate: {matched_games:,}/{total_predictions:,} ({match_rate:.1f}%)")
+
+        # Open vs close line difference
+        if "spread_open" in ats_df.columns and "spread_close" in ats_df.columns:
+            line_diffs = (ats_df["spread_close"] - ats_df["spread_open"]).abs()
+            lines_moved = (line_diffs > 0.5).sum()
+            lines_moved_pct = lines_moved / len(ats_df) * 100
+            avg_movement = line_diffs.mean()
+            print(f"  Line movement: {lines_moved:,} games moved >0.5 pts ({lines_moved_pct:.1f}%)")
+            print(f"  Avg movement: {avg_movement:.2f} pts")
+
+    # Rating distribution (from predictions - home/away ratings)
+    if "home_rating" in predictions_df.columns and "away_rating" in predictions_df.columns:
+        all_ratings = pd.concat([predictions_df["home_rating"], predictions_df["away_rating"]])
+        rating_mean = all_ratings.mean()
+        rating_std = all_ratings.std()
+        rating_min = all_ratings.min()
+        rating_max = all_ratings.max()
+        print(f"\nRating distribution:")
+        print(f"  Mean: {rating_mean:.2f} (expected ~0)")
+        print(f"  Std:  {rating_std:.2f} (expected ~12)")
+        print(f"  Range: [{rating_min:.1f}, {rating_max:.1f}]")
+        # Warn if mean is far from 0 or std is far from 12
+        if abs(rating_mean) > 1.0:
+            print(f"  ⚠ Mean is {abs(rating_mean):.2f} away from 0 - check normalization")
+        if abs(rating_std - 12.0) > 2.0:
+            print(f"  ⚠ Std is {abs(rating_std - 12.0):.2f} away from 12 - check scaling")
+
+    # Spread distribution
+    if "predicted_spread" in predictions_df.columns:
+        spread_mean = predictions_df["predicted_spread"].mean()
+        spread_std = predictions_df["predicted_spread"].std()
+        spread_min = predictions_df["predicted_spread"].min()
+        spread_max = predictions_df["predicted_spread"].max()
+        print(f"\nSpread distribution:")
+        print(f"  Mean: {spread_mean:+.2f} (expected ~+2-3 for HFA)")
+        print(f"  Std:  {spread_std:.2f}")
+        print(f"  Range: [{spread_min:.1f}, {spread_max:.1f}]")
+
+    # Error distribution check
+    if "error" in predictions_df.columns:
+        mean_error = predictions_df["error"].mean()
+        print(f"\nBias check:")
+        print(f"  Mean error: {mean_error:+.2f} pts")
+        if abs(mean_error) > 2.0:
+            print(f"  ⚠ Systematic bias detected - mean error should be ~0")
+        else:
+            print(f"  ✓ No systematic bias (mean error within ±2 pts)")
 
 
 def main():
@@ -1299,6 +1458,17 @@ def main():
             print(f"\nSweep results saved to {args.output}")
         return
 
+    # Fetch data first for sanity reporting (P3.4)
+    season_data = fetch_all_season_data(
+        args.years,
+        use_priors=not args.no_priors,
+        use_portal=not args.no_portal,
+        portal_scale=args.portal_scale,
+    )
+
+    # P3.4: Print data sanity report
+    print_data_sanity_report(season_data, args.years)
+
     # Print full config for transparency
     print("\n" + "=" * 60)
     print("BACKTEST CONFIGURATION (EFM)")
@@ -1331,9 +1501,11 @@ def main():
         use_portal=not args.no_portal,
         portal_scale=args.portal_scale,
         use_opening_line=args.opening_line,
+        season_data=season_data,  # Use pre-fetched data
     )
 
-    print_results(results)
+    # P3.4: Print results with ATS data for sanity report
+    print_results(results, ats_df=results.get("ats_results"))
 
     # Save to CSV if requested
     if args.output:

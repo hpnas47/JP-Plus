@@ -271,12 +271,12 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Improve separation between legacy ridge and EFM backtests in CLI output and sweep logic. Make it difficult to conflate results, and ensure each mode reports its relevant parameters clearly.
   - **Notes:** N/A as of 2026-02-03. Legacy models (RidgeRatingsModel, LuckRegressor, EarlyDownModel) completely removed from codebase. EFM is now the only model. Deleted src/models/legacy/ directory. Updated SpreadGenerator to use ratings dict instead of model objects. Backtest.py and run_weekly.py now only support EFM pipeline.
 
-- [ ] **P3.4 Add backtest sanity report**
+- [x] **P3.4 Add backtest sanity report** ✓ DONE 2026-02-03
   - **Files:** `scripts/backtest.py`
   - **Include:** game counts, predictions per week, line-match rate, open≠close rate, rating mean/std.
   - **AI nudge prompt:**
     > Add a concise sanity report after each data fetch and backtest run: expected vs actual game counts, predictions per week, betting line match rate, open≠close rate, and rating distribution stats. The goal is to detect silent truncation, join failures, and scaling artifacts immediately.
-  - **Notes:**
+  - **Notes:** Added `print_data_sanity_report()` after data fetch (game counts, betting lines, FBS teams, efficiency plays, missing weeks) and `print_prediction_sanity_report()` after backtest (predictions per week with low-count warnings, betting line match rate, line movement stats, rating distribution mean/std/range, spread distribution, bias check). Also added spread_open/spread_close to ATS results and home_rating/away_rating to prediction results for analysis.
 
 ---
 
