@@ -661,6 +661,22 @@ def calculate_ats_results(
         spread_open = line_data.get("spread_open", vegas_spread)
         spread_close = line_data.get("spread_close", vegas_spread)
 
+        # Calculate CLV (Closing Line Value)
+        # CLV = how many points better we got vs closing line
+        # If betting home: we want line to move toward home (closing more negative)
+        # If betting away: we want line to move toward away (closing less negative)
+        if spread_open is not None and spread_close is not None:
+            if model_pick_home:
+                # We bet home at spread_open, it closed at spread_close
+                # CLV = spread_open - spread_close (positive if line moved toward home)
+                clv = spread_open - spread_close
+            else:
+                # We bet away at spread_open, it closed at spread_close
+                # CLV = spread_close - spread_open (positive if line moved toward away)
+                clv = spread_close - spread_open
+        else:
+            clv = None
+
         results.append({
             **pred,
             "vegas_spread": vegas_spread,
@@ -670,6 +686,7 @@ def calculate_ats_results(
             "pick": "HOME" if model_pick_home else "AWAY",
             "ats_win": ats_win,
             "ats_push": ats_push,
+            "clv": clv,
         })
 
     # Sanity report: log match rate and unmatched games
@@ -860,6 +877,102 @@ def log_stack_diagnostics(predictions_df: pd.DataFrame) -> None:
         logger.warning(f"  ⚠️  {analysis['warning']}")
     elif "status" in analysis:
         logger.info(f"  ✓ {analysis['status']}")
+
+
+def calculate_clv_report(ats_df: pd.DataFrame) -> dict:
+    """Calculate Closing Line Value (CLV) by edge bucket.
+
+    CLV measures how many points better our entry was vs the closing line.
+    Positive CLV = we beat the closing line (strong indicator of real edge).
+
+    Args:
+        ats_df: DataFrame with ATS results including 'clv', 'edge' columns
+
+    Returns:
+        Dict with CLV statistics by edge bucket
+    """
+    if ats_df is None or ats_df.empty or "clv" not in ats_df.columns:
+        return {"error": "No CLV data available"}
+
+    # Filter to games with CLV data (both open and close spreads available)
+    df = ats_df[ats_df["clv"].notna()].copy()
+
+    if len(df) == 0:
+        return {"error": "No games with both opening and closing lines"}
+
+    results = {
+        "total_games_with_clv": len(df),
+        "buckets": {},
+    }
+
+    # Calculate CLV for different edge buckets
+    buckets = [
+        ("all", df["edge"] >= 0),
+        ("3+", df["edge"] >= 3),
+        ("5+", df["edge"] >= 5),
+        ("7+", df["edge"] >= 7),
+    ]
+
+    for name, mask in buckets:
+        subset = df[mask]
+        if len(subset) == 0:
+            continue
+
+        mean_clv = subset["clv"].mean()
+        std_clv = subset["clv"].std()
+        positive_clv_pct = (subset["clv"] > 0).mean() * 100
+        ats_wins = subset["ats_win"].sum()
+        ats_total = len(subset) - subset["ats_push"].sum()
+        ats_pct = ats_wins / ats_total * 100 if ats_total > 0 else 0
+
+        results["buckets"][name] = {
+            "n": len(subset),
+            "mean_clv": mean_clv,
+            "std_clv": std_clv,
+            "positive_clv_pct": positive_clv_pct,
+            "ats_pct": ats_pct,
+        }
+
+    return results
+
+
+def print_clv_report(ats_df: pd.DataFrame) -> None:
+    """Print CLV report to console.
+
+    Args:
+        ats_df: DataFrame with ATS results
+    """
+    report = calculate_clv_report(ats_df)
+
+    if "error" in report:
+        print(f"\nCLV Report: {report['error']}")
+        return
+
+    print(f"\nClosing Line Value (CLV) Report:")
+    print(f"  Games with open+close lines: {report['total_games_with_clv']}")
+    print()
+    print(f"  {'Edge':<8} {'N':>6} {'Mean CLV':>10} {'CLV > 0':>10} {'ATS %':>8}")
+    print(f"  {'-'*8} {'-'*6} {'-'*10} {'-'*10} {'-'*8}")
+
+    for name, stats in report["buckets"].items():
+        print(
+            f"  {name:<8} {stats['n']:>6} {stats['mean_clv']:>+10.2f} "
+            f"{stats['positive_clv_pct']:>9.1f}% {stats['ats_pct']:>7.1f}%"
+        )
+
+    # Interpretation
+    print()
+    clv_3plus = report["buckets"].get("3+", {}).get("mean_clv", 0)
+    clv_5plus = report["buckets"].get("5+", {}).get("mean_clv", 0)
+
+    if clv_5plus > 0.5:
+        print("  ✓ Strong positive CLV at 5+ edge - edge appears REAL")
+    elif clv_5plus > 0:
+        print("  ~ Slight positive CLV at 5+ edge - edge may be real")
+    elif clv_5plus > -0.5:
+        print("  ~ Near-zero CLV at 5+ edge - edge is marginal")
+    else:
+        print("  ⚠ Negative CLV at 5+ edge - edge may be illusory (market moves against us)")
 
 
 def print_data_sanity_report(season_data: dict, years: list[int]) -> None:
@@ -1245,6 +1358,10 @@ def print_results(results: dict, ats_df: pd.DataFrame = None) -> None:
     if "correlated_stack" in predictions_df.columns:
         print(f"\nP2.11 Adjustment Stack Diagnostics:")
         log_stack_diagnostics(predictions_df)
+
+    # CLV Report (Closing Line Value)
+    if ats_df is not None and not ats_df.empty:
+        print_clv_report(ats_df)
 
     # P3.4: Sanity Report
     print_prediction_sanity_report(results, ats_df)
