@@ -35,6 +35,19 @@ Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained 
 
 **Key insight:** Opening line performance (57.0% at 5+ edge) significantly exceeds closing line (53.2%), indicating the model captures value that the market prices out by game time. Early-week betting recommended.
 
+### Closing Line Value (CLV)
+
+CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
+
+| Edge Filter | Mean CLV | CLV > 0 | ATS % |
+|-------------|----------|---------|-------|
+| **All picks** | +0.68 | 45.8% | 52.8% |
+| **3+ pt edge** | +0.98 | 50.3% | 54.1% |
+| **5+ pt edge** | +1.22 | 52.3% | 56.1% |
+| **7+ pt edge** | +1.65 | 57.3% | 59.2% |
+
+**Interpretation:** At 5+ point edge, the market moves **toward** our prediction by 1.22 points on average. This validates the edge is real—we're not just finding noise, we're finding value that sharps eventually agree with.
+
 ### Results by Year
 
 | Year | Games | MAE | RMSE | ATS (Close) | 3+ (Close) | 5+ (Close) | ATS (Open) | 3+ (Open) | 5+ (Open) |
