@@ -742,6 +742,17 @@ def calculate_metrics(
         "within_10": (predictions_df["abs_error"] <= 10).mean(),
     }
 
+    # MAE vs Closing Spread (how close are we to the efficient market?)
+    if ats_df is not None and len(ats_df) > 0 and "spread_close" in ats_df.columns:
+        # Convert our spread to Vegas convention and compare to closing line
+        # Our model: positive = home favored; Vegas: negative = home favored
+        ats_with_close = ats_df[ats_df["spread_close"].notna()].copy()
+        if len(ats_with_close) > 0:
+            model_spread_vegas = -ats_with_close["predicted_spread"]
+            closing_spread = ats_with_close["spread_close"]
+            mae_vs_close = (model_spread_vegas - closing_spread).abs().mean()
+            metrics["mae_vs_close"] = mae_vs_close
+
     if ats_df is not None and len(ats_df) > 0:
         # Overall ATS
         wins = ats_df["ats_win"].sum()
@@ -1324,7 +1335,9 @@ def print_results(results: dict, ats_df: pd.DataFrame = None) -> None:
     metrics = results["metrics"]
     print(f"\nTotal games predicted: {metrics['total_games']}")
     print(f"\nError Metrics:")
-    print(f"  MAE: {metrics['mae']:.2f} points")
+    print(f"  MAE (vs actual):  {metrics['mae']:.2f} points")
+    if "mae_vs_close" in metrics:
+        print(f"  MAE (vs closing): {metrics['mae_vs_close']:.2f} points")
     print(f"  RMSE: {metrics['rmse']:.2f} points")
     print(f"  Median Error: {metrics['median_error']:.2f} points")
     print(f"\nPrediction Accuracy:")
