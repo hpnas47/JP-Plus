@@ -211,13 +211,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Decide and document a policy for timezone differences with DST effects (especially Hawaii and Arizona). Validate current offsets against the season calendar and either improve the calculation or add tests/documentation explaining the approximation.
   - **Notes:** FIXED 2026-02-03. Policy: Use DST-era offsets since ~70% of CFB regular season (weeks 0-10) is during DST. Arizona/Arizona State changed from tz_offset=2 to 3 (effectively PT during DST). Hawaii changed from 5 to 6 (6 hrs behind ET during DST). Added comprehensive documentation explaining policy and approximation error (~0.5 pts for late-season games). Example fix: UCLA @ Arizona now correctly shows 0 timezone difference (both effectively Pacific during DST).
 
-- [ ] **P2.13 Add centralized team-name normalization/aliasing**
+- [x] **P2.13 Add centralized team-name normalization/aliasing** ✅ COMPLETE
   - **Files:** `config/teams.py`, any module doing lookups by team string
   - **Issue:** Exact string match required for rivalries/altitude/locations/HFA tables; CFBD naming drift can silently break.
   - **Acceptance criteria:** One normalization layer used before all lookups; log unknown team names; add coverage report.
   - **AI nudge prompt:**
     > Add a centralized team-name normalization/aliasing approach used before all metadata lookups (locations, altitude, rivalries, curated HFA, FBS sets). Add logging for unknown team names and a coverage report showing which teams are missing from metadata.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added `TEAM_NAME_ALIASES` dict mapping CFBD variants to canonical names (e.g., "Miami (FL)" → "Miami", "Southern California" → "USC", "Louisiana State" → "LSU"). Added `normalize_team_name()` as central entry point. Added safe wrapper functions: `safe_get_location()`, `safe_is_rivalry()`, `safe_is_high_altitude()`. Added `get_team_coverage_report()` and `log_team_coverage()` for coverage reporting. Tracks unknown team names in `_unknown_teams` set. Updated travel.py, home_field.py, and altitude.py to use normalized lookups.
 
 ---
 
