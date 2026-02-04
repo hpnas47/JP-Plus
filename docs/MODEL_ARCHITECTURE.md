@@ -50,6 +50,29 @@ Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained 
 - Model shows consistent improvement in MAE over time (12.87 → 12.21)
 - Opening line edge is consistently higher than closing line edge across all years
 
+### Betting Line Data Sources
+
+Betting lines are sourced from the [CFBD API](https://collegefootballdata.com/), which aggregates lines from multiple sportsbooks. The backtest uses lines in the following priority order:
+
+1. **DraftKings** (preferred) - 2,264 lines across 2022-2025
+2. **ESPN Bet** - 3,446 lines across 2022-2025
+3. **Bovada** - 3,264 lines across 2022-2025
+
+**Opening line availability by provider:**
+| Provider | Total Lines | With Opening Line |
+|----------|-------------|-------------------|
+| DraftKings | 2,264 | 2,108 (93%) |
+| ESPN Bet | 3,446 | 1,650 (48%) |
+| Bovada | 3,264 | 3,252 (99%) |
+
+**Additional providers in CFBD (used as fallback):**
+- William Hill (New Jersey) - 2,198 lines (2022-2023 only, no opening lines)
+- Consensus line - 1,230 lines (aggregated market line)
+- Caesars Sportsbook (Colorado) - 108 lines
+- TeamRankings - 776 lines
+
+The backtest prioritizes providers with opening line data (DraftKings, Bovada) to enable both opening and closing line ATS analysis.
+
 ---
 
 ## Model Architecture
