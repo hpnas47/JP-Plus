@@ -1265,6 +1265,7 @@ python scripts/weekly_odds_capture.py --closing
    - Weak FBS team penalty (G5 bottom-feeders similar to FCS)
    - Non-linear rating transformation
 5. **Weather impact modeling** - Rain/wind effects on passing efficiency
+6. **Investigate Arkansas JP+ rating** - Arkansas shows #3 offense but #96 defense, yet only #25 overall. Verify this reflects reality or if there's a calculation issue.
 
 ---
 
