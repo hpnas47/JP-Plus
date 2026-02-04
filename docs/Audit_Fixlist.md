@@ -187,13 +187,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Add robust input validation and schema normalization for EFM training data, including NaN handling for PPA and consistent quarter/period handling. Ensure failures are explicit and logged instead of silently producing incorrect behavior.
   - **Notes:**
 
-- [ ] **P2.10 Fix games-played assumptions for turnover shrinkage**
+- [x] **P2.10 Fix games-played assumptions for turnover shrinkage** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** Arbitrary fallback (e.g., default 10 games) biases shrinkage.
   - **Acceptance criteria:** Reliable games played count or explicit failure; log assumptions.
   - **AI nudge prompt:**
     > Make turnover shrinkage depend on a reliable games-played count. Avoid arbitrary defaults; if games cannot be counted from the inputs, fail loudly or compute from available identifiers, and log the assumptions used.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Removed arbitrary default of 10 games that was biasing shrinkage. `_calculate_turnover_stats()` now requires reliable games count from either games_df (primary) or plays_df.game_id (fallback), and raises ValueError if neither available. Logs which source was used. In `calculate_ratings()` shrinkage loop, teams missing from turnover stats now compute games from plays via game_id, or fail loudly if no game_id column. Added warning for teams with 0 games found (potential data issue).
 
 - [ ] **P2.11 Add adjustment-stack diagnostics (travel + altitude + HFA)**
   - **Files:** `src/predictions/spread_generator.py` + adjustment modules
