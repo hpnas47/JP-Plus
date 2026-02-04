@@ -57,6 +57,25 @@
 
 ### Completed Today
 
+- **Expanded Special Teams to Full PBTA Model** - Complete overhaul from FG-only to comprehensive FG + Punt + Kickoff
+  - **Problem:** ST ratings were mixing units (FG in points, punt in yards, kickoff in mixed scale)
+  - **Solution:** All components now expressed as PBTA (Points Better Than Average) - the marginal point contribution per game
+  - **Key changes to `src/models/special_teams.py`:**
+    1. Added `YARDS_TO_POINTS = 0.04` constant (from expected points models: ~0.04 pts per yard of field position)
+    2. Punt rating: `net_yards_vs_expected × 0.04` + inside-20 bonus (+0.5 pts) + touchback penalty (-0.3 pts)
+    3. Kickoff coverage: touchback rate bonus + return yards saved × 0.04
+    4. Kickoff returns: return yards gained × 0.04
+    5. Overall = simple sum (no weighting needed since all in same unit)
+  - **FBS ST Distribution (2024):**
+    - Mean: ~0.05 pts/game (essentially 0)
+    - Std: ~1.06 pts/game
+    - 95% range: [-2.02, +2.17] pts/game
+  - **Top ST units:** Vanderbilt (+2.34), Charlotte (+2.22), Florida State (+2.22), Georgia (+2.19)
+  - **Worst ST units:** UTEP (-2.83), Sam Houston (-2.35), Kent State (-2.27)
+  - **Interpretation:** Vanderbilt's ST gains them ~2.3 more points per game than an average unit would
+  - Updated all docstrings to clarify PBTA convention and sign conventions
+  - Updated `SpecialTeamsRating` dataclass with PBTA documentation
+
 - **Implemented Neutral-Field Ridge Regression (MAJOR FIX)** - Fixed systematic -6.7 mean error caused by double-counting home field advantage
   - **Problem:** The CFBD EPA data implicitly contains HFA—home teams naturally generate better EPA due to crowd noise, familiarity, etc. The ridge regression was learning team coefficients with this HFA baked in. When SpreadGenerator added explicit HFA, this caused double-counting.
   - **Solution:** Added home field indicator column to ridge regression design matrix:

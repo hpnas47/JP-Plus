@@ -73,17 +73,32 @@ Red zone TD rate has some variance early in the season, but over 15 games become
 - By late season (150+ RZ plays), elite red zone efficiency (like Indiana's 87%) is genuine skill
 - The regression (prior_strength=10) trusts actual performance while smoothing early-season noise
 
-### Special Teams (Field Goal Efficiency)
+### Special Teams (PBTA - Points Better Than Average)
 
-JP+ includes a field goal efficiency adjustment based on kicker performance vs expectation. The model calculates Points Above Average Expected (PAAE) for each team's kicking:
+JP+ includes a complete special teams model that captures the marginal point contribution of each unit compared to a league-average unit. All components are expressed as PBTA—positive means the unit gains points for the team, negative means it costs points.
 
+**Components:**
+
+**1. Field Goals (PAAE)**
 - **Expected make rates by distance:** <30 yards (92%), 30-40 (83%), 40-50 (72%), 50-55 (55%), 55+ (30%)
-- **PAAE calculation:** Actual points scored (3 if made, 0 if missed) minus expected points (3 × expected rate)
+- **Calculation:** Actual points (3 if made, 0 if missed) minus expected points (3 × expected rate)
 - **Per-game rating:** Total PAAE divided by games played
 
-For example, a kicker who makes a 48-yard field goal earns +0.84 PAAE (got 3 points, expected 2.16). Missing the same kick costs -2.16 PAAE.
+**2. Punting (Field Position Value)**
+- Net yards vs expected (40 yards), converted to points at ~0.04 pts/yard
+- Inside-20 bonus: +0.5 pts (better field position for defense)
+- Touchback penalty: -0.3 pts (opponent starts at 25 instead of worse)
 
-This captures the reality that kicker quality varies significantly—elite kickers like Auburn's 2024 squad add real value, while inconsistent kickers cost their teams points.
+**3. Kickoffs (Coverage + Returns)**
+- Coverage: Touchback rate vs expected (60%) + return yards allowed vs expected (23 yds)
+- Returns: Return yards gained vs expected (23 yds)
+- All converted to points at ~0.04 pts/yard of field position
+
+**Overall ST Rating = FG + Punt + Kickoff** (all in points per game)
+
+**Example:** Vanderbilt 2024 had the best ST unit at +2.34 pts/game PBTA—their special teams gained them over 2 points per game compared to an average unit. UTEP at -2.83 pts/game was costing their team nearly 3 points per game.
+
+**FBS Distribution:** Mean ~0, Std ~1.0, 95% of teams fall within ±2 pts/game.
 
 ### Adjustments Layer
 

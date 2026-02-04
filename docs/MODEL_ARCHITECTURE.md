@@ -111,10 +111,28 @@ The ridge regression training data **excludes plays involving FCS opponents**. W
 
 This is implemented in `backtest.py` by filtering plays where both offense and defense are in the FBS teams set before passing to the EFM.
 
+#### Special Teams (PBTA)
+
+The special teams model calculates marginal point contribution (PBTA - Points Better Than Average) for each team's ST unit. All components are converted to points per game.
+
+**Components:**
+
+| Component | Calculation | Typical Range |
+|-----------|-------------|---------------|
+| **Field Goals** | PAAE (Points Added Above Expected) based on make rates by distance | -2 to +1.5 pts/game |
+| **Punting** | Net yards vs expected (40 yds) × 0.04 pts/yd + inside-20 bonus (+0.5) + touchback penalty (-0.3) | -1 to +1.5 pts/game |
+| **Kickoffs** | Coverage (TB rate, return yards allowed) + Returns (return yards gained), all × 0.04 pts/yd | -0.5 to +0.5 pts/game |
+
+**Overall ST = FG + Punt + Kickoff** (simple sum since all in points)
+
+**FBS Distribution:** Mean ~0, Std ~1.0, 95% range [-2, +2] pts/game
+
+**Integration:** ST ratings are displayed separately from the O/D total. In spread prediction, the ST differential between teams is applied as an adjustment.
+
 #### Key Files
 - `src/models/efficiency_foundation_model.py` - Core EFM implementation
 - `src/models/finishing_drives.py` - Red zone efficiency with Bayesian regression
-- `src/models/special_teams.py` - Field goal efficiency ratings
+- `src/models/special_teams.py` - Complete ST model (FG + Punt + Kickoff)
 - Ridge regression on Success Rate (Y=0/1 success, X=sparse team/opponent IDs)
 - Converts efficiency metrics to point equivalents for spread prediction
 
@@ -131,7 +149,7 @@ EFM ratings feed into `SpreadGenerator` which applies additional adjustments:
 | **Altitude** | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
 | **Situational** | -2 to +2 pts | Lookahead, letdown, rivalry, bye week |
 | **FCS Penalty** | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
-| **FG Efficiency** | -1.5 to +1.5 pts | Kicker PAAE differential between teams |
+| **Special Teams** | -3 to +3 pts | Full ST differential (FG + Punt + Kickoff PBTA) |
 | **Pace Adjustment** | -10% to -15% | Spread compression for triple-option teams |
 | **QB Injury** | ±3-10 pts | Manual flag when starting QB is out (see below) |
 
@@ -652,7 +670,7 @@ The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 
 ### Medium Priority
 - [ ] Multi-year backtesting to validate stability
 - [x] **Weather impact modeling** - ✅ DONE. Added `WeatherAdjuster` class that fetches weather data from CFBD API and calculates totals adjustments based on wind (>10 mph: -0.3 pts/mph), temperature (<40°F: -0.15 pts/degree), and precipitation (>0.02 in: -3.0 pts). Indoor games receive no adjustment. Ready for totals prediction integration.
-- [ ] Expand special teams beyond FG (punting, kickoffs, returns)
+- [x] **Expand special teams beyond FG** - ✅ DONE. Added punt and kickoff ratings to complete ST model. All components expressed as PBTA (Points Better Than Average) per game. Punt rating: net yards vs expected (40 yds) converted to points + inside-20/touchback adjustments. Kickoff rating: coverage (touchback rate, return yards allowed) + returns (return yards gained). Overall = FG + Punt + Kickoff. FBS distribution: mean ~0, std ~1.0, 95% within ±2 pts/game.
 
 ### Low Priority
 - [ ] Real-time line movement tracking
@@ -686,6 +704,7 @@ The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 
 ## Changelog
 
 ### February 2026
+- **Expanded Special Teams to Full PBTA Model** - Complete overhaul of special teams from FG-only to comprehensive FG + Punt + Kickoff model. All components now expressed as PBTA (Points Better Than Average) - the marginal point contribution per game compared to a league-average unit. Key changes: (1) Added `YARDS_TO_POINTS = 0.04` constant for field position value conversion, (2) Punt rating now converts net yards above expected (40 yds) to points + inside-20 bonus (+0.5 pts) + touchback penalty (-0.3 pts), (3) Kickoff rating combines coverage (touchback rate, return yards allowed) and returns (return yards gained), all converted to points, (4) Overall ST = simple sum of components (no weighting needed since all in points). FBS distribution: mean ~0, std ~1.0, 95% range [-2, +2] pts/game. Top 2024 ST unit: Vanderbilt (+2.34 pts/game), worst: UTEP (-2.83 pts/game). Added `calculate_punt_ratings_from_plays()`, `calculate_kickoff_ratings_from_plays()`, and `calculate_all_st_ratings_from_plays()` to `src/models/special_teams.py`.
 - **Implemented Neutral-Field Ridge Regression (MAJOR FIX)** - Fixed systematic -6.7 mean error caused by double-counting home field advantage. The issue: CFBD EPA data implicitly contains HFA (home teams naturally generate better EPA), so ridge regression learned team coefficients with HFA baked in. When SpreadGenerator added explicit HFA, this caused double-counting. The fix: Add a home field indicator column to the ridge regression design matrix (+1 for offense=home, -1 for offense=away, 0 for neutral). This separates true team strength from implicit HFA. The learned implicit HFA is ~0.006 SR (~0.6% success rate advantage) and ~0.02 IsoPPP (~0.8 pts combined)—much smaller than explicit HFA (~2.5 pts), confirming most HFA manifests at scoring/outcome level rather than play-level efficiency. Results: Mean error improved from -6.7 to -0.40 (2024) and +0.51 (2022-2024), a 94% reduction in systematic bias. ATS performance maintained at 50.9% overall, 56.2% at 5+ edge.
 - **Added Weather Adjustment Module** - New `WeatherAdjuster` class for totals prediction. Fetches weather data from CFBD API (`get_weather` endpoint) and calculates adjustments based on wind speed (>10 mph: -0.3 pts/mph, capped at -6.0), temperature (<40°F: -0.15 pts/degree, capped at -4.0), and precipitation (>0.02 in: -3.0 pts, >0.05 in: -5.0 pts). Indoor games (`game_indoors=True`) receive no adjustment. Added `get_weather()` method to `CFBDClient`. Weather data includes temperature, wind speed/direction, precipitation, snowfall, humidity, and weather condition text. Analysis of 2024 late-season games showed: 19/757 indoor games, temperatures ranging 16°F-86°F, wind up to 26 mph, 39 games with precipitation.
 - **Added FPI Ratings Comparison** - New `scripts/compare_ratings.py` for 3-way JP+ vs FPI vs SP+ validation. Added `get_fpi_ratings()` and fixed `get_sp_ratings()` in CFBD client to use correct `RatingsApi` endpoint. Initial 2025 comparison shows JP+ correlates r=0.956 with FPI, r=0.937 with SP+. Key divergence: JP+ ranks Ohio State #1, Indiana #2; FPI/SP+ have Indiana #1.

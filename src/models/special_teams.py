@@ -13,23 +13,36 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SpecialTeamsRating:
-    """Container for team special teams ratings."""
+    """Container for team special teams ratings.
+
+    All values are PBTA (Points Better Than Average) - the marginal point
+    contribution per game compared to a league-average unit.
+
+    Positive = gains points vs average, Negative = costs points vs average.
+    """
 
     team: str
-    field_goal_rating: float  # PAAR (Points Added Above Replacement)
-    punt_rating: float  # Net yards above expected
-    kickoff_rating: float  # Coverage/return efficiency
-    overall_rating: float  # Combined special teams value
+    field_goal_rating: float  # PAAE (Points Added Above Expected) per game
+    punt_rating: float  # Punting value in points per game
+    kickoff_rating: float  # Kickoff coverage + return value in points per game
+    overall_rating: float  # Total ST marginal contribution (sum of components)
 
 
 class SpecialTeamsModel:
     """
     Model for evaluating special teams performance.
 
+    All ratings are expressed as PBTA (Points Better Than Average) - the marginal
+    point contribution compared to a league-average unit.
+
     Components:
-    - Field Goals: Points Added Above Replacement (PAAR) based on make rates by distance
-    - Punts: Net yards vs available yards, touchback avoidance
-    - Kickoffs: Coverage efficiency (for kicking team), return efficiency
+    - Field Goals: Points Added Above Expected (PAAE) based on make rates by distance
+    - Punts: Field position value vs expected, converted to points
+    - Kickoffs: Coverage/return efficiency, converted to points
+
+    Sign Convention:
+    - Positive (+): Better than average, GAINS points for the team
+    - Negative (-): Worse than average, COSTS the team points
     """
 
     # Expected FG make rates by distance (yards)
@@ -55,6 +68,10 @@ class SpecialTeamsModel:
 
     # Expected kickoff touchback rate
     EXPECTED_TOUCHBACK_RATE = 0.60
+
+    # Yards-to-points conversion factor (from expected points models)
+    # ~0.04 points per yard of field position change
+    YARDS_TO_POINTS = 0.04
 
     def __init__(self):
         """Initialize the special teams model."""
@@ -482,19 +499,20 @@ class SpecialTeamsModel:
     ) -> dict[str, float]:
         """Calculate punt ratings for all teams from play-by-play data.
 
-        Parses punt plays and calculates net yards above expected.
+        Parses punt plays and calculates marginal point contribution (PBTA).
         Punting team is identified from the 'offense' column (team punting).
 
-        Expected punt net: 40 yards
-        Bonus: Inside-20 punts (+5 yards equivalent)
-        Penalty: Touchbacks (-3 yards equivalent)
+        Components (all converted to POINTS):
+        - Net yards vs expected (40 yards): ~0.04 pts/yard
+        - Inside-20 bonus: +0.5 pts (better field position for defense)
+        - Touchback penalty: -0.3 pts (opponent starts at 25 instead of worse)
 
         Args:
             plays_df: DataFrame with play-by-play data
             games_played: Optional dict of team -> games played
 
         Returns:
-            Dict mapping team to per-game punt rating (yards above expected)
+            Dict mapping team to per-game punt rating (POINTS better than average)
         """
         if plays_df.empty:
             logger.debug("Empty plays dataframe, skipping punt rating calculation")
@@ -568,12 +586,16 @@ class SpecialTeamsModel:
         punt_plays["net_yards"] = punt_plays.apply(calc_net_yards, axis=1)
 
         # Calculate rating relative to expected (40 yards net)
-        # Plus bonuses/penalties
+        # Convert to POINTS (marginal contribution)
         def calc_punt_value(row):
             net_vs_expected = row["net_yards"] - self.EXPECTED_PUNT_NET
-            inside_20_bonus = 5.0 if row["is_inside_20"] else 0.0
-            touchback_penalty = -3.0 if row["is_touchback"] else 0.0
-            return net_vs_expected + inside_20_bonus + touchback_penalty
+            # Convert yards to points: ~0.04 pts/yard
+            yards_value = net_vs_expected * self.YARDS_TO_POINTS
+            # Inside-20 bonus: ~0.5 pts (better starting field position for defense)
+            inside_20_bonus = 0.5 if row["is_inside_20"] else 0.0
+            # Touchback penalty: ~0.3 pts (opponent starts at 25 instead of worse)
+            touchback_penalty = -0.3 if row["is_touchback"] else 0.0
+            return yards_value + inside_20_bonus + touchback_penalty
 
         punt_plays["punt_value"] = punt_plays.apply(calc_punt_value, axis=1)
 
@@ -611,19 +633,19 @@ class SpecialTeamsModel:
     ) -> dict[str, float]:
         """Calculate kickoff ratings for all teams from play-by-play data.
 
-        Two components:
-        1. Coverage rating: How well team covers kickoffs (fewer return yards allowed)
-        2. Return rating: How well team returns kickoffs (more return yards gained)
-
-        Expected return: 23 yards (when not a touchback)
-        Expected touchback rate: 60%
+        Two components (all converted to POINTS):
+        1. Coverage rating: How well team covers kickoffs
+           - Touchback rate vs expected (60%): ~1 pt per 10% above expected
+           - Return yards allowed vs expected (23 yds): ~0.04 pts/yard saved
+        2. Return rating: How well team returns kickoffs
+           - Return yards vs expected (23 yds): ~0.04 pts/yard gained
 
         Args:
             plays_df: DataFrame with play-by-play data
             games_played: Optional dict of team -> games played
 
         Returns:
-            Dict mapping team to per-game kickoff rating
+            Dict mapping team to per-game kickoff rating (POINTS better than average)
         """
         if plays_df.empty:
             logger.debug("Empty plays dataframe, skipping kickoff rating calculation")
@@ -684,32 +706,40 @@ class SpecialTeamsModel:
             else:
                 avg_return_allowed = 23  # Expected
 
-            # Coverage value: touchback bonus + return yards saved
-            tb_bonus = (tb_rate - self.EXPECTED_TOUCHBACK_RATE) * 3.0  # 3 pts per 10% above expected
-            return_saved = (23.0 - avg_return_allowed) / 5.0  # ~0.2 pts per yard saved
+            # Coverage value in POINTS:
+            # Touchback bonus: opponent starts at 25 vs avg return to ~27, ~2 yards = ~0.08 pts
+            # Per 10% touchback rate above expected = ~0.1 pts per game
+            tb_bonus = (tb_rate - self.EXPECTED_TOUCHBACK_RATE) * 1.0
+            # Return yards saved: convert to points (~0.04 pts/yard)
+            return_saved = (23.0 - avg_return_allowed) * self.YARDS_TO_POINTS
 
             # Estimate games
             estimated_games = max(1, total_kicks / 5.0)
             if games_played and team in games_played:
                 estimated_games = games_played[team]
 
-            coverage_ratings[team] = (tb_bonus + return_saved) * (total_kicks / estimated_games) / 5.0
+            # Per-game coverage rating (in points)
+            kicks_per_game = total_kicks / estimated_games
+            coverage_ratings[team] = (tb_bonus + return_saved) * kicks_per_game / 5.0
 
-        # Return rating (for returning teams)
+        # Return rating (for returning teams) in POINTS
         return_ratings = {}
         returner_groups = kickoff_plays[~kickoff_plays["is_touchback"]].groupby("defense")
         for team, group in returner_groups:
             if len(group) == 0:
                 continue
             avg_return = group["return_yards"].mean()
-            return_value = (avg_return - 23.0) / 5.0  # ~0.2 pts per yard above expected
+            # Return yards above expected, converted to points (~0.04 pts/yard)
+            return_value = (avg_return - 23.0) * self.YARDS_TO_POINTS
 
             # Estimate games
             estimated_games = max(1, len(group) / 3.0)  # ~3 non-TB kickoffs per game to return
             if games_played and team in games_played:
                 estimated_games = games_played[team]
 
-            return_ratings[team] = return_value * (len(group) / estimated_games) / 3.0
+            # Per-game return rating (in points)
+            returns_per_game = len(group) / estimated_games
+            return_ratings[team] = return_value * returns_per_game / 3.0
 
         # Combine coverage and return ratings
         all_teams = set(coverage_ratings.keys()) | set(return_ratings.keys())
@@ -734,7 +764,10 @@ class SpecialTeamsModel:
         """Calculate complete special teams ratings (FG + punt + kickoff) from plays.
 
         This is the main entry point for populating ST ratings from play-by-play data.
-        Combines field goal PAAE, punt net yards, and kickoff coverage/return ratings.
+        All components are expressed as PBTA (Points Better Than Average) - the marginal
+        point contribution per game compared to a league-average unit.
+
+        Overall rating = FG rating + Punt rating + Kickoff rating (all in points)
 
         Args:
             plays_df: DataFrame with play-by-play data (needs play_type, play_text, offense, defense)
@@ -765,9 +798,9 @@ class SpecialTeamsModel:
             punt_rating = punt_ratings.get(team, 0.0)
             kick_rating = kickoff_ratings.get(team, 0.0)
 
-            # Overall: weighted combination (FG is most impactful)
-            # Weights based on typical game impact: FG ~2pts, Punt ~1pt, Kickoff ~0.5pt
-            overall = fg_rating + (punt_rating / 5.0) + kick_rating
+            # Overall: sum of all components (all already in POINTS per game)
+            # Each component is a marginal point contribution vs average
+            overall = fg_rating + punt_rating + kick_rating
 
             self.team_ratings[team] = SpecialTeamsRating(
                 team=team,
