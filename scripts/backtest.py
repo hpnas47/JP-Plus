@@ -1073,7 +1073,14 @@ def calculate_phase_metrics(df: pd.DataFrame, phase_col: str = "phase") -> pd.Da
     """
     results = []
 
-    for phase in ["Phase 1 (Calibration)", "Phase 2 (Core)", "Phase 3 (Postseason)"]:
+    # Phase definitions with week ranges
+    phase_info = [
+        ("Phase 1 (Calibration)", "1-3"),
+        ("Phase 2 (Core)", "4-15"),
+        ("Phase 3 (Postseason)", "16+"),
+    ]
+
+    for phase, weeks in phase_info:
         phase_df = df[df[phase_col] == phase]
 
         if len(phase_df) == 0:
@@ -1081,6 +1088,7 @@ def calculate_phase_metrics(df: pd.DataFrame, phase_col: str = "phase") -> pd.Da
 
         metrics = {
             "Phase": phase,
+            "Weeks": weeks,
             "Games": len(phase_df),
         }
 
@@ -1106,13 +1114,21 @@ def calculate_phase_metrics(df: pd.DataFrame, phase_col: str = "phase") -> pd.Da
             metrics["ATS Record"] = f"{int(wins)}-{int(losses)}-{int(pushes)}"
             metrics["ATS %"] = wins / total * 100 if total > 0 else 0
 
+            # 3+ edge subset
+            edge_3 = phase_df[phase_df["edge"] >= 3]
+            if len(edge_3) > 0:
+                e3_wins = edge_3["ats_win"].sum()
+                e3_losses = len(edge_3) - e3_wins - edge_3["ats_push"].sum()
+                e3_total = e3_wins + e3_losses
+                metrics["3+ Edge"] = f"{int(e3_wins)}-{int(e3_losses)} ({e3_wins/e3_total*100:.1f}%)" if e3_total > 0 else "N/A"
+
             # 5+ edge subset
             edge_5 = phase_df[phase_df["edge"] >= 5]
             if len(edge_5) > 0:
-                e_wins = edge_5["ats_win"].sum()
-                e_losses = len(edge_5) - e_wins - edge_5["ats_push"].sum()
-                e_total = e_wins + e_losses
-                metrics["5+ Edge"] = f"{int(e_wins)}-{int(e_losses)} ({e_wins/e_total*100:.1f}%)" if e_total > 0 else "N/A"
+                e5_wins = edge_5["ats_win"].sum()
+                e5_losses = len(edge_5) - e5_wins - edge_5["ats_push"].sum()
+                e5_total = e5_wins + e5_losses
+                metrics["5+ Edge"] = f"{int(e5_wins)}-{int(e5_losses)} ({e5_wins/e5_total*100:.1f}%)" if e5_total > 0 else "N/A"
 
         # CLV (if clv column exists)
         if "clv" in phase_df.columns:
@@ -1154,16 +1170,13 @@ def print_phase_report(ats_df: pd.DataFrame, predictions_df: pd.DataFrame = None
         print("\nPhase Report: No phase data available")
         return
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 90)
     print("PHASE-BY-PHASE PERFORMANCE")
-    print("=" * 80)
-    print("\nPhase 1 (Calibration): Weeks 1-3   - Heavy preseason prior reliance")
-    print("Phase 2 (Core):        Weeks 4-15  - Regular season with in-season data")
-    print("Phase 3 (Postseason):  Weeks 16+   - Bowl games and playoffs")
+    print("=" * 90)
     print()
 
     # Format and print table
-    display_cols = ["Phase", "Games", "MAE", "MAE vs Close", "ATS %", "5+ Edge", "Mean CLV"]
+    display_cols = ["Phase", "Weeks", "Games", "MAE", "MAE vs Close", "ATS %", "3+ Edge", "5+ Edge", "Mean CLV"]
     available_cols = [c for c in display_cols if c in phase_metrics.columns]
 
     # Format numeric columns
