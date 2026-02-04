@@ -178,6 +178,22 @@
     6. `scripts/backtest.py`:
        - Line 609: Added `(-x[1], x[0])` sort key for stable team ranking
   - **Result:** Model now produces deterministic outputs for identical inputs across runs
+  - **Verified:** Backtest ran successfully (2024, weeks 4-16):
+    - 677 games predicted, no assertion errors (data leakage guards passed)
+    - MAE: 12.61 pts, ATS: 49.6% overall, 53.3% at 5+ edge
+    - Mean error: -0.22 pts (no systematic bias)
+    - All determinism fixes working correctly
+
+### Model Integrity Summary
+
+All four integrity tasks completed:
+
+| Task | Status | Commit |
+|------|--------|--------|
+| Data Leakage Prevention | ✅ Fixed | `40e403b` |
+| Normalization Order Audit | ✅ Confirmed Correct | `5f4855d` |
+| ST vs EFM Double-Counting | ✅ Confirmed Independent | `eb018d7` |
+| Model Determinism | ✅ Fixed | `ca165de` |
 
 ### Scripts Added
 
