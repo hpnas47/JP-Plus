@@ -374,7 +374,7 @@ class SpreadGenerator:
 
         # Home field advantage
         if not neutral_site:
-            components.home_field = self.home_field.get_hfa(home_team)
+            components.home_field = self.home_field.get_hfa_value(home_team)
         else:
             components.home_field = 0.0
 

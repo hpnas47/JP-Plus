@@ -677,6 +677,30 @@ def walk_forward_predict_efm(
         if team_records:
             hfa.calculate_trajectory_modifiers(team_records, year)
 
+        # Log HFA sources for this week's teams (first week only to avoid spam)
+        if pred_week == start_week:
+            # Get HFA breakdown for all FBS teams
+            hfa_breakdown = hfa.get_hfa_breakdown(list(fbs_teams))
+            source_counts = {"curated": 0, "dynamic": 0, "conference": 0, "fallback": 0}
+            trajectory_count = 0
+            for team, info in hfa_breakdown.items():
+                source = info["source"]
+                if source.startswith("curated"):
+                    source_counts["curated"] += 1
+                elif source.startswith("dynamic"):
+                    source_counts["dynamic"] += 1
+                elif source.startswith("conf:"):
+                    source_counts["conference"] += 1
+                else:
+                    source_counts["fallback"] += 1
+                if "+traj" in source:
+                    trajectory_count += 1
+            logger.info(
+                f"HFA sources: curated={source_counts['curated']}, "
+                f"fallback={source_counts['fallback']}, "
+                f"with_trajectory={trajectory_count}"
+            )
+
         # Build rankings for situational adjustments
         sorted_teams = sorted(team_ratings.items(), key=lambda x: x[1], reverse=True)
         rankings = {team: rank + 1 for rank, (team, _) in enumerate(sorted_teams)}

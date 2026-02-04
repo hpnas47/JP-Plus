@@ -470,8 +470,8 @@ class HomeFieldAdvantage:
         neutral_site: bool = False,
         conference: Optional[str] = None,
         apply_trajectory: bool = True,
-    ) -> float:
-        """Get HFA for a specific matchup.
+    ) -> tuple[float, str]:
+        """Get HFA for a specific matchup with source tracking.
 
         Priority for base HFA:
         1. If neutral site, return 0
@@ -489,29 +489,59 @@ class HomeFieldAdvantage:
             apply_trajectory: If True, applies trajectory modifier for rising/declining programs
 
         Returns:
-            HFA in points favoring home team
+            Tuple of (HFA in points, source string describing where HFA came from)
         """
         if neutral_site:
-            return 0.0
+            return 0.0, "neutral"
 
-        # Get base HFA
+        # Get base HFA with source tracking
         if home_team in TEAM_HFA_VALUES:
             base = TEAM_HFA_VALUES[home_team]
+            source = "curated"
         elif home_team in self.team_hfa:
             base = self.team_hfa[home_team]
+            source = "dynamic"
         elif conference:
             base = CONFERENCE_HFA_DEFAULTS.get(conference, self.base_hfa)
+            source = f"conf:{conference}" if conference in CONFERENCE_HFA_DEFAULTS else "fallback"
         else:
             base = self.base_hfa
+            source = "fallback"
 
         # Apply trajectory modifier for rising/declining programs
+        trajectory_applied = False
         if apply_trajectory and home_team in self.trajectory_modifiers:
             modifier = self.trajectory_modifiers[home_team]
             base = base + modifier
             # Keep within reasonable bounds
             base = max(1.0, min(5.0, base))
+            trajectory_applied = True
+            source += f"+traj({modifier:+.2f})"
 
-        return base
+        return base, source
+
+    def get_hfa_value(
+        self,
+        home_team: str,
+        neutral_site: bool = False,
+        conference: Optional[str] = None,
+        apply_trajectory: bool = True,
+    ) -> float:
+        """Get HFA value only (without source tracking).
+
+        Convenience method for backward compatibility.
+
+        Args:
+            home_team: Home team name
+            neutral_site: If True, returns 0 (no HFA)
+            conference: Team's conference (for fallback)
+            apply_trajectory: If True, applies trajectory modifier
+
+        Returns:
+            HFA in points favoring home team
+        """
+        hfa, _ = self.get_hfa(home_team, neutral_site, conference, apply_trajectory)
+        return hfa
 
     def get_summary_df(self) -> pd.DataFrame:
         """Get summary of team HFA values.
@@ -530,3 +560,53 @@ class HomeFieldAdvantage:
         df = pd.DataFrame(data)
         df["hfa_vs_avg"] = df["hfa"] - self.base_hfa
         return df.sort_values("hfa", ascending=False).reset_index(drop=True)
+
+    def log_hfa_summary(self, teams: list[str]) -> None:
+        """Log a summary of HFA sources for a set of teams.
+
+        Args:
+            teams: List of team names to summarize
+        """
+        source_counts = {"curated": 0, "dynamic": 0, "conference": 0, "fallback": 0}
+        trajectory_count = 0
+
+        for team in teams:
+            hfa, source = self.get_hfa(team)
+
+            # Count source type
+            if source.startswith("curated"):
+                source_counts["curated"] += 1
+            elif source.startswith("dynamic"):
+                source_counts["dynamic"] += 1
+            elif source.startswith("conf:"):
+                source_counts["conference"] += 1
+            elif source.startswith("fallback"):
+                source_counts["fallback"] += 1
+
+            # Count trajectory modifiers
+            if "+traj" in source:
+                trajectory_count += 1
+
+        logger.info(
+            f"HFA sources for {len(teams)} teams: "
+            f"curated={source_counts['curated']}, "
+            f"dynamic={source_counts['dynamic']}, "
+            f"conference={source_counts['conference']}, "
+            f"fallback={source_counts['fallback']}, "
+            f"with trajectory={trajectory_count}"
+        )
+
+    def get_hfa_breakdown(self, teams: list[str]) -> dict[str, dict]:
+        """Get detailed HFA breakdown for each team.
+
+        Args:
+            teams: List of team names
+
+        Returns:
+            Dict mapping team name to {hfa: float, source: str}
+        """
+        breakdown = {}
+        for team in teams:
+            hfa, source = self.get_hfa(team)
+            breakdown[team] = {"hfa": hfa, "source": source}
+        return breakdown

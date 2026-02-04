@@ -74,13 +74,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Simplify travel direction detection so it uses a single consistent source of truth (timezone offsets and/or kickoff context). Remove redundant/contradictory longitude heuristics and ensure west-to-east penalties trigger correctly in all relevant cases.
   - **Notes:** FIXED 2026-02-03. Added `get_directed_timezone_change()` function that returns signed timezone difference (positive = east, negative = west). Refactored `get_timezone_adjustment()` to use this instead of longitude comparisons. Logic is now simpler: `directed_tz > 0` → traveling east (full penalty), `directed_tz < 0` → traveling west (0.8x penalty). Verified with 8 test cases including Hawaii.
 
-- [ ] **P1.3 Make baseline HFA sourcing explicit and consistent**
+- [x] **P1.3 Make baseline HFA sourcing explicit and consistent** ✅ COMPLETE
   - **Files:** `config/settings.py`, `src/adjustments/home_field.py`, `scripts/backtest.py`
-  - **Issue:** Multiple “baselines” (settings default vs CLI vs curated TEAM_HFA_VALUES) can cause instability/confusion.
+  - **Issue:** Multiple "baselines" (settings default vs CLI vs curated TEAM_HFA_VALUES) can cause instability/confusion.
   - **Acceptance criteria:** Document and log final HFA per team (or per game) in backtests; predictable behavior.
   - **AI nudge prompt:**
     > Audit how baseline HFA is sourced and applied (settings defaults, CLI fallback, curated team HFA table, dynamic/team_hfa). Make behavior explicit and consistent, and add logging that reports the final HFA used (at least per team, ideally per game) during backtests.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added source tracking to `get_hfa()` which now returns `(hfa_value, source_string)`. Sources are: "curated" (TEAM_HFA_VALUES), "dynamic" (calculated), "conf:XXX" (conference default), "fallback" (base_hfa). Trajectory modifiers append "+traj(±X.XX)" to source. Added `get_hfa_value()` for backward compatibility, `get_hfa_breakdown()` for per-team details, and `log_hfa_summary()` for aggregate stats. Backtest now logs: "HFA sources: curated=46, fallback=90, with_trajectory=108".
 
 - [ ] **P1.4 De-duplicate rivalry list + add validation**
   - **Files:** `config/teams.py`

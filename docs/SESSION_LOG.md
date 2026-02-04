@@ -165,6 +165,25 @@
     - Ohio State→Hawaii: directed_tz=-5, adj=-2.00 (0.8x penalty)
   - **Files changed:** `config/teams.py`, `src/adjustments/travel.py`
 
+- **Fixed P1.3: HFA Source Tracking and Logging** - Made HFA sourcing explicit and logged
+  - **Problem:** Multiple HFA sources (curated, dynamic, conference, fallback, trajectory) with no visibility into which was used.
+  - **Changes:**
+    1. `get_hfa()` now returns `(hfa_value, source_string)` tuple with source tracking
+    2. Sources: "curated", "dynamic", "conf:XXX", "fallback", plus "+traj(±X.XX)" suffix
+    3. Added `get_hfa_value()` for backward compatibility (returns just the float)
+    4. Added `get_hfa_breakdown(teams)` for per-team HFA details
+    5. Added `log_hfa_summary(teams)` for aggregate logging
+    6. Backtest logs HFA source distribution at start of first week
+  - **Example output:** `HFA sources: curated=46, fallback=90, with_trajectory=108`
+  - **HFA Priority (documented in get_hfa):**
+    1. Neutral site → 0
+    2. TEAM_HFA_VALUES (curated) → hardcoded team values
+    3. self.team_hfa (dynamic) → calculated values
+    4. CONFERENCE_HFA_DEFAULTS → conference fallback
+    5. self.base_hfa → CLI/settings fallback
+    6. Plus trajectory modifier if applicable
+  - **Files changed:** `src/adjustments/home_field.py`, `src/predictions/spread_generator.py`, `scripts/backtest.py`
+
 ---
 
 ## Session: February 2, 2026
