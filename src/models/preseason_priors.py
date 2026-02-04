@@ -386,20 +386,287 @@ class PreseasonPriors:
             logger.warning(f"Could not fetch player usage for {year}: {e}")
             return pd.DataFrame()
 
+    # Position group mapping for transfer portal analysis
+    # Split OT from IOL, and iDL from EDGE for scarcity-based weighting
+    POSITION_GROUPS = {
+        'QB': ['QB'],
+        'OT': ['OT', 'T'],           # Offensive Tackles - premium scarcity
+        'IOL': ['OG', 'OC', 'OL', 'G', 'C', 'IOL'],  # Interior OL
+        'EDGE': ['EDGE', 'DE'],       # Edge rushers
+        'IDL': ['DL', 'DT', 'NT'],    # Interior defensive line
+        'LB': ['LB', 'ILB', 'OLB', 'MLB'],
+        'RB': ['RB', 'FB', 'APB'],
+        'WR': ['WR'],
+        'CB': ['CB'],                 # Split CB from safety for skill tier
+        'S': ['S', 'FS', 'SS', 'SAF', 'DB'],  # Safeties
+        'TE': ['TE'],
+        'ST': ['K', 'P', 'LS', 'PK'],
+        'ATH': ['ATH', 'ATHLETE', 'PRO'],
+    }
+
+    # Scarcity-Based Position Weights (2026 market reality)
+    # Reflects that elite trench play is the primary driver of rating stability
+    POSITION_WEIGHTS = {
+        # Premium Tier (0.85+): Franchise-altering positions
+        'QB': 1.00,    # Signal caller - highest impact
+        'OT': 0.90,    # Elite blindside protector - 90% of QB value
+
+        # Anchor Tier (0.75): Trench dominance
+        'EDGE': 0.75,  # Premium pass rushers
+        'IDL': 0.75,   # Interior defensive line - run stuffers + interior pressure
+
+        # Support Tier (0.55-0.60): Important but deeper talent pools
+        'IOL': 0.60,   # Interior OL - guards/centers
+        'LB': 0.55,    # Run defense, coverage
+        'S': 0.55,     # Safety - deep coverage, run support
+        'TE': 0.50,    # Hybrid role, increasing value
+
+        # Skill/Floor Tier (0.40-0.50): High plug-and-play success
+        'WR': 0.45,    # Receiving weapons - higher replacement rate
+        'CB': 0.45,    # Corners - athletic translation
+        'RB': 0.40,    # Most replaceable skill position
+
+        # Depth Tier
+        'ST': 0.15,    # Limited snaps
+        'ATH': 0.40,   # Unknown role, average skill value
+    }
+
+    # Power 4 Conferences (for level-up discount logic)
+    P4_CONFERENCES = {
+        'SEC', 'Big Ten', 'Big 12', 'ACC',
+        # Include independents that play P4-level schedules
+        'Notre Dame', 'FBS Independents',
+    }
+
+    # Teams that are P4 level (for edge cases and independents)
+    P4_TEAMS = {
+        'Notre Dame', 'BYU', 'USC', 'UCLA', 'Oregon', 'Washington',
+        'Colorado', 'Arizona', 'Arizona State', 'Utah',
+        # Any other P4-level independents
+    }
+
+    # High-contact positions for physicality tax (G5→P4 transfers)
+    HIGH_CONTACT_POSITIONS = {'OT', 'IOL', 'IDL', 'LB', 'EDGE'}
+
+    # Skill positions for athleticism discount (G5→P4 transfers)
+    SKILL_POSITIONS = {'WR', 'RB', 'CB', 'S'}
+
+    # Level-up discount factors
+    PHYSICALITY_TAX = 0.75      # 25% discount for trench players G5→P4
+    ATHLETICISM_DISCOUNT = 0.90  # 10% discount for skill players G5→P4
+    CONTINUITY_TAX = 0.90       # 11% penalty for losing incumbent (Option A calibration)
+
+    def _get_position_group(self, position: str) -> str:
+        """Map a position to its position group.
+
+        Args:
+            position: Raw position string from API
+
+        Returns:
+            Position group name (QB, OT, IOL, etc.) or 'OTHER' if unknown
+        """
+        if not position or pd.isna(position):
+            return 'OTHER'
+
+        pos_upper = str(position).upper().strip()
+        for group, positions in self.POSITION_GROUPS.items():
+            if pos_upper in positions:
+                return group
+        return 'OTHER'
+
+    def _is_p4_team(self, team: str, team_conferences: dict[str, str]) -> bool:
+        """Determine if a team is Power 4 level.
+
+        Args:
+            team: Team name
+            team_conferences: Dict mapping team name to conference
+
+        Returns:
+            True if team is P4 level, False if G5/FCS
+        """
+        if not team or pd.isna(team):
+            return False
+
+        # Check explicit P4 teams list (independents, recent movers)
+        if team in self.P4_TEAMS:
+            return True
+
+        # Check conference
+        conf = team_conferences.get(team, '')
+        return conf in self.P4_CONFERENCES
+
+    def _get_level_up_discount(
+        self,
+        position_group: str,
+        origin_is_p4: bool,
+        dest_is_p4: bool,
+    ) -> float:
+        """Calculate the level-up discount for G5→P4 transfers.
+
+        Reflects the physicality gap and adjustment curve when players
+        move from G5 to P4 competition.
+
+        Args:
+            position_group: Player's position group
+            origin_is_p4: Whether origin school is P4
+            dest_is_p4: Whether destination school is P4
+
+        Returns:
+            Discount multiplier (1.0 = no discount, 0.75 = 25% discount)
+        """
+        # P4→P4 or G5→G5: No discount
+        if origin_is_p4 == dest_is_p4:
+            return 1.0
+
+        # P4→G5: Player is "stepping down" - slight boost (proven at higher level)
+        if origin_is_p4 and not dest_is_p4:
+            return 1.10  # 10% boost
+
+        # G5→P4: Apply level-up discount based on position
+        if position_group in self.HIGH_CONTACT_POSITIONS:
+            # Physicality Tax: 25% discount for trench players
+            # Steep curve in trench physicality at P4 level
+            return self.PHYSICALITY_TAX
+        elif position_group in self.SKILL_POSITIONS:
+            # Athleticism Discount: 10% discount for skill players
+            # High-end speed translates more easily
+            return self.ATHLETICISM_DISCOUNT
+        else:
+            # Other positions (QB, TE, ST): Moderate discount
+            return 0.85
+
+    def _calculate_quality_factor(
+        self,
+        stars: Optional[float],
+        rating: Optional[float],
+    ) -> float:
+        """Calculate raw quality factor from stars and rating.
+
+        Args:
+            stars: Player's star rating (1-5, or None)
+            rating: Player's 247 rating (0-1, or None)
+
+        Returns:
+            Quality factor (0.1 to 1.0)
+        """
+        if stars is not None and not pd.isna(stars):
+            # Normalize stars: 2->0.1, 3->0.33, 4->0.67, 5->1.0
+            stars_factor = (float(stars) - 2) / 3
+            stars_factor = max(0.1, min(1.0, stars_factor))
+
+            if rating is not None and not pd.isna(rating):
+                # Normalize rating: 0.77->0.1, 0.85->0.5, 0.99->1.0
+                rating_factor = (float(rating) - 0.77) / 0.22
+                rating_factor = max(0.1, min(1.0, rating_factor))
+                # Blend: 60% rating, 40% stars
+                return 0.6 * rating_factor + 0.4 * stars_factor
+            return stars_factor
+
+        if rating is not None and not pd.isna(rating):
+            rating_factor = (float(rating) - 0.77) / 0.22
+            return max(0.1, min(1.0, rating_factor))
+
+        # No quality data - assume average (3-star equivalent)
+        return 0.33
+
+    def _calculate_player_value(
+        self,
+        stars: Optional[float],
+        rating: Optional[float],
+        position_group: str,
+        origin: Optional[str] = None,
+        destination: Optional[str] = None,
+        team_conferences: Optional[dict[str, str]] = None,
+    ) -> float:
+        """Calculate a player's transfer value based on quality, position, and level jump.
+
+        Formula: position_weight × quality_factor × level_up_discount
+
+        Args:
+            stars: Player's star rating (1-5, or None)
+            rating: Player's 247 rating (0-1, or None)
+            position_group: The player's position group
+            origin: Origin team (for level-up discount)
+            destination: Destination team (for level-up discount)
+            team_conferences: Dict mapping team to conference
+
+        Returns:
+            Weighted player value (higher = more valuable transfer)
+        """
+        # Get position weight (default to 0.35 for unknown positions)
+        pos_weight = self.POSITION_WEIGHTS.get(position_group, 0.35)
+
+        # Calculate quality factor
+        quality_factor = self._calculate_quality_factor(stars, rating)
+
+        # Calculate level-up discount if conference info available
+        level_discount = 1.0
+        if team_conferences and origin and destination:
+            origin_is_p4 = self._is_p4_team(origin, team_conferences)
+            dest_is_p4 = self._is_p4_team(destination, team_conferences)
+            level_discount = self._get_level_up_discount(
+                position_group, origin_is_p4, dest_is_p4
+            )
+
+        return pos_weight * quality_factor * level_discount
+
+    def fetch_fbs_teams(self, year: int) -> set[str]:
+        """Fetch the set of FBS team names for a given year.
+
+        Args:
+            year: Season year
+
+        Returns:
+            Set of FBS team names
+        """
+        try:
+            teams = self.teams_api.get_fbs_teams(year=year)
+            fbs_set = {t.school for t in teams}
+            logger.debug(f"Fetched {len(fbs_set)} FBS teams for {year}")
+            return fbs_set
+        except Exception as e:
+            logger.warning(f"Could not fetch FBS teams for {year}: {e}")
+            return set()
+
+    def _fetch_team_conferences(self, year: int) -> dict[str, str]:
+        """Fetch conference affiliation for all teams.
+
+        Args:
+            year: Season year
+
+        Returns:
+            Dict mapping team name to conference name
+        """
+        try:
+            teams = self.teams_api.get_teams()
+            conf_map = {}
+            for t in teams:
+                if t.school and t.conference:
+                    conf_map[t.school] = t.conference
+            logger.debug(f"Fetched conference data for {len(conf_map)} teams")
+            return conf_map
+        except Exception as e:
+            logger.warning(f"Could not fetch team conferences: {e}")
+            return {}
+
     def calculate_portal_impact(
         self,
         year: int,
-        portal_scale: float = 0.15,
+        portal_scale: float = 0.06,
+        fbs_only: bool = True,
+        impact_cap: float = 0.12,
     ) -> dict[str, float]:
-        """Calculate net transfer portal impact for each team.
+        """Calculate net transfer portal impact for each team using unit-level analysis.
 
-        Matches transfers to their prior-year PPA contribution and calculates
-        net incoming - outgoing production for each team.
+        Uses scarcity-based position weights, level-up discounts for G5→P4 moves,
+        and continuity tax for losing incumbents. Reflects 2026 market reality
+        where elite trench play is the primary driver of rating stability.
 
         Args:
-            year: Season year (fetches transfers FOR this year, usage from year-1)
-            portal_scale: How much to scale portal impact (default 0.15)
-                         Lower values = more conservative adjustment
+            year: Season year (fetches transfers FOR this year)
+            portal_scale: How much to scale portal impact (default 0.06)
+            fbs_only: If True, only include FBS teams in results (default True)
+            impact_cap: Maximum team-wide portal impact (default ±12%)
 
         Returns:
             Dictionary mapping team name to adjusted returning production modifier
@@ -411,62 +678,119 @@ class PreseasonPriors:
             logger.warning(f"No transfer portal data for {year}")
             return {}
 
-        # Fetch player usage from prior year (what these players contributed)
-        usage_df = self.fetch_player_usage(year - 1)
-        if usage_df.empty:
-            logger.warning(f"No player usage data for {year - 1}")
-            return {}
+        # Fetch FBS teams for filtering
+        fbs_teams = self.fetch_fbs_teams(year) if fbs_only else set()
+        if fbs_only and not fbs_teams:
+            logger.warning(f"Could not fetch FBS teams for {year}, using all teams")
+            fbs_only = False
 
-        # Match transfers to prior-year usage by name and origin team
-        merged = transfers_df.merge(
-            usage_df,
-            left_on=['full_name', 'origin'],
-            right_on=['name', 'team'],
-            how='left',
-            suffixes=('', '_usage')
+        # Fetch conference data for level-up discount logic
+        team_conferences = self._fetch_team_conferences(year)
+
+        # Filter to FBS-relevant transfers (origin OR destination is FBS)
+        if fbs_only:
+            original_count = len(transfers_df)
+            fbs_mask = (
+                transfers_df['origin'].isin(fbs_teams) |
+                transfers_df['destination'].isin(fbs_teams)
+            )
+            transfers_df = transfers_df[fbs_mask].copy()
+            logger.info(
+                f"Filtered to FBS-relevant transfers: {len(transfers_df)}/{original_count} "
+                f"({len(transfers_df)/original_count:.1%})"
+            )
+
+        # Add position group column
+        transfers_df['pos_group'] = transfers_df['position'].apply(self._get_position_group)
+
+        # Calculate OUTGOING value (what team loses - no level discount, full value)
+        # This is the "raw" value of the player leaving
+        transfers_df['outgoing_value'] = transfers_df.apply(
+            lambda row: self._calculate_player_value(
+                row.get('stars'),
+                row.get('rating'),
+                row['pos_group'],
+                origin=None,  # No level discount for outgoing
+                destination=None,
+                team_conferences=None,
+            ),
+            axis=1
         )
 
-        matched = merged[merged['total_ppa'].notna()]
-        match_rate = len(matched) / len(transfers_df) if len(transfers_df) > 0 else 0
+        # Calculate INCOMING value (what team gains - WITH level-up discount)
+        # G5→P4 transfers get discounted based on physicality/athleticism
+        transfers_df['incoming_value'] = transfers_df.apply(
+            lambda row: self._calculate_player_value(
+                row.get('stars'),
+                row.get('rating'),
+                row['pos_group'],
+                origin=row.get('origin'),
+                destination=row.get('destination'),
+                team_conferences=team_conferences,
+            ),
+            axis=1
+        )
+
+        # Log position group distribution
+        pos_dist = transfers_df['pos_group'].value_counts()
+        logger.info(f"Transfer portal {year}: {len(transfers_df)} FBS-relevant transfers")
+        logger.debug(f"Position distribution: {pos_dist.to_dict()}")
+
+        # Calculate outgoing value per team (players who left)
+        # Apply CONTINUITY_TAX: losing an incumbent hurts even if "replaced"
+        outgoing_raw = transfers_df.groupby('origin')['outgoing_value'].sum()
+        outgoing = outgoing_raw / self.CONTINUITY_TAX  # Amplify loss (divide by 0.85 = ~18% boost)
+
+        # Calculate incoming value per team (players who arrived)
+        # Level-up discounts already applied in incoming_value
+        incoming_df = transfers_df[transfers_df['destination'].notna()]
+        incoming = incoming_df.groupby('destination')['incoming_value'].sum()
+
+        # Log coverage and level-up stats
+        has_dest = len(incoming_df)
         logger.info(
-            f"Matched {len(matched)}/{len(transfers_df)} transfers ({match_rate:.1%}) "
-            f"to prior-year usage"
+            f"Portal coverage: {has_dest}/{len(transfers_df)} ({has_dest/len(transfers_df):.1%}) "
+            f"have destinations"
         )
 
-        if matched.empty:
-            return {}
-
-        # Calculate outgoing PPA per team (players who left)
-        outgoing = matched.groupby('origin')['total_ppa'].sum()
-
-        # Calculate incoming PPA per team (players who arrived)
-        # Only count transfers with a destination
-        incoming_df = matched[matched['destination'].notna()]
-        incoming = incoming_df.groupby('destination')['total_ppa'].sum()
+        # Log G5→P4 transfer count
+        if team_conferences:
+            g5_to_p4 = incoming_df.apply(
+                lambda row: (
+                    not self._is_p4_team(row.get('origin'), team_conferences) and
+                    self._is_p4_team(row.get('destination'), team_conferences)
+                ),
+                axis=1
+            ).sum()
+            logger.info(f"G5→P4 transfers (discounted): {g5_to_p4}")
 
         # Calculate net impact for each team
         # DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(set(outgoing.index) | set(incoming.index))
+
+        # Filter to FBS teams only for the final results
+        if fbs_only and fbs_teams:
+            all_teams = [t for t in all_teams if t in fbs_teams]
+
         portal_impact = {}
 
         for team in all_teams:
-            out_ppa = outgoing.get(team, 0.0)
-            in_ppa = incoming.get(team, 0.0)
-            net_ppa = in_ppa - out_ppa
+            out_val = outgoing.get(team, 0.0)
+            in_val = incoming.get(team, 0.0)
+            net_val = in_val - out_val
 
-            # Scale the impact - raw PPA is too volatile
-            # Also cap extreme values
-            scaled_impact = net_ppa * portal_scale
-            scaled_impact = max(-0.15, min(0.15, scaled_impact))  # Cap at ±15%
+            # Scale the impact and apply tighter cap (±12%)
+            scaled_impact = net_val * portal_scale
+            scaled_impact = max(-impact_cap, min(impact_cap, scaled_impact))
 
             portal_impact[team] = scaled_impact
 
         # Log top winners/losers
-        sorted_impact = sorted(portal_impact.items(), key=lambda x: -x[1])
+        sorted_impact = sorted(portal_impact.items(), key=lambda x: (-x[1], x[0]))
         if sorted_impact:
-            logger.info("Top portal winners (adjusted returning production boost):")
+            logger.info("Top portal winners (position-weighted value):")
             for team, impact in sorted_impact[:5]:
-                logger.info(f"  {team}: +{impact:.1%}")
+                logger.info(f"  {team}: {impact:+.1%}")
             logger.info("Top portal losers:")
             for team, impact in sorted_impact[-5:]:
                 logger.info(f"  {team}: {impact:+.1%}")
