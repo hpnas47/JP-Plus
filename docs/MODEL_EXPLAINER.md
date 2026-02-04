@@ -104,8 +104,9 @@ JP+ includes a complete special teams model that captures the marginal point con
 
 After calculating base ratings, JP+ adjusts for:
 - **Home field advantage** (1.5 - 4.0 points, team-specific)
-- **Travel distance** (cross-country trips hurt)
+- **Travel distance and timezone** (cross-country trips hurt, timezone crossings add fatigue)
 - **Altitude** (playing at BYU, Air Force, or Colorado is tough)
+- **Correlated stack smoothing** (prevents over-prediction when HFA + travel + altitude combine)
 - **Situational factors** (bye weeks, lookahead spots, letdown games)
 - **FCS opponent penalty** (tiered: +18 pts for elite FCS, +32 pts for standard FCS)
 - **Special teams differential** (full ST PBTA difference: FG + Punt + Kickoff)
@@ -113,6 +114,21 @@ After calculating base ratings, JP+ adjusts for:
 - **Weather adjustment** (for totals: wind, cold, and precipitation penalties)
 
 **Team-Specific HFA:** Not all home fields are equal. LSU at night (4.0 pts) is much tougher than playing at Kent State (1.75 pts). JP+ uses curated HFA values for ~50 teams based on stadium environment, with conference-based defaults for others.
+
+**Travel Adjustments:** Cross-country travel hurts teams. JP+ applies two components:
+- **Timezone penalty:** ~0.5 pts per timezone crossed (slightly less going west since you gain time)
+- **Distance penalty:** 0.25-1.0 pts based on distance (300mi to 2000+ mi thresholds)
+
+However, short-distance games that happen to cross timezone lines (due to DST quirks or CT/ET border) shouldn't get the full penalty—there's no real travel fatigue for a 75-mile trip. JP+ dampens the timezone penalty based on distance:
+- **<400 miles:** No TZ penalty (e.g., Illinois @ Purdue)
+- **400-700 miles:** 50% TZ penalty (e.g., Arizona @ Colorado)
+- **>700 miles:** Full TZ penalty (true cross-country travel)
+
+**Correlated Stack Smoothing:** HFA, travel, and altitude adjustments all favor the home team—they're correlated. When a sea-level team travels cross-country to a high-altitude venue, all three stack together. Analysis showed high-stack games (>5 pts) over-predicted home team margins by ~2.3 pts. JP+ applies smoothing:
+1. When altitude and long travel combine, reduce altitude effect by 30% (they partially overlap)
+2. When combined stack exceeds 5 pts, reduce excess by 50%
+
+Example: If raw stack = 7 pts (3.5 HFA + 2.0 travel + 1.5 altitude), the smoothed stack = 6 pts.
 
 **Trajectory Modifier:** HFA isn't static—it changes as programs rise or fall. A team that's dramatically improved (like Vanderbilt or Indiana in 2024) will have more energized crowds and a stronger home environment. JP+ compares the prior year's win rate to the historical baseline (3 years before) and adjusts HFA by up to ±0.5 points. This is calculated once at the start of each season and locked in. Rising programs get a boost; declining programs get a penalty.
 

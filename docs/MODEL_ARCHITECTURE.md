@@ -145,7 +145,7 @@ EFM ratings feed into `SpreadGenerator` which applies additional adjustments:
 | Adjustment | Typical Range | Description |
 |------------|---------------|-------------|
 | **Home Field Advantage** | 1.5-4.0 pts | Team-specific HFA based on stadium environment |
-| **Travel** | 0-1.5 pts | Distance and time zone penalties |
+| **Travel** | 0-2.5 pts | Distance and time zone penalties (see below) |
 | **Altitude** | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
 | **Situational** | -2 to +2 pts | Lookahead, letdown, rivalry, bye week |
 | **FCS Penalty** | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
@@ -246,6 +246,54 @@ QB injuries are the single biggest source of prediction error that JP+ otherwise
 **Usage:** `python scripts/run_weekly.py --qb-out Georgia Texas` applies the adjustment for those teams.
 
 **Note:** Texas is unusual—Arch Manning (backup) has better PPA than Ewers (starter), so the adjustment is positive. CFBD has no injury data; flagging requires manual input.
+
+### Correlated Stack Smoothing
+
+HFA, travel, and altitude adjustments are **correlated**—they all favor the home team in the same scenarios. When a sea-level team travels cross-country to a high-altitude venue, all three stack together. Analysis of 2024-2025 data revealed that high-stack games (>5 pts combined) systematically over-predicted home team margins by ~2.3 points.
+
+**The Fix:** JP+ applies smoothing to prevent over-stacking:
+
+1. **Altitude-Travel Interaction:** When travel > 1.5 pts AND altitude > 0, reduce altitude by 30%. These effects partially overlap (both penalize away team for game conditions).
+
+2. **Soft Cap:** When combined stack exceeds 5 pts:
+   - Excess above 5 pts is reduced by 50%
+   - Reduction distributed proportionally across all three components
+   - Example: Stack of 7 → 5 + (7-5)×0.5 = 6 effective
+
+**Results:**
+| Metric | Before | After |
+|--------|--------|-------|
+| Max stack | 6.41 pts | 5.71 pts |
+| Top 10% ME | +2.17 | +2.09 |
+| Error-per-stack-point | 0.94 | 0.88 |
+
+Smoothing is enabled by default. Disable with `smooth_stacks=False` in SpreadGenerator.
+
+### Travel Adjustment Detail
+
+Travel adjustments account for timezone crossings and distance:
+
+| Component | Value | Condition |
+|-----------|-------|-----------|
+| **Timezone (East)** | 0.5 pts/zone | Full penalty (losing time) |
+| **Timezone (West)** | 0.4 pts/zone | 80% penalty (gaining time) |
+| **Distance** | 0.25 pts | 300-1000 miles |
+| **Distance** | 0.5 pts | 1000-2000 miles |
+| **Distance** | 1.0 pts | 2000+ miles |
+| **Hawaii Special** | +2.0 pts | Mainland → Hawaii |
+
+**Distance-Based TZ Dampening:** Analysis showed short-distance games crossing timezone lines (due to DST quirks or CT/ET border) were over-penalized. The 500-800mi TZ category showed +3.83 mean error vs -0.87 for no-TZ games.
+
+**Fix:** TZ penalty is reduced for regional games:
+- **<400 miles:** TZ penalty eliminated (e.g., Illinois @ Purdue)
+- **400-700 miles:** TZ penalty reduced by 50% (e.g., Arizona @ Colorado)
+- **>700 miles:** Full TZ penalty (true cross-country travel)
+
+| Matchup | Distance | Old TZ | New TZ |
+|---------|----------|--------|--------|
+| Illinois @ Purdue | 74 mi | 0.50 | **0.00** |
+| Arizona @ Colorado | 623 mi | 0.50 | **0.25** |
+| UCLA @ Rutgers | 2,421 mi | 1.50 | 1.50 |
 
 ### Pace Adjustment (Triple-Option)
 
@@ -704,6 +752,8 @@ The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 
 ## Changelog
 
 ### February 2026
+- **Implemented Correlated Stack Smoothing** - Fixed systematic over-prediction in high-stack games (HFA + travel + altitude combined). Analysis of 2024-2025 data revealed games with >5 pts combined adjustment over-predicted home team margins by ~2.3 pts. The fix applies two mechanisms: (1) **Altitude-travel interaction**: When travel > 1.5 pts AND altitude > 0, reduce altitude by 30% to account for partial overlap between effects; (2) **Soft cap**: When combined stack exceeds 5 pts, reduce excess by 50% and distribute reduction proportionally across all three components. Example: stack of 7 → 5 + (7-5)×0.5 = 6 effective. Results: max stack reduced from 6.41 to 5.71 pts, error-per-stack-point reduced from 0.94 to 0.88. Added `smooth_correlated_stack()` function to `spread_generator.py` with parameters `smooth_stacks`, `stack_cap_start`, `stack_cap_factor`, `altitude_travel_interaction`. Enabled by default.
+- **Added Distance-Based Timezone Penalty Dampening** - Fixed over-aggressive timezone penalty for short-distance regional games. Analysis showed 500-800mi games crossing timezone lines (due to DST quirks or CT/ET border) had +3.83 mean error vs -0.87 for no-TZ games. The fix: (1) **<400 miles**: TZ penalty eliminated entirely (truly regional games like Illinois @ Purdue); (2) **400-700 miles**: TZ penalty reduced by 50% (e.g., Arizona @ Colorado at 623mi now gets 0.25 pts instead of 0.50); (3) **>700 miles**: Full TZ penalty (true cross-country travel). This ensures timezone effects are only applied when there's meaningful travel fatigue. Updated `get_total_travel_adjustment()` in `travel.py`.
 - **Expanded Special Teams to Full PBTA Model** - Complete overhaul of special teams from FG-only to comprehensive FG + Punt + Kickoff model. All components now expressed as PBTA (Points Better Than Average) - the marginal point contribution per game compared to a league-average unit. Key changes: (1) Added `YARDS_TO_POINTS = 0.04` constant for field position value conversion, (2) Punt rating now converts net yards above expected (40 yds) to points + inside-20 bonus (+0.5 pts) + touchback penalty (-0.3 pts), (3) Kickoff rating combines coverage (touchback rate, return yards allowed) and returns (return yards gained), all converted to points, (4) Overall ST = simple sum of components (no weighting needed since all in points). FBS distribution: mean ~0, std ~1.0, 95% range [-2, +2] pts/game. Top 2024 ST unit: Vanderbilt (+2.34 pts/game), worst: UTEP (-2.83 pts/game). Added `calculate_punt_ratings_from_plays()`, `calculate_kickoff_ratings_from_plays()`, and `calculate_all_st_ratings_from_plays()` to `src/models/special_teams.py`.
 - **Implemented Neutral-Field Ridge Regression (MAJOR FIX)** - Fixed systematic -6.7 mean error caused by double-counting home field advantage. The issue: CFBD EPA data implicitly contains HFA (home teams naturally generate better EPA), so ridge regression learned team coefficients with HFA baked in. When SpreadGenerator added explicit HFA, this caused double-counting. The fix: Add a home field indicator column to the ridge regression design matrix (+1 for offense=home, -1 for offense=away, 0 for neutral). This separates true team strength from implicit HFA. The learned implicit HFA is ~0.006 SR (~0.6% success rate advantage) and ~0.02 IsoPPP (~0.8 pts combined)—much smaller than explicit HFA (~2.5 pts), confirming most HFA manifests at scoring/outcome level rather than play-level efficiency. Results: Mean error improved from -6.7 to -0.40 (2024) and +0.51 (2022-2024), a 94% reduction in systematic bias. ATS performance maintained at 50.9% overall, 56.2% at 5+ edge.
 - **Added Weather Adjustment Module** - New `WeatherAdjuster` class for totals prediction. Fetches weather data from CFBD API (`get_weather` endpoint) and calculates adjustments based on wind speed (>10 mph: -0.3 pts/mph, capped at -6.0), temperature (<40°F: -0.15 pts/degree, capped at -4.0), and precipitation (>0.02 in: -3.0 pts, >0.05 in: -5.0 pts). Indoor games (`game_indoors=True`) receive no adjustment. Added `get_weather()` method to `CFBDClient`. Weather data includes temperature, wind speed/direction, precipitation, snowfall, humidity, and weather condition text. Analysis of 2024 late-season games showed: 19/757 indoor games, temperatures ranging 16°F-86°F, wind up to 26 mph, 39 games with precipitation.
