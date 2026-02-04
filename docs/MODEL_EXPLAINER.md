@@ -205,34 +205,27 @@ By analyzing every play individually:
 
 ## JP+ Performance
 
-### 2025 Season Results
+### Multi-Year Backtest (2022-2025)
 
-| Metric | Value |
-|--------|-------|
-| MAE | 12.21 points |
-| Overall ATS | 51.9% (325-301) |
+Walk-forward backtest across 4 seasons. Model trained on data available at prediction time—no future leakage.
 
-#### ATS by Edge Threshold (2025)
+| Phase | Weeks | Games | MAE | ATS % | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|
+| Calibration | 1-3 | 597 | 14.75 | 47.1% | 48.7% |
+| **Core** | 4-15 | 2,485 | 12.54 | 50.8% | **52.8%** |
+| Postseason | 16+ | 176 | 13.41 | 45.1% | 48.7% |
+
+**The profitable zone is Weeks 4-15** (Core season). Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
+
+#### Core Season ATS by Edge (Weeks 4-15)
 
 | Edge | vs Closing Line | vs Opening Line |
 |------|-----------------|-----------------|
-| 3+ pts | 54.1% (172-146) | **55.3%** (189-153) |
-| 5+ pts | 55.4% (98-79) | **58.3%** (119-85) |
+| All picks | 51.0% (1238-1190) | 53.1% (1277-1130) |
+| 3+ pts | 51.8% (727-676) | **54.6%** (783-651) |
+| 5+ pts | 53.2% (454-400) | **57.0%** (516-389) |
 
-### Multi-Year Results (2022-2025)
-
-| Years | MAE | Overall ATS % |
-|-------|-----|---------------|
-| 2022-2025 | 12.37 | 51.0% |
-
-#### ATS Performance by Edge Threshold (Multi-Year, vs Closing)
-
-| Edge | Record | ATS % |
-|------|--------|-------|
-| 3+ pts | 612-521 | **54.0%** |
-| 5+ pts | 365-272 | **57.3%** |
-
-**Why opening lines are easier to beat:** Opening lines contain more inefficiencies. By closing, sharp money has moved lines toward true value. JP+ captures some of the same information that sharps use, so we see better performance against openers.
+**Why opening lines are easier to beat:** Opening lines contain more inefficiencies. By closing, sharp money has moved lines toward true value. JP+ captures some of the same information that sharps use, so we see better performance against openers. At 5+ point edge, we hit 57% vs opening lines.
 
 ### Accuracy by Game Margin
 
