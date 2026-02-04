@@ -203,6 +203,66 @@ All four integrity tasks completed:
 | ST vs EFM Double-Counting | ✅ Confirmed Independent | `eb018d7` |
 | Model Determinism | ✅ Fixed | `ca165de` |
 
+### Transfer Portal Logic Refactor
+
+Comprehensive overhaul of transfer portal evaluation in `src/models/preseason_priors.py`:
+
+**1. Scarcity-Based Position Weights (2026 Market)**
+
+Reflects that elite trench play is the primary driver of rating stability:
+
+| Tier | Position | Weight | Rationale |
+|------|----------|--------|-----------|
+| Premium | QB | 1.00 | Highest impact position |
+| Premium | OT | 0.90 | Elite blindside protector (90% of QB value) |
+| Anchor | EDGE | 0.75 | Premium pass rushers |
+| Anchor | IDL | 0.75 | Interior pressure + run stuffing |
+| Support | IOL | 0.60 | Interior OL (guards/centers) |
+| Support | LB | 0.55 | Run defense, coverage |
+| Support | S | 0.55 | Deep coverage, run support |
+| Support | TE | 0.50 | Hybrid role, increasing value |
+| Skill | WR | 0.45 | Higher replacement rate |
+| Skill | CB | 0.45 | Athletic translation |
+| Skill | RB | 0.40 | Most replaceable skill position |
+| Depth | ST | 0.15 | Limited snaps |
+
+**2. Level-Up Discount Logic (G5→P4 Transfers)**
+
+| Move Type | Trench Positions | Skill Positions |
+|-----------|------------------|-----------------|
+| P4 → P4 | 100% value | 100% value |
+| G5 → P4 | 75% value (Physicality Tax) | 90% value (Athleticism Discount) |
+| P4 → G5 | 110% value (proven at higher level) | 110% value |
+
+- **Physicality Tax (25%):** Applied to OT, IOL, IDL, LB, EDGE - steep curve in trench physicality at P4 level
+- **Athleticism Discount (10%):** Applied to WR, RB, CB, S - high-end speed translates more easily
+
+**3. Continuity Tax**
+
+- Factor: 0.90 (losses amplified by ~11%)
+- Rationale: Losing an incumbent hurts more than raw talent value suggests (chemistry, scheme fit, experience)
+
+**4. Volatility Management**
+
+- Impact cap tightened from ±15% to ±12%
+- FBS-only filtering (excludes FCS noise)
+- Conference-aware P4/G5 classification
+
+**5. Blue Blood Validation**
+
+Verified talent integration properly offsets portal losses:
+
+| Team (2024) | Portal Impact | Talent Score | Final Rating Δ |
+|-------------|---------------|--------------|----------------|
+| Alabama | -12.0% | +26.0 | -0.28 pts |
+| Ohio State | -12.0% | +24.6 | -0.32 pts |
+| Georgia | -12.0% | +25.2 | -0.40 pts |
+| Texas | -12.0% | +21.6 | -0.30 pts |
+
+**Conclusion:** Blue Bloods hitting -12% portal cap show minimal final rating impact (~0.3 pts) because talent composite correctly captures elite recruiting offset.
+
+**Commit:** `ab84a9a`
+
 ### Scripts Added
 
 | Script | Purpose | Usage |
