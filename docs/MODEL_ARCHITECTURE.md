@@ -80,10 +80,10 @@ For historical backtesting, lines are sourced from the [CFBD API](https://colleg
 
 For ongoing seasons, opening and closing lines are captured from [The Odds API](https://the-odds-api.com/):
 
-- **Opening lines**: Captured Sunday evening after lines post
+- **Opening lines**: Captured Sunday morning after lines post
 - **Closing lines**: Captured Saturday morning before games
 - **Cost**: 2 credits/week (1 for opening, 1 for closing)
-- **Primary sportsbooks**: FanDuel, DraftKings, BetMGM, Caesars, Bovada
+- **Provider priority**: FanDuel (posts first), DraftKings, BetMGM, Caesars, Bovada
 
 **Capture scripts:**
 - `scripts/weekly_odds_capture.py --opening` (run Sunday ~6 PM ET)

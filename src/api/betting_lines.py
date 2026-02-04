@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 # Path to The Odds API database
 ODDS_API_DB = Path(__file__).parent.parent.parent / "data" / "odds_api_lines.db"
 
+# Provider priority for The Odds API (FanDuel posts earliest on Sunday morning)
+ODDS_API_PROVIDERS = ["fanduel", "draftkings", "betmgm", "caesars", "bovada"]
+
+# Provider priority for CFBD (historical data - FanDuel not available)
+CFBD_PROVIDERS = ["DraftKings", "ESPN Bet", "Bovada"]
+
 
 @dataclass
 class BettingLine:
@@ -53,17 +59,24 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
     lines = {}
 
     try:
-        # Get opening lines for this year
-        opening_cursor = conn.execute("""
+        # Build provider priority CASE for ordering
+        priority_case = "CASE LOWER(l.sportsbook) "
+        for i, provider in enumerate(ODDS_API_PROVIDERS):
+            priority_case += f"WHEN '{provider}' THEN {i} "
+        priority_case += f"ELSE {len(ODDS_API_PROVIDERS)} END"
+
+        # Get opening lines for this year, ordered by provider priority
+        opening_cursor = conn.execute(f"""
             SELECT l.game_id, l.home_team, l.away_team, l.spread_home, l.sportsbook
             FROM odds_lines l
             JOIN odds_snapshots s ON l.snapshot_id = s.id
             WHERE s.snapshot_type LIKE ?
-            ORDER BY l.sportsbook  -- Prefer consistent ordering
+            ORDER BY l.game_id, {priority_case}
         """, (f"opening_{year}%",))
 
         for row in opening_cursor:
             game_id = row['game_id']
+            # First match per game wins (highest priority provider)
             if game_id not in lines:
                 lines[game_id] = BettingLine(
                     game_id=game_id,
@@ -75,13 +88,13 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
                     sportsbook=row['sportsbook'],
                 )
 
-        # Get closing lines for this year
-        closing_cursor = conn.execute("""
+        # Get closing lines for this year, ordered by provider priority
+        closing_cursor = conn.execute(f"""
             SELECT l.game_id, l.home_team, l.away_team, l.spread_home, l.sportsbook
             FROM odds_lines l
             JOIN odds_snapshots s ON l.snapshot_id = s.id
             WHERE s.snapshot_type LIKE ?
-            ORDER BY l.sportsbook
+            ORDER BY l.game_id, {priority_case}
         """, (f"closing_{year}%",))
 
         for row in closing_cursor:
@@ -127,7 +140,7 @@ def get_cfbd_lines(
         from src.api.cfbd_client import CFBDClient
         cfbd_client = CFBDClient()
 
-    preferred_providers = ["DraftKings", "ESPN Bet", "Bovada"]
+    preferred_providers = CFBD_PROVIDERS
     lines = {}
 
     try:
