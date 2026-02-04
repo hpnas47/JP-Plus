@@ -1,4 +1,11 @@
-"""Travel adjustments based on distance and timezone changes."""
+"""Travel adjustments based on distance and timezone changes.
+
+DST Policy (P2.12):
+Timezone offsets in config/teams.py represent effective differences during DST,
+since ~70% of CFB regular season is during DST (weeks 0-10). Arizona and Hawaii
+(which don't observe DST) use DST-era offsets. This introduces ~0.5 pt error for
+late-season games (weeks 11+, bowls) but is acceptable given the small sample.
+"""
 
 import logging
 from typing import Optional
@@ -177,9 +184,11 @@ class TravelAdjuster:
         """Special case adjustment for games involving Hawaii.
 
         Hawaii games have unique travel challenges:
-        - 5-6 hour time difference
+        - 6 hour time difference during DST (5 hrs after DST ends)
         - 2500+ miles from nearest continental team
         - Jet lag recovery time
+
+        Note: Hawaii's tz_offset uses DST-era value (6) per P2.12 policy.
 
         Args:
             away_team: Traveling team

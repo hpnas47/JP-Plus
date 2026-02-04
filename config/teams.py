@@ -178,6 +178,22 @@ def get_altitude_adjustment(home_team: str, away_team: str) -> float:
 
 # Team location data for travel calculations (latitude, longitude, timezone offset from ET)
 # Major FBS teams - timezone offset is hours behind Eastern Time
+#
+# DST POLICY (P2.12):
+# Offsets represent the EFFECTIVE timezone difference during DST (March-November),
+# since ~70% of CFB regular season games occur during DST (weeks 0-10).
+#
+# Special cases that don't observe DST:
+# - Arizona/Arizona State: UTC-7 year-round. During DST = same as Pacific (3 hrs behind ET).
+#   After DST ends (Nov), they're effectively Mountain (2 hrs behind ET).
+#   We use 3 (DST value) since most games are played during DST.
+# - Hawaii: UTC-10 year-round. During DST = 6 hrs behind ET (ET is UTC-4).
+#   After DST ends, = 5 hrs behind ET. We use 6 (DST value).
+#
+# Approximation error: For games after DST ends (typically weeks 11+, bowls, CFP),
+# Arizona is ~0.5 pts overpenalized, Hawaii is ~0.5 pts overpenalized.
+# This is acceptable given the small number of affected games.
+#
 TEAM_LOCATIONS: dict[str, dict] = {
     # SEC
     "Alabama": {"lat": 33.2084, "lon": -87.5503, "tz_offset": 1},
@@ -218,8 +234,8 @@ TEAM_LOCATIONS: dict[str, dict] = {
     "Wisconsin": {"lat": 43.0700, "lon": -89.4111, "tz_offset": 1},
 
     # Big 12
-    "Arizona": {"lat": 32.2289, "lon": -110.9486, "tz_offset": 2},
-    "Arizona State": {"lat": 33.4255, "lon": -111.9325, "tz_offset": 2},
+    "Arizona": {"lat": 32.2289, "lon": -110.9486, "tz_offset": 3},  # No DST: UTC-7 = PT during DST
+    "Arizona State": {"lat": 33.4255, "lon": -111.9325, "tz_offset": 3},  # No DST: UTC-7 = PT during DST
     "Baylor": {"lat": 31.5586, "lon": -97.1153, "tz_offset": 1},
     "BYU": {"lat": 40.2568, "lon": -111.6547, "tz_offset": 2},
     "Cincinnati": {"lat": 39.1317, "lon": -84.5153, "tz_offset": 0},
@@ -264,7 +280,7 @@ TEAM_LOCATIONS: dict[str, dict] = {
     "Air Force": {"lat": 38.9983, "lon": -104.8617, "tz_offset": 2},
     "Boise State": {"lat": 43.6036, "lon": -116.1972, "tz_offset": 2},
     "Fresno State": {"lat": 36.8139, "lon": -119.7558, "tz_offset": 3},
-    "Hawaii": {"lat": 21.2969, "lon": -157.8171, "tz_offset": 5},
+    "Hawaii": {"lat": 21.2969, "lon": -157.8171, "tz_offset": 6},  # No DST: UTC-10 = 6 hrs behind ET during DST
     "Memphis": {"lat": 35.1186, "lon": -89.9372, "tz_offset": 1},
     "Navy": {"lat": 38.9833, "lon": -76.4867, "tz_offset": 0},
     "Nevada": {"lat": 39.5461, "lon": -119.8172, "tz_offset": 3},
