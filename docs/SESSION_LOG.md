@@ -136,6 +136,24 @@
   - **Documentation added:** Extended docstring in `calculate_ratings()` with full mathematical justification
   - **Key insight:** Normalization is a linear transform that preserves all inter-team relationships; it can safely happen last
 
+- **Audited ST vs Offensive Efficiency (Confirmed No Double-Counting)**
+  - **Concern:** Does ST field position value overlap with offensive efficiency?
+  - **Finding:** NO double-counting - the metrics are mathematically independent
+  - **Why they're independent:**
+    1. EFM measures PLAY EFFICIENCY: Success Rate (% plays meeting yardage thresholds) and IsoPPP (EPA per successful play)
+    2. Neither metric uses starting field position (yards_to_goal not referenced in EFM)
+    3. ST measures FIELD POSITION VALUE: converts yards to points using YARDS_TO_POINTS = 0.04
+    4. They capture different information:
+       - EFM: "How efficiently does this team move the ball per play?"
+       - ST: "How much field position advantage does this team create?"
+  - **Integration design (P2.7):**
+    1. EFM calculates base_margin = home_overall - away_overall (efficiency only)
+    2. ST differential calculated separately via SpecialTeamsModel
+    3. Combined ADDITIVELY in SpreadGenerator (not multiplicatively)
+    4. EFM's special_teams_rating is DIAGNOSTIC ONLY (not in overall_rating)
+  - **Documentation added:** Extended EFM class docstring with "FIELD POSITION INDEPENDENCE" section
+  - **No refactoring needed:** Architecture already prevents double-counting by design
+
 ### Scripts Added
 
 | Script | Purpose | Usage |

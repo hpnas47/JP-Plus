@@ -190,6 +190,18 @@ class EfficiencyFoundationModel:
     - offensive_rating = efficiency + explosiveness + ball_security (turnovers)
     - defensive_rating = efficiency + explosiveness + takeaways (turnovers)
 
+    FIELD POSITION INDEPENDENCE (No Double-Counting with ST):
+    - EFM measures PLAY EFFICIENCY: Success Rate and IsoPPP
+    - Success Rate = % of plays meeting down-specific yardage thresholds
+    - IsoPPP = EPA per successful play (explosiveness)
+    - Neither metric uses starting field position (yards_to_goal)
+    - This is intentional: field position value is captured by SpecialTeamsModel
+    - ST uses YARDS_TO_POINTS = 0.04 to convert field position to points
+    - EFM and ST are independent metrics combined additively in SpreadGenerator
+    - No double-counting because they measure different things:
+      * EFM: "How efficiently does this team move the ball per play?"
+      * ST: "How much field position advantage does this team create?"
+
     Special Teams Integration (P2.7):
     - special_teams_rating is stored for DIAGNOSTIC/REPORTING purposes only
     - It is NOT included in overall_rating to avoid double-counting
