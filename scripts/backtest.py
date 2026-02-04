@@ -111,6 +111,7 @@ def fetch_season_data(
     failed_weeks = []
     successful_weeks = []
 
+    # Fetch regular season games (weeks 1-15)
     for week in range(1, 16):
         try:
             week_games = client.get_games(year, week)
@@ -137,6 +138,33 @@ def fetch_season_data(
             logger.warning(f"Failed to fetch games for {year} week {week}: {e}")
             continue  # Continue to next week instead of breaking
 
+    # Fetch postseason games (bowl games and playoffs)
+    try:
+        postseason_games = client.get_games(year=year, season_type="postseason")
+        postseason_count = 0
+        for game in postseason_games:
+            if game.home_points is None:
+                continue
+            # Assign postseason games to week 16+ based on start_date
+            # CFBD labels all postseason as "week 1", so we remap
+            games.append({
+                "id": game.id,
+                "year": year,
+                "week": 16,  # All bowl games go to week 16 for simplicity
+                "start_date": game.start_date,
+                "home_team": game.home_team,
+                "away_team": game.away_team,
+                "home_points": game.home_points,
+                "away_points": game.away_points,
+                "neutral_site": game.neutral_site or True,  # Bowl games are usually neutral
+            })
+            postseason_count += 1
+        if postseason_count > 0:
+            successful_weeks.append(16)
+            logger.info(f"Fetched {postseason_count} postseason games for {year}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch postseason games for {year}: {e}")
+
     # Log fetch summary
     if failed_weeks:
         logger.warning(
@@ -146,12 +174,13 @@ def fetch_season_data(
     else:
         logger.debug(f"Games fetch for {year}: all {len(successful_weeks)} weeks OK")
 
-    # Fetch betting lines
+    # Fetch betting lines (regular season + postseason)
     # Prefer DraftKings for consistency, fall back to any available
     preferred_providers = ["DraftKings", "ESPN Bet", "Bovada"]
-    try:
-        lines = client.get_betting_lines(year)
-        for game_lines in lines:
+
+    def process_betting_lines(lines_list):
+        """Process betting lines and append to betting list."""
+        for game_lines in lines_list:
             if not game_lines.lines:
                 continue
 
@@ -172,7 +201,6 @@ def fetch_season_data(
             if selected_line and selected_line.spread is not None:
                 # CFBD spread is already from home team perspective
                 # (negative = home favored, positive = away favored)
-                # Capture both opening and closing lines
                 betting.append({
                     "game_id": game_lines.id,
                     "home_team": game_lines.home_team,
@@ -182,6 +210,17 @@ def fetch_season_data(
                     "over_under": selected_line.over_under,
                     "provider": selected_line.provider,
                 })
+
+    try:
+        # Regular season betting lines
+        regular_lines = client.get_betting_lines(year, season_type="regular")
+        process_betting_lines(regular_lines)
+
+        # Postseason betting lines
+        postseason_lines = client.get_betting_lines(year, season_type="postseason")
+        process_betting_lines(postseason_lines)
+        if postseason_lines:
+            logger.info(f"Fetched {len([l for l in postseason_lines if l.lines])} postseason betting lines for {year}")
     except Exception as e:
         logger.warning(f"Error fetching betting lines: {e}")
 
@@ -284,6 +323,64 @@ def fetch_season_plays(
             logger.warning(f"Failed to fetch plays for {year} week {week}: {e}")
             continue  # Continue to next week instead of breaking
 
+    # Fetch postseason plays (bowl games and playoffs)
+    try:
+        postseason_plays = client.get_plays(year, week=1, season_type="postseason")
+        postseason_play_count = 0
+        for play in postseason_plays:
+            play_type = play.play_type or ""
+
+            # Collect turnover plays
+            if play_type in TURNOVER_PLAY_TYPES:
+                turnover_plays.append({
+                    "week": 16,  # Map to week 16 for consistency
+                    "game_id": play.game_id,
+                    "offense": play.offense,
+                    "defense": play.defense,
+                    "play_type": play_type,
+                })
+
+            # Collect special teams plays
+            if any(st in play_type for st in ["Field Goal", "Punt", "Kickoff"]):
+                st_plays.append({
+                    "week": 16,
+                    "game_id": play.game_id,
+                    "offense": play.offense,
+                    "defense": play.defense,
+                    "play_type": play_type,
+                    "play_text": play.play_text,
+                })
+
+            # Collect scrimmage plays with PPA
+            if (play.ppa is not None and
+                play.down is not None and
+                play_type in SCRIMMAGE_PLAY_TYPES and
+                play.distance is not None and play.distance >= 0):
+                efficiency_plays.append({
+                    "week": 16,
+                    "game_id": play.game_id,
+                    "down": play.down,
+                    "distance": play.distance,
+                    "yards_gained": play.yards_gained or 0,
+                    "play_type": play_type,
+                    "play_text": play.play_text,
+                    "offense": play.offense,
+                    "defense": play.defense,
+                    "period": play.period,
+                    "ppa": play.ppa,
+                    "yards_to_goal": play.yards_to_goal,
+                    "offense_score": play.offense_score or 0,
+                    "defense_score": play.defense_score or 0,
+                    "home_team": play.home,
+                })
+                postseason_play_count += 1
+
+        if postseason_play_count > 0:
+            successful_weeks.append(16)
+            logger.info(f"Fetched {postseason_play_count} postseason efficiency plays for {year}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch postseason plays for {year}: {e}")
+
     # Log fetch summary
     if failed_weeks:
         logger.warning(
@@ -354,7 +451,7 @@ def walk_forward_predict(
     games_df: pl.DataFrame,
     efficiency_plays_df: pl.DataFrame,
     fbs_teams: set[str],
-    start_week: int = 4,
+    start_week: int = 1,
     preseason_priors: Optional[PreseasonPriors] = None,
     hfa_value: float = 2.5,
     prior_weight: int = 8,
@@ -947,6 +1044,139 @@ def calculate_clv_report(ats_df: pd.DataFrame) -> dict:
     return results
 
 
+def get_phase(week: int) -> str:
+    """Categorize a week into a season phase.
+
+    Args:
+        week: Week number
+
+    Returns:
+        Phase name: 'Phase 1 (Calibration)', 'Phase 2 (Core)', or 'Phase 3 (Postseason)'
+    """
+    if week <= 3:
+        return "Phase 1 (Calibration)"
+    elif week <= 15:
+        return "Phase 2 (Core)"
+    else:
+        return "Phase 3 (Postseason)"
+
+
+def calculate_phase_metrics(df: pd.DataFrame, phase_col: str = "phase") -> pd.DataFrame:
+    """Calculate metrics by phase.
+
+    Args:
+        df: DataFrame with predictions/ATS results
+        phase_col: Column containing phase labels
+
+    Returns:
+        DataFrame with metrics per phase
+    """
+    results = []
+
+    for phase in ["Phase 1 (Calibration)", "Phase 2 (Core)", "Phase 3 (Postseason)"]:
+        phase_df = df[df[phase_col] == phase]
+
+        if len(phase_df) == 0:
+            continue
+
+        metrics = {
+            "Phase": phase,
+            "Games": len(phase_df),
+        }
+
+        # MAE and RMSE (if abs_error column exists)
+        if "abs_error" in phase_df.columns:
+            metrics["MAE"] = phase_df["abs_error"].mean()
+            metrics["RMSE"] = np.sqrt((phase_df["error"] ** 2).mean())
+
+        # MAE vs Closing (if we have both predicted_spread and spread_close)
+        if "predicted_spread" in phase_df.columns and "spread_close" in phase_df.columns:
+            with_close = phase_df[phase_df["spread_close"].notna()]
+            if len(with_close) > 0:
+                model_vegas = -with_close["predicted_spread"]
+                mae_vs_close = (model_vegas - with_close["spread_close"]).abs().mean()
+                metrics["MAE vs Close"] = mae_vs_close
+
+        # ATS metrics (if ats_win column exists)
+        if "ats_win" in phase_df.columns:
+            wins = phase_df["ats_win"].sum()
+            pushes = phase_df["ats_push"].sum()
+            losses = len(phase_df) - wins - pushes
+            total = wins + losses
+            metrics["ATS Record"] = f"{int(wins)}-{int(losses)}-{int(pushes)}"
+            metrics["ATS %"] = wins / total * 100 if total > 0 else 0
+
+            # 5+ edge subset
+            edge_5 = phase_df[phase_df["edge"] >= 5]
+            if len(edge_5) > 0:
+                e_wins = edge_5["ats_win"].sum()
+                e_losses = len(edge_5) - e_wins - edge_5["ats_push"].sum()
+                e_total = e_wins + e_losses
+                metrics["5+ Edge"] = f"{int(e_wins)}-{int(e_losses)} ({e_wins/e_total*100:.1f}%)" if e_total > 0 else "N/A"
+
+        # CLV (if clv column exists)
+        if "clv" in phase_df.columns:
+            clv_df = phase_df[phase_df["clv"].notna()]
+            if len(clv_df) > 0:
+                metrics["Mean CLV"] = clv_df["clv"].mean()
+
+        results.append(metrics)
+
+    return pd.DataFrame(results)
+
+
+def print_phase_report(ats_df: pd.DataFrame, predictions_df: pd.DataFrame = None) -> None:
+    """Print phase-by-phase performance report.
+
+    Args:
+        ats_df: DataFrame with ATS results (has week column)
+        predictions_df: DataFrame with prediction errors (optional, for MAE)
+    """
+    if ats_df is None or ats_df.empty:
+        print("\nPhase Report: No ATS data available")
+        return
+
+    # Add phase column
+    df = ats_df.copy()
+    df["phase"] = df["week"].apply(get_phase)
+
+    # If predictions_df provided, merge in error columns
+    if predictions_df is not None and not predictions_df.empty:
+        if "abs_error" not in df.columns and "abs_error" in predictions_df.columns:
+            # Merge on game_id if available
+            if "game_id" in df.columns and "game_id" in predictions_df.columns:
+                error_cols = predictions_df[["game_id", "abs_error", "error"]].drop_duplicates()
+                df = df.merge(error_cols, on="game_id", how="left")
+
+    phase_metrics = calculate_phase_metrics(df)
+
+    if phase_metrics.empty:
+        print("\nPhase Report: No phase data available")
+        return
+
+    print("\n" + "=" * 80)
+    print("PHASE-BY-PHASE PERFORMANCE")
+    print("=" * 80)
+    print("\nPhase 1 (Calibration): Weeks 1-3   - Heavy preseason prior reliance")
+    print("Phase 2 (Core):        Weeks 4-15  - Regular season with in-season data")
+    print("Phase 3 (Postseason):  Weeks 16+   - Bowl games and playoffs")
+    print()
+
+    # Format and print table
+    display_cols = ["Phase", "Games", "MAE", "MAE vs Close", "ATS %", "5+ Edge", "Mean CLV"]
+    available_cols = [c for c in display_cols if c in phase_metrics.columns]
+
+    # Format numeric columns
+    for col in ["MAE", "MAE vs Close", "ATS %", "Mean CLV"]:
+        if col in phase_metrics.columns:
+            phase_metrics[col] = phase_metrics[col].apply(
+                lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"
+            )
+
+    print(phase_metrics[available_cols].to_string(index=False))
+    print()
+
+
 def print_clv_report(ats_df: pd.DataFrame) -> None:
     """Print CLV report to console.
 
@@ -1119,7 +1349,7 @@ def fetch_all_season_data(
 
 def run_backtest(
     years: list[int],
-    start_week: int = 4,
+    start_week: int = 1,
     ridge_alpha: float = 50.0,
     use_priors: bool = True,
     hfa_value: float = 2.5,
@@ -1232,7 +1462,7 @@ def run_backtest(
 
 def run_sweep(
     years: list[int],
-    start_week: int = 4,
+    start_week: int = 1,
     use_priors: bool = True,
 ) -> pd.DataFrame:
     """Run grid search over EFM parameters.
@@ -1376,6 +1606,10 @@ def print_results(results: dict, ats_df: pd.DataFrame = None) -> None:
     if ats_df is not None and not ats_df.empty:
         print_clv_report(ats_df)
 
+    # Phase-by-Phase Report
+    if ats_df is not None and not ats_df.empty:
+        print_phase_report(ats_df, predictions_df)
+
     # P3.4: Sanity Report
     print_prediction_sanity_report(results, ats_df)
 
@@ -1481,8 +1715,8 @@ def main():
     parser.add_argument(
         "--start-week",
         type=int,
-        default=4,
-        help="First week to start predictions",
+        default=1,
+        help="First week to start predictions (default: 1 for full season)",
     )
     parser.add_argument(
         "--alpha",
