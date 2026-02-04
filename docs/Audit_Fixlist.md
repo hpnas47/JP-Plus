@@ -147,13 +147,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Consolidate garbage time threshold configuration so EFM uses a single source of truth (preferably Settings). Remove redundant/overlapping garbage time logic and add a test verifying garbage time classification behaves as intended by quarter.
   - **Notes:** FIXED 2026-02-03. Refactored `is_garbage_time()` to use Settings thresholds (Q1:28, Q2:24, Q3:21, Q4:16) instead of hardcoded overlapping conditions. Old logic had no Q1/Q2 detection and Q4>14; new uses per-quarter thresholds from Settings. Clean single-source lookup: `thresholds.get(quarter)`. Verified with 12 test cases (all boundaries + interior). Backtest: MAE 12.58, ATS 52.2% (improved from 51.5%), 3+ edge 53.7%.
 
-- [ ] **P2.5 Fix normalization of offense/defense components**
+- [x] **P2.5 Fix normalization of offense/defense components** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** O/D centered using `overall_mean/2`, which is not generally valid.
   - **Acceptance criteria:** Components normalized consistently; intended relationships preserved.
   - **AI nudge prompt:**
     > Fix the rating normalization logic so offense and defense components are centered/scaled in a mathematically consistent way (not assuming overall_mean/2). Ensure component relationships remain interpretable and consistent after normalization.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Refactored `_normalize_ratings()` to center each component by its own mean instead of assuming `overall_mean/2`. Now computes separate means for offense, defense, turnover, efficiency, and explosiveness. Uses uniform scale factor (from overall std → 12.0). Relationship `overall = off + def + 0.1*TO` preserved with zero error. All components now have mean=0 (interpretable). Old method left asymmetric means (e.g., mean(off)=+8, mean(def)=-8). Added debug logging for component means.
 
 - [ ] **P2.6 Split turnovers into offense vs defense components**
   - **Files:** `src/models/efficiency_foundation_model.py`

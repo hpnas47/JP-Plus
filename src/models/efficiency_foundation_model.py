@@ -677,11 +677,17 @@ class EfficiencyFoundationModel:
     def _normalize_ratings(self, fbs_teams: set[str]) -> None:
         """Normalize ratings to target standard deviation.
 
-        Scales all ratings so that:
-        - Mean of FBS teams = 0
-        - Std of FBS teams = self.rating_std (default 12.0)
+        Centers each component (O/D/TO/efficiency/explosiveness) by its own mean,
+        then scales all components uniformly. This ensures:
+        - Overall rating has mean=0, std=rating_std (for spread calculation)
+        - Each component is properly centered by its own mean
+        - Relationship overall = off + def + turnover_weight*TO is preserved
+        - Components remain interpretable (mean=0 for each)
 
-        This allows direct spread calculation: Team A - Team B = expected margin.
+        Math verification:
+        - mean(overall) = mean(off) + mean(def) + w*mean(to) by linearity
+        - After centering each component: new_overall = new_off + new_def + w*new_to
+        - This equals (overall - mean_overall) * scale, preserving the relationship
 
         Args:
             fbs_teams: Set of FBS team names (normalization based on these)
@@ -689,43 +695,54 @@ class EfficiencyFoundationModel:
         if not self.team_ratings:
             return
 
-        # Get current FBS ratings
-        fbs_overalls = [
-            r.overall_rating for team, r in self.team_ratings.items()
-            if team in fbs_teams
-        ]
+        # Get current FBS ratings for normalization stats
+        fbs_ratings = [r for team, r in self.team_ratings.items() if team in fbs_teams]
 
-        if not fbs_overalls:
+        if not fbs_ratings:
             return
 
-        current_mean = np.mean(fbs_overalls)
-        current_std = np.std(fbs_overalls)
+        # Calculate component means from FBS teams (P2.5 fix: each component by its own mean)
+        overall_values = [r.overall_rating for r in fbs_ratings]
+        offense_values = [r.offensive_rating for r in fbs_ratings]
+        defense_values = [r.defensive_rating for r in fbs_ratings]
+        turnover_values = [r.turnover_rating for r in fbs_ratings]
+        efficiency_values = [r.efficiency_rating for r in fbs_ratings]
+        explosiveness_values = [r.explosiveness_rating for r in fbs_ratings]
 
-        if current_std == 0:
+        overall_mean = np.mean(overall_values)
+        overall_std = np.std(overall_values)
+        offense_mean = np.mean(offense_values)
+        defense_mean = np.mean(defense_values)
+        turnover_mean = np.mean(turnover_values)
+        efficiency_mean = np.mean(efficiency_values)
+        explosiveness_mean = np.mean(explosiveness_values)
+
+        if overall_std == 0:
             return
 
-        # Calculate scale factor
-        scale = self.rating_std / current_std
+        # Calculate scale factor from overall rating
+        scale = self.rating_std / overall_std
 
         logger.info(
-            f"Normalizing ratings: mean {current_mean:.2f} → 0, "
-            f"std {current_std:.2f} → {self.rating_std:.1f} (scale={scale:.2f}x)"
+            f"Normalizing ratings: mean {overall_mean:.2f} → 0, "
+            f"std {overall_std:.2f} → {self.rating_std:.1f} (scale={scale:.2f}x)"
+        )
+        logger.debug(
+            f"Component means: off={offense_mean:.2f}, def={defense_mean:.2f}, "
+            f"to={turnover_mean:.2f}, eff={efficiency_mean:.2f}, exp={explosiveness_mean:.2f}"
         )
 
         # Apply normalization to all teams
+        # Each component is centered by its own mean, then scaled uniformly
         for team, rating in self.team_ratings.items():
-            # Scale and center
-            # Note on O/D centering: We use current_mean/2 for both offense and defense.
-            # This works because ridge regression with balanced data produces mean(off) ≈ mean(def) ≈ 0
-            # pre-normalization, so current_mean ≈ 0.1*mean(turnover). The /2 split correctly
-            # distributes any residual mean while maintaining overall = off + def + 0.1*TO.
-            # Verified empirically: formula holds exactly post-normalization with zero error.
-            new_overall = (rating.overall_rating - current_mean) * scale
-            new_offense = (rating.offensive_rating - current_mean / 2) * scale
-            new_defense = (rating.defensive_rating - current_mean / 2) * scale
-            new_efficiency = rating.efficiency_rating * scale
-            new_explosiveness = rating.explosiveness_rating * scale
-            new_turnover = rating.turnover_rating * scale
+            new_offense = (rating.offensive_rating - offense_mean) * scale
+            new_defense = (rating.defensive_rating - defense_mean) * scale
+            new_turnover = (rating.turnover_rating - turnover_mean) * scale
+            new_efficiency = (rating.efficiency_rating - efficiency_mean) * scale
+            new_explosiveness = (rating.explosiveness_rating - explosiveness_mean) * scale
+
+            # Overall = sum of centered components (preserves relationship)
+            new_overall = new_offense + new_defense + self.turnover_weight * new_turnover
 
             # Update the rating object
             self.team_ratings[team] = TeamEFMRating(
