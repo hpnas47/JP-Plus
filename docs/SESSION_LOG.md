@@ -156,6 +156,30 @@
     - Already O(teams) not O(plays), vectorization would require restructuring with minimal benefit
   - **Verification:** Backtest 2024 weeks 5-8 passed with identical numerical results
 
+- **P3.4: DataFrame Dtype Optimization (~75% memory reduction)**
+  - **Problem:** Default pandas dtypes (object, int64, float64) waste memory for columns with known ranges
+  - **Solution:** Created centralized `config/dtypes.py` with explicit dtype mappings
+  - **Dtype decisions:**
+    | Column Type | Examples | Dtype | Rationale |
+    |-------------|----------|-------|-----------|
+    | Team identifiers | offense, defense, home_team | `category` | ~130 unique values, 8x savings |
+    | Small integers | week, down, period | `int8` | Range 1-16, fits in -128 to 127 |
+    | Medium integers | year, distance, stars | `int16` | Range fits in -32768 to 32767 |
+    | Ratings/metrics | overall_rating, adj_sr | `float32` | 7 sig digits adequate |
+    | Precision-critical | ppa, yards_gained | `float64` | Ridge regression needs precision |
+  - **Files modified:**
+    1. `config/dtypes.py` (NEW): Centralized dtype configuration with:
+       - `CATEGORICAL_COLUMNS`, `INT8_COLUMNS`, `INT16_COLUMNS`, `FLOAT32_COLUMNS`
+       - `optimize_dtypes(df)`: Apply optimal dtypes to DataFrame
+       - `estimate_savings(df)`: Report memory savings
+    2. `scripts/backtest.py`: Apply `optimize_dtypes()` after Polars→Pandas conversion
+    3. `src/models/efficiency_foundation_model.py`: Import for potential future use
+  - **Memory impact:** 50,000-row play DataFrame: 4.58 MB → 1.14 MB (75% reduction)
+  - **Columns kept as float64 (precision required):**
+    - `ppa`: Raw EPA values used in ridge regression
+    - `yards_gained`: Accumulated in weighted sums
+  - **Verification:** Backtest 2024 weeks 5-6 passed with identical ATS results
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints

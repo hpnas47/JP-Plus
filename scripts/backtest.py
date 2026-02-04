@@ -25,6 +25,7 @@ sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
 from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER, SCRIMMAGE_PLAY_TYPES
+from config.dtypes import optimize_dtypes
 from src.api.cfbd_client import CFBDClient
 from src.data.processors import DataProcessor, RecencyWeighter
 from src.models.efficiency_foundation_model import (
@@ -530,8 +531,9 @@ def walk_forward_predict(
             continue
 
         # Convert to pandas for EFM (sklearn needs pandas/numpy)
-        train_plays_pd = train_plays_pl.to_pandas()
-        train_games_pd = games_df.filter(pl.col("week") < pred_week).to_pandas()
+        # P3.4: Apply optimized dtypes for memory efficiency
+        train_plays_pd = optimize_dtypes(train_plays_pl.to_pandas())
+        train_games_pd = optimize_dtypes(games_df.filter(pl.col("week") < pred_week).to_pandas())
 
         # DATA LEAKAGE GUARD: Verify no future data in training set
         if "week" in train_plays_pd.columns:
@@ -630,7 +632,8 @@ def walk_forward_predict(
             # Filter to ST plays before this week (Polars filtering)
             train_st_pl = st_plays_df.filter(pl.col("week") < pred_week)
             if len(train_st_pl) > 0:
-                train_st_pd = train_st_pl.to_pandas()
+                # P3.4: Apply optimized dtypes for memory efficiency
+                train_st_pd = optimize_dtypes(train_st_pl.to_pandas())
                 # DATA LEAKAGE GUARD: Verify ST plays are properly filtered
                 if "week" in train_st_pd.columns:
                     max_st_week = train_st_pd["week"].max()
@@ -665,7 +668,8 @@ def walk_forward_predict(
         week_games = games_df.filter(pl.col("week") == pred_week)
 
         # Convert games_df to pandas once for SpreadGenerator (it uses pandas internally)
-        games_df_pd = games_df.to_pandas()
+        # P3.4: Apply optimized dtypes for memory efficiency
+        games_df_pd = optimize_dtypes(games_df.to_pandas())
 
         for game in week_games.iter_rows(named=True):
             try:

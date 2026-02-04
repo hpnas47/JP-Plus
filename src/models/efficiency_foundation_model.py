@@ -27,6 +27,7 @@ from config.play_types import (
     SCRIMMAGE_PLAY_TYPES,
     NON_SCRIMMAGE_PLAY_TYPES,
 )
+from config.dtypes import optimize_dtypes, FLOAT32_COLUMNS
 
 logger = logging.getLogger(__name__)
 
