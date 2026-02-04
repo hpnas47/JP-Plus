@@ -215,6 +215,116 @@ class EfficiencyFoundationModel:
         self.learned_hfa_sr: Optional[float] = None  # Implicit HFA in success rate
         self.learned_hfa_isoppp: Optional[float] = None  # Implicit HFA in IsoPPP
 
+    def _validate_and_normalize_plays(self, plays_df: pd.DataFrame) -> pd.DataFrame:
+        """Validate required columns and normalize optional columns (P2.9).
+
+        Required columns (fail loudly if missing):
+        - offense, defense: Team identifiers
+        - down, distance, yards_gained: For success rate calculation
+        - offense_score, defense_score: For garbage time detection
+
+        Optional columns (safe fallback with warning):
+        - play_type: For scrimmage filtering (if missing, all plays used)
+        - period/quarter: For garbage time (normalized to 'period', default 1 with warning)
+        - ppa: For IsoPPP (NaN values dropped with warning)
+        - week: For time decay (only needed if time_decay < 1.0)
+        - game_id: For games played count
+        - home_team: For neutral-field ridge regression
+
+        Args:
+            plays_df: Raw play-by-play DataFrame
+
+        Returns:
+            Normalized DataFrame with validated columns
+
+        Raises:
+            ValueError: If required columns are missing
+        """
+        df = plays_df.copy()
+
+        # Define required columns
+        required_cols = ["offense", "defense", "down", "distance", "yards_gained",
+                        "offense_score", "defense_score"]
+        missing_required = [col for col in required_cols if col not in df.columns]
+
+        if missing_required:
+            raise ValueError(
+                f"EFM requires columns {missing_required} but they are missing. "
+                f"Available columns: {list(df.columns)}"
+            )
+
+        # Check for unexpected NaN in required columns
+        for col in required_cols:
+            nan_count = df[col].isna().sum()
+            if nan_count > 0:
+                logger.warning(
+                    f"Column '{col}' has {nan_count} NaN values ({nan_count/len(df)*100:.1f}%); "
+                    "these plays will be excluded from analysis"
+                )
+
+        # Normalize period/quarter column (P2.9: consistent naming)
+        if "period" not in df.columns:
+            if "quarter" in df.columns:
+                df["period"] = df["quarter"]
+                logger.debug("Normalized 'quarter' column to 'period'")
+            else:
+                # No period info - this will effectively disable garbage time detection
+                logger.warning(
+                    "No 'period' or 'quarter' column found; defaulting to period=1. "
+                    "This will DISABLE garbage time detection for all plays. "
+                    "Provide period/quarter data for accurate garbage time weighting."
+                )
+                df["period"] = 1
+
+        # Validate period values (should be 1-4 for regulation, 5+ for OT)
+        invalid_periods = ~df["period"].isin([1, 2, 3, 4, 5, 6, 7, 8])
+        invalid_count = invalid_periods.sum()
+        if invalid_count > 0:
+            logger.warning(
+                f"{invalid_count} plays have invalid period values; will be treated as period=1"
+            )
+            df.loc[invalid_periods, "period"] = 1
+
+        # Handle NaN in PPA column (P2.9: prevent NaN propagation)
+        if "ppa" in df.columns:
+            ppa_nan_count = df["ppa"].isna().sum()
+            if ppa_nan_count > 0:
+                ppa_nan_pct = ppa_nan_count / len(df) * 100
+                logger.warning(
+                    f"Column 'ppa' has {ppa_nan_count} NaN values ({ppa_nan_pct:.1f}%); "
+                    "these will be excluded from IsoPPP calculations"
+                )
+                # Don't drop rows here - just warn. NaN PPA will be handled in weighted calcs.
+
+        # Log optional column status
+        optional_cols = {
+            "play_type": "scrimmage filtering",
+            "week": "time decay weighting",
+            "game_id": "games played counting",
+            "home_team": "neutral-field ridge regression",
+        }
+        missing_optional = []
+        for col, purpose in optional_cols.items():
+            if col not in df.columns:
+                missing_optional.append(f"{col} ({purpose})")
+
+        if missing_optional:
+            logger.info(f"Optional columns not present: {', '.join(missing_optional)}")
+
+        # Special warning for time_decay without week column
+        if self.time_decay < 1.0 and "week" not in df.columns:
+            logger.warning(
+                f"time_decay={self.time_decay} but no 'week' column; "
+                "time decay will not be applied"
+            )
+
+        logger.info(
+            f"Validated {len(df)} plays: "
+            f"required columns OK, period column {'present' if 'period' in plays_df.columns or 'quarter' in plays_df.columns else 'MISSING (defaulted)'}"
+        )
+
+        return df
+
     def _prepare_plays(self, plays_df: pd.DataFrame) -> pd.DataFrame:
         """Filter and prepare plays for analysis.
 
@@ -228,8 +338,9 @@ class EfficiencyFoundationModel:
         Returns:
             Filtered DataFrame with success and garbage time flags
         """
-        initial_count = len(plays_df)
-        df = plays_df.copy()
+        # P2.9: Validate and normalize input data first
+        df = self._validate_and_normalize_plays(plays_df)
+        initial_count = len(df)
 
         # Filter to scrimmage plays only (P2.8 fix)
         # This excludes special teams, penalties, period markers, etc.
@@ -253,11 +364,19 @@ class EfficiencyFoundationModel:
                 logger.debug(f"Filtering {invalid_count} plays with invalid distance")
             df = df[~invalid_distance]
 
+        # P2.9: Filter plays with NaN in required columns for success calculation
+        required_for_success = ["down", "distance", "yards_gained", "offense_score", "defense_score"]
+        nan_mask = df[required_for_success].isna().any(axis=1)
+        nan_count = nan_mask.sum()
+        if nan_count > 0:
+            logger.debug(f"Filtering {nan_count} plays with NaN in required columns")
+            df = df[~nan_mask]
+
         filtered_count = initial_count - len(df)
         if filtered_count > 0:
             logger.info(
                 f"Prepared {len(df)} plays for EFM "
-                f"(filtered {filtered_count} non-scrimmage/invalid plays)"
+                f"(filtered {filtered_count} non-scrimmage/invalid/NaN plays)"
             )
         else:
             logger.info(f"Prepared {len(df)} plays for EFM")
@@ -268,10 +387,10 @@ class EfficiencyFoundationModel:
             axis=1
         )
 
-        # Calculate garbage time flag
+        # Calculate garbage time flag (P2.9: uses normalized 'period' column)
         df["score_diff"] = (df["offense_score"] - df["defense_score"]).abs()
         df["is_garbage_time"] = df.apply(
-            lambda r: is_garbage_time(r.get("period", 1), r["score_diff"]),
+            lambda r: is_garbage_time(r["period"], r["score_diff"]),
             axis=1
         )
 
@@ -345,11 +464,16 @@ class EfficiencyFoundationModel:
 
                 # IsoPPP: EPA on successful plays only, WEIGHTED (P2.3 fix)
                 # Use same play weights as SR for consistency
+                # P2.9: Filter out NaN PPA values to prevent propagation
                 successful = off_plays[off_plays["is_success"]]
                 if len(successful) > 20 and "ppa" in successful.columns:
-                    succ_weights = successful["weight"]
-                    succ_ppa = successful["ppa"]
-                    off_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
+                    valid_ppa = successful[successful["ppa"].notna()]
+                    if len(valid_ppa) > 10:
+                        succ_weights = valid_ppa["weight"]
+                        succ_ppa = valid_ppa["ppa"]
+                        off_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
+                    else:
+                        off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
                 else:
                     off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
             else:
@@ -364,11 +488,16 @@ class EfficiencyFoundationModel:
                 def_sr[team] = (successes * weights).sum() / weights.sum()
 
                 # IsoPPP: EPA on successful plays only, WEIGHTED (P2.3 fix)
+                # P2.9: Filter out NaN PPA values to prevent propagation
                 successful = def_plays[def_plays["is_success"]]
                 if len(successful) > 20 and "ppa" in successful.columns:
-                    succ_weights = successful["weight"]
-                    succ_ppa = successful["ppa"]
-                    def_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
+                    valid_ppa = successful[successful["ppa"].notna()]
+                    if len(valid_ppa) > 10:
+                        succ_weights = valid_ppa["weight"]
+                        succ_ppa = valid_ppa["ppa"]
+                        def_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
+                    else:
+                        def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
                 else:
                     def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
             else:
