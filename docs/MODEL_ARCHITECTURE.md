@@ -806,6 +806,41 @@ The mean error is now essentially zero, confirming that double-counting has been
 
 The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 pts) applied by SpreadGenerator. This is expected—most HFA manifests at the scoring/outcome level (special teams, turnovers, momentum) rather than pure play-by-play efficiency.
 
+### 6. Opponent-Adjusted Metric Caching
+
+Ridge regression for Success Rate and IsoPPP is computationally intensive. During walk-forward backtesting, this led to O(n²) work accumulation—each prediction week recomputes from scratch, rebuilding the sparse design matrix and fitting the model.
+
+**Solution:** Module-level cache keyed by `(season, eval_week, metric_name, ridge_alpha, data_hash)`:
+
+```python
+# Cache key structure
+cache_key = (2024, 5, "is_success", 50.0, "a1b2c3d4e5f6")
+#            ^     ^   ^              ^      ^
+#            |     |   |              |      └─ Data fingerprint
+#            |     |   |              └─ Ridge alpha
+#            |     |   └─ Metric column
+#            |     └─ Max training week
+#            └─ Season year
+```
+
+**Why caching is safe:**
+- Ridge regression is deterministic: same inputs → same outputs
+- Cache key includes all parameters that affect results
+- `data_hash` guards against edge cases where same (season, week) has different data
+
+**Performance:**
+- Single backtest: Cache helps when same parameters are reused across iterations
+- Parameter sweep: Cache entries are keyed by alpha, preventing cross-contamination
+- Cache statistics logged at end of runs for monitoring
+
+**API:**
+```python
+from src.models.efficiency_foundation_model import (
+    clear_ridge_cache,      # Clear and return stats
+    get_ridge_cache_stats,  # Get hits, misses, size, hit_rate
+)
+```
+
 ---
 
 ## Open Items

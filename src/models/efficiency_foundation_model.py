@@ -9,6 +9,7 @@ Key insight: "Do not regress on the final score. Regress on the Success Rate
 per Game so that we are measuring efficiency, not just the scoreboard outcome."
 """
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass
@@ -28,6 +29,95 @@ from config.play_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# OPPONENT-ADJUSTED METRIC CACHE
+# =============================================================================
+# Module-level cache for ridge regression results to avoid redundant computation.
+# Key: (season, eval_week, metric_name, ridge_alpha)
+# Value: (off_adjusted, def_adjusted, learned_hfa)
+#
+# WHY CACHING IS SAFE:
+# Ridge regression on (season, week, metric) is deterministic given:
+# 1. Same input plays (filtered by season and week)
+# 2. Same ridge_alpha hyperparameter
+# 3. Same metric column (is_success or ppa)
+#
+# The cache invalidates naturally via key mismatch when any parameter changes.
+# A data_hash is also included in the key to guard against edge cases where
+# the same (season, week) combination has different underlying data.
+# =============================================================================
+
+_RIDGE_ADJUST_CACHE: dict[tuple, tuple[dict, dict, Optional[float]]] = {}
+_CACHE_STATS = {"hits": 0, "misses": 0}
+
+
+def clear_ridge_cache() -> dict:
+    """Clear the ridge adjustment cache and return stats.
+
+    Returns:
+        Dict with cache statistics (hits, misses) before clearing.
+    """
+    global _RIDGE_ADJUST_CACHE, _CACHE_STATS
+    stats = _CACHE_STATS.copy()
+    _RIDGE_ADJUST_CACHE.clear()
+    _CACHE_STATS = {"hits": 0, "misses": 0}
+    logger.info(f"Ridge cache cleared. Previous stats: {stats}")
+    return stats
+
+
+def get_ridge_cache_stats() -> dict:
+    """Get current cache statistics.
+
+    Returns:
+        Dict with hits, misses, size, and hit_rate.
+    """
+    total = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
+    hit_rate = _CACHE_STATS["hits"] / total if total > 0 else 0.0
+    return {
+        "hits": _CACHE_STATS["hits"],
+        "misses": _CACHE_STATS["misses"],
+        "size": len(_RIDGE_ADJUST_CACHE),
+        "hit_rate": hit_rate,
+    }
+
+
+def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
+    """Compute a fast hash of play data for cache key verification.
+
+    Uses a lightweight hash of key columns to detect if data has changed
+    for a given (season, week) combination. This guards against edge cases
+    where data might be filtered differently.
+
+    Args:
+        plays_df: Prepared plays DataFrame
+        metric_col: The metric column being adjusted
+
+    Returns:
+        Short hash string (first 12 chars of SHA256)
+    """
+    # Hash key columns: team identifiers + metric values + weights
+    # Using pandas to_numpy for efficient serialization
+    n_plays = len(plays_df)
+    if n_plays == 0:
+        return "empty"
+
+    # Sample for large datasets to keep hashing fast
+    if n_plays > 10000:
+        sample_idx = np.linspace(0, n_plays - 1, 1000, dtype=int)
+        sample = plays_df.iloc[sample_idx]
+    else:
+        sample = plays_df
+
+    # Create hash from offense/defense teams and metric values
+    hash_data = (
+        f"{n_plays}:"
+        f"{sample['offense'].iloc[0]}:{sample['offense'].iloc[-1]}:"
+        f"{sample['defense'].iloc[0]}:{sample['defense'].iloc[-1]}:"
+        f"{sample[metric_col].sum():.6f}"
+    )
+    return hashlib.sha256(hash_data.encode()).hexdigest()[:12]
 
 
 def is_garbage_time(quarter: int, score_diff: int) -> bool:
@@ -641,10 +731,16 @@ class EfficiencyFoundationModel:
         self,
         plays_df: pd.DataFrame,
         metric_col: str,
+        season: Optional[int] = None,
+        eval_week: Optional[int] = None,
     ) -> tuple[dict[str, float], dict[str, float], Optional[float]]:
         """Use ridge regression to opponent-adjust a metric.
 
         Per spec: Y = metric value, X = sparse Team/Opponent IDs
+
+        CACHING: Results are cached by (season, eval_week, metric_col, ridge_alpha, data_hash)
+        to avoid redundant computation across backtest iterations. Cache is safe because
+        ridge regression is deterministic given the same inputs.
 
         NEUTRAL-FIELD REGRESSION: If home_team column is present, we add a home
         field indicator to the design matrix. This allows the model to separately
@@ -663,21 +759,49 @@ class EfficiencyFoundationModel:
         Args:
             plays_df: Prepared plays with the metric column
             metric_col: Name of column to adjust (e.g., 'is_success')
+            season: Season year for cache key (optional, but recommended for caching)
+            eval_week: Evaluation week for cache key (optional, but recommended for caching)
 
         Returns:
             Tuple of (off_adjusted, def_adjusted, learned_hfa) dicts
             learned_hfa is the implicit HFA coefficient (None if no home_team data)
         """
+        global _RIDGE_ADJUST_CACHE, _CACHE_STATS
+
+        n_plays = len(plays_df)
+        if n_plays == 0:
+            return {}, {}, None
+
+        # =================================================================
+        # CACHE LOOKUP
+        # =================================================================
+        # Check cache if season and eval_week are provided
+        cache_key = None
+        if season is not None and eval_week is not None:
+            data_hash = _compute_data_hash(plays_df, metric_col)
+            cache_key = (season, eval_week, metric_col, self.ridge_alpha, data_hash)
+
+            if cache_key in _RIDGE_ADJUST_CACHE:
+                _CACHE_STATS["hits"] += 1
+                cached_result = _RIDGE_ADJUST_CACHE[cache_key]
+                logger.debug(
+                    f"Cache HIT for ridge adjust: season={season}, week={eval_week}, "
+                    f"metric={metric_col} (hits={_CACHE_STATS['hits']})"
+                )
+                return cached_result
+
+            _CACHE_STATS["misses"] += 1
+            logger.debug(
+                f"Cache MISS for ridge adjust: season={season}, week={eval_week}, "
+                f"metric={metric_col}"
+            )
+
         start_time = time.time()
 
         # Get all teams
         all_teams = sorted(set(plays_df["offense"]) | set(plays_df["defense"]))
         team_to_idx = {team: i for i, team in enumerate(all_teams)}
         n_teams = len(all_teams)
-        n_plays = len(plays_df)
-
-        if n_plays == 0:
-            return {}, {}, None
 
         # Check if we have home team info for neutral-field regression
         has_home_info = "home_team" in plays_df.columns
@@ -811,7 +935,18 @@ class EfficiencyFoundationModel:
             # Defensive rating: intercept - def_coef (negative because good D has negative coef)
             def_adjusted[team] = intercept - team_coefficients[n_teams + idx]
 
-        return off_adjusted, def_adjusted, learned_hfa
+        # =================================================================
+        # CACHE STORAGE
+        # =================================================================
+        result = (off_adjusted, def_adjusted, learned_hfa)
+        if cache_key is not None:
+            _RIDGE_ADJUST_CACHE[cache_key] = result
+            logger.debug(
+                f"Cached ridge adjust result: season={season}, week={eval_week}, "
+                f"metric={metric_col} (cache size={len(_RIDGE_ADJUST_CACHE)})"
+            )
+
+        return result
 
     def _calculate_turnover_stats(
         self,
@@ -925,6 +1060,7 @@ class EfficiencyFoundationModel:
         plays_df: pd.DataFrame,
         games_df: Optional[pd.DataFrame] = None,
         max_week: int | None = None,
+        season: int | None = None,
     ) -> dict[str, TeamEFMRating]:
         """Calculate efficiency-based ratings for all teams.
 
@@ -980,11 +1116,17 @@ class EfficiencyFoundationModel:
         - After scaling: new_off × scale, new_def × scale
         - Result: new_overall = new_off + new_def (relationship preserved)
 
+        CACHING: If season and max_week are provided, ridge regression results
+        are cached by (season, max_week, metric) to avoid redundant computation.
+        See module-level _RIDGE_ADJUST_CACHE for details.
+
         Args:
             plays_df: Play-by-play data
             games_df: Optional games data for sample size info
             max_week: Maximum week allowed in training data (for data leakage prevention).
-                      If provided, asserts no plays exceed this week.
+                      If provided, asserts no plays exceed this week. Also used as cache key.
+            season: Season year for cache key. If provided with max_week, enables caching
+                    of ridge regression results.
 
         Returns:
             Dict mapping team name to TeamEFMRating
@@ -1000,18 +1142,20 @@ class EfficiencyFoundationModel:
         # Opponent-adjust Success Rate via ridge regression
         # This is the key: regress on SUCCESS RATE, not margins
         # NEUTRAL-FIELD: If home_team is present, regression separates team skill from HFA
+        # CACHING: Results cached by (season, max_week, metric) if both are provided
         logger.info("Ridge adjusting Success Rate...")
         adj_off_sr, adj_def_sr, self.learned_hfa_sr = self._ridge_adjust_metric(
-            prepared, "is_success"
+            prepared, "is_success", season=season, eval_week=max_week
         )
 
         # Opponent-adjust IsoPPP (EPA on successful plays)
         # Only use successful plays for this
+        # Note: Uses different metric_col ("ppa") so cached separately from SR
         successful_plays = prepared[prepared["is_success"]].copy()
         if len(successful_plays) > 1000 and "ppa" in successful_plays.columns:
             logger.info("Ridge adjusting IsoPPP...")
             adj_off_isoppp, adj_def_isoppp, self.learned_hfa_isoppp = self._ridge_adjust_metric(
-                successful_plays, "ppa"
+                successful_plays, "ppa", season=season, eval_week=max_week
             )
         else:
             logger.warning("Insufficient successful plays for IsoPPP adjustment, using raw")

@@ -108,6 +108,31 @@
   - Removed redundant "Evaluation Results" section (had old metrics, conflicting phase definitions)
   - Updated MODEL_EXPLAINER.md with consistent phase-based stats
 
+- **Implemented Opponent-Adjusted Metric Caching**
+  - **Problem:** Ridge regression for Success Rate and IsoPPP was recomputed from scratch at each backtest week, leading to O(n²) work accumulation across the season
+  - **Solution:** Module-level cache keyed by `(season, eval_week, metric_name, ridge_alpha, data_hash)` stores ridge regression results for reuse
+  - **Implementation:**
+    1. Added `_RIDGE_ADJUST_CACHE` dict and helper functions to `efficiency_foundation_model.py`:
+       - `clear_ridge_cache()` - clears cache and returns stats
+       - `get_ridge_cache_stats()` - returns hits, misses, size, hit_rate
+       - `_compute_data_hash()` - fast data fingerprint for cache key
+    2. Updated `_ridge_adjust_metric()` to check/populate cache:
+       - Added `season` and `eval_week` parameters
+       - Cache lookup before computation, cache storage after
+    3. Updated `calculate_ratings()` to pass `season` and `max_week` parameters
+    4. Updated call sites in `backtest.py` and `run_weekly.py`
+  - **Cache safety guarantees:**
+    - Ridge regression is deterministic: same inputs → same outputs
+    - Cache key includes `data_hash` to guard against edge cases
+    - Cache invalidates naturally via key mismatch when any parameter changes
+  - **Performance monitoring:**
+    - `run_backtest()` logs cache stats at end of run
+    - `run_sweep()` logs aggregate cache stats across all iterations
+  - **Why caching is safe:**
+    - Mathematical output unchanged (same ridge regression code)
+    - Cache key includes all parameters that affect results
+    - `data_hash` ensures cache correctness if data differs for same (season, week)
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints

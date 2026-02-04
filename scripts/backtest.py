@@ -27,7 +27,11 @@ from config.settings import get_settings
 from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER, SCRIMMAGE_PLAY_TYPES
 from src.api.cfbd_client import CFBDClient
 from src.data.processors import DataProcessor, RecencyWeighter
-from src.models.efficiency_foundation_model import EfficiencyFoundationModel
+from src.models.efficiency_foundation_model import (
+    EfficiencyFoundationModel,
+    clear_ridge_cache,
+    get_ridge_cache_stats,
+)
 from src.models.preseason_priors import PreseasonPriors
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster
@@ -553,7 +557,7 @@ def walk_forward_predict(
             asymmetric_garbage=asymmetric_garbage,
         )
 
-        efm.calculate_ratings(train_plays_pd, train_games_pd, max_week=pred_week - 1)
+        efm.calculate_ratings(train_plays_pd, train_games_pd, max_week=pred_week - 1, season=year)
 
         # Get ratings directly from EFM (full precision, already normalized to std=12)
         # IMPORTANT: Do NOT use get_ratings_df() here - it rounds to 1 decimal place
@@ -1408,6 +1412,7 @@ def run_backtest(
     use_portal: bool = True,
     portal_scale: float = 0.15,
     use_opening_line: bool = False,
+    clear_cache: bool = True,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -1429,10 +1434,18 @@ def run_backtest(
         use_portal: Whether to incorporate transfer portal into preseason priors
         portal_scale: How much to weight portal impact (default 0.15)
         use_opening_line: If True, use opening lines for ATS; if False, use closing lines (default)
+        clear_cache: Whether to clear ridge adjustment cache at start (default True)
 
     Returns:
         Dictionary with backtest results
     """
+    # Optionally clear ridge adjustment cache at start of backtest
+    # This ensures deterministic results across runs while enabling
+    # within-run caching for repeated (season, week, metric) lookups
+    # Set clear_cache=False when called from sweep to preserve cache across runs
+    if clear_cache:
+        clear_ridge_cache()
+
     # Fetch data if not pre-cached
     if season_data is None:
         season_data = fetch_all_season_data(
@@ -1497,6 +1510,13 @@ def run_backtest(
     # Calculate overall metrics
     metrics = calculate_metrics(predictions_df, ats_df)
 
+    # Log ridge adjustment cache statistics
+    cache_stats = get_ridge_cache_stats()
+    logger.info(
+        f"Ridge cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
+        f"{cache_stats['size']} entries (hit rate: {cache_stats['hit_rate']:.1%})"
+    )
+
     return {
         "predictions": predictions_df,
         "ats_results": ats_df,
@@ -1540,6 +1560,10 @@ def run_sweep(
     print(f"turnover_wt:     {turnover_weight} (fixed)")
     print()
 
+    # Clear ridge cache once at start of sweep (cache is keyed by alpha, so
+    # different parameter combinations won't collide)
+    clear_ridge_cache()
+
     # Pre-fetch all season data once
     cached_data = fetch_all_season_data(years, use_priors=use_priors)
 
@@ -1557,6 +1581,7 @@ def run_sweep(
                 efficiency_weight=eff_wt,
                 explosiveness_weight=0.90 - eff_wt,  # 0.90 = 1.0 - turnover_weight
                 turnover_weight=turnover_weight,
+                clear_cache=False,  # Preserve cache across sweep iterations
             )
             metrics = result["metrics"]
 
@@ -1592,6 +1617,14 @@ def run_sweep(
 
     df = pd.DataFrame(sweep_results)
     df = df.sort_values("ATS%", ascending=False).reset_index(drop=True)
+
+    # Log ridge cache statistics for sweep
+    cache_stats = get_ridge_cache_stats()
+    print(
+        f"\nRidge cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
+        f"{cache_stats['size']} entries (hit rate: {cache_stats['hit_rate']:.1%})"
+    )
+
     return df
 
 

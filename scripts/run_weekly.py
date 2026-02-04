@@ -357,7 +357,7 @@ def run_predictions(
         efm = EfficiencyFoundationModel(
             ridge_alpha=settings.ridge_alpha if hasattr(settings, 'ridge_alpha') else 50.0,
         )
-        efm.calculate_ratings(plays_df, current_games_df)
+        efm.calculate_ratings(plays_df, current_games_df, max_week=week - 1, season=year)
 
         # Get team ratings from EFM
         team_ratings = {
