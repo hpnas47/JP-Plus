@@ -376,6 +376,11 @@ class EfficiencyFoundationModel:
         self.learned_hfa_sr: Optional[float] = None  # Implicit HFA in success rate
         self.learned_hfa_isoppp: Optional[float] = None  # Implicit HFA in IsoPPP
 
+        # P3.6: Canonical team index - computed once, reused across pipeline
+        # Eliminates redundant sorted(set(...) | set(...)) calls
+        self._canonical_teams: Optional[list[str]] = None
+        self._team_to_idx: Optional[dict[str, int]] = None
+
     def _validate_and_normalize_plays(self, plays_df: pd.DataFrame) -> pd.DataFrame:
         """Validate required columns and normalize optional columns (P2.9).
 
@@ -715,8 +720,10 @@ class EfficiencyFoundationModel:
                         def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
 
         # Fill in missing teams with league average
-        # DETERMINISM: Sort for consistent iteration order
-        all_teams = sorted(set(off_grouped.index) | set(def_grouped.index))
+        # P3.6: Use canonical team index if available, otherwise compute
+        all_teams = self._canonical_teams if self._canonical_teams else sorted(
+            set(off_grouped.index) | set(def_grouped.index)
+        )
         for team in all_teams:
             if team not in off_sr:
                 off_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
@@ -806,9 +813,15 @@ class EfficiencyFoundationModel:
 
         start_time = time.time()
 
-        # Get all teams
-        all_teams = sorted(set(plays_df["offense"]) | set(plays_df["defense"]))
-        team_to_idx = {team: i for i, team in enumerate(all_teams)}
+        # P3.6: Use canonical team index if available (ensures consistent sparse matrix dimensions)
+        # This is critical for IsoPPP adjustment which uses a subset of plays (successful only)
+        # but still needs the same team dimensions as SR adjustment for consistency
+        if self._canonical_teams and self._team_to_idx:
+            all_teams = self._canonical_teams
+            team_to_idx = self._team_to_idx
+        else:
+            all_teams = sorted(set(plays_df["offense"]) | set(plays_df["defense"]))
+            team_to_idx = {team: i for i, team in enumerate(all_teams)}
         n_teams = len(all_teams)
 
         # Check if we have home team info for neutral-field regression
@@ -1143,6 +1156,12 @@ class EfficiencyFoundationModel:
         prepared = self._prepare_plays(plays_df, max_week=max_week)
         logger.info(f"Prepared {len(prepared)} plays for EFM")
 
+        # P3.6: Build canonical team index ONCE, reuse throughout pipeline
+        # This eliminates redundant sorted(set(...) | set(...)) calls
+        self._canonical_teams = sorted(set(prepared["offense"]) | set(prepared["defense"]))
+        self._team_to_idx = {team: i for i, team in enumerate(self._canonical_teams)}
+        logger.debug(f"Canonical team index: {len(self._canonical_teams)} teams")
+
         # Calculate raw metrics
         raw_off_sr, raw_def_sr, raw_off_isoppp, raw_def_isoppp = \
             self._calculate_raw_metrics(prepared)
@@ -1189,18 +1208,19 @@ class EfficiencyFoundationModel:
             self.turnover_margin = {}
 
         # Build team ratings
-        # DETERMINISM: Sort for consistent iteration order
-        all_teams = sorted(set(adj_off_sr.keys()) | set(adj_def_sr.keys()))
+        # P3.6: Use canonical team index (already sorted, computed once at start)
+        all_teams = self._canonical_teams
 
         # Calculate league averages from adjusted values
-        # DETERMINISM: Sort values for consistent floating-point summation order
-        avg_sr = np.mean(sorted(adj_off_sr.values()))
-        valid_isoppp = sorted([v for v in adj_off_isoppp.values() if v != self.LEAGUE_AVG_ISOPPP])
+        # P3.6: np.mean() is order-independent, no need to sort for determinism
+        avg_sr = np.mean(list(adj_off_sr.values()))
+        valid_isoppp = [v for v in adj_off_isoppp.values() if v != self.LEAGUE_AVG_ISOPPP]
         avg_isoppp = np.mean(valid_isoppp) if valid_isoppp else self.LEAGUE_AVG_ISOPPP
 
         # Calculate league average turnover rates for O/D split (P2.6)
-        avg_lost = np.mean(sorted(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
-        avg_forced = np.mean(sorted(self.turnovers_forced.values())) if self.turnovers_forced else 0.0
+        # P3.6: np.mean() is order-independent, no need to sort
+        avg_lost = np.mean(list(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
+        avg_forced = np.mean(list(self.turnovers_forced.values())) if self.turnovers_forced else 0.0
 
         for team in all_teams:
             # Get adjusted metrics

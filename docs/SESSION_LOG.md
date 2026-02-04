@@ -205,6 +205,30 @@
   - **Verification:** Backtest 2024 weeks 5-6 passed with identical results (MAE 12.60, ATS 51.0%)
   - **No SettingWithCopyWarning:** Verified safe with `python -W all`
 
+- **P3.6: Canonical Team Index (Eliminate Redundant Sorting)**
+  - **Problem:** Multiple `sorted(set(...) | set(...))` calls computed the same team list throughout the EFM pipeline:
+    - Line 724: `_calculate_raw_metrics()` - teams from groupby
+    - Line 817: `_ridge_adjust_metric()` - teams for sparse matrix
+    - Line 1212: `calculate_ratings()` - teams for final loop
+  - **Solution:** Compute canonical team index ONCE early in `calculate_ratings()`, reuse throughout
+  - **Changes:**
+    1. Added `_canonical_teams: list[str]` and `_team_to_idx: dict[str, int]` to EFM
+    2. Set at start of `calculate_ratings()` from prepared plays
+    3. Helper methods check for canonical index before computing
+  - **Additional optimization:** Removed unnecessary `sorted()` around `np.mean()`:
+    - `np.mean()` is mathematically order-independent
+    - Python dicts maintain insertion order since 3.7
+    - Removed on lines 1216-1222 (SR/IsoPPP/turnover averages)
+  - **Pattern guidance:**
+    | Use Case | Pattern |
+    |----------|---------|
+    | Internal iteration (determinism) | `sorted(set(...))` - keep for determinism |
+    | Multiple methods, same teams | Canonical index - compute once, reuse |
+    | User-facing output | Sort in `get_summary_df()` - keep for presentation |
+    | Math operations (mean, sum) | No sort needed - order-independent |
+  - **Files audited:** EFM (optimized), special_teams.py, finishing_drives.py, home_field.py (all clean)
+  - **Verification:** Backtest 2024 weeks 8-10 passed with identical results
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints
