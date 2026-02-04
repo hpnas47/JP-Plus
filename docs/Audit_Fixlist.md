@@ -195,13 +195,27 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Make turnover shrinkage depend on a reliable games-played count. Avoid arbitrary defaults; if games cannot be counted from the inputs, fail loudly or compute from available identifiers, and log the assumptions used.
   - **Notes:** FIXED 2026-02-03. Removed arbitrary default of 10 games that was biasing shrinkage. `_calculate_turnover_stats()` now requires reliable games count from either games_df (primary) or plays_df.game_id (fallback), and raises ValueError if neither available. Logs which source was used. In `calculate_ratings()` shrinkage loop, teams missing from turnover stats now compute games from plays via game_id, or fail loudly if no game_id column. Added warning for teams with 0 games found (potential data issue).
 
-- [ ] **P2.11 Add adjustment-stack diagnostics (travel + altitude + HFA)**
+- [x] **P2.11 Add adjustment-stack diagnostics (travel + altitude + HFA)** ✅ COMPLETE
   - **Files:** `src/predictions/spread_generator.py` + adjustment modules
   - **Issue:** Additive correlated adjustments can create outliers and hidden double-counting.
   - **Acceptance criteria:** Report games with large combined adjustments; evaluate error patterns; consider caps if needed.
   - **AI nudge prompt:**
     > Add diagnostics that identify games where multiple correlated adjustments stack (travel + altitude + HFA + situational). Report these cases and evaluate whether they have systematic prediction errors. If stacking creates outliers, consider reasonable caps or scaling.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Created `src/adjustments/diagnostics.py` with:
+    - `AdjustmentStack` dataclass tracking all adjustment components
+    - `AdjustmentStackDiagnostics` class for collecting and analyzing stacks
+    - `calculate_soft_cap()` function for optional capping of extreme stacks (cap_start=6, cap_factor=0.5)
+    - Thresholds: high stack >5 pts, extreme stack >7 pts
+    Added to SpreadGenerator:
+    - `correlated_stack` property on SpreadComponents (HFA + travel + altitude)
+    - Optional `track_diagnostics=True` parameter for per-game tracking
+    - `log_stack_diagnostics()` method for summary reporting
+    Added to backtest.py:
+    - `correlated_stack`, `hfa`, `travel`, `altitude` columns in prediction results
+    - `analyze_stack_diagnostics()` function comparing high-stack vs low-stack MAE/ME
+    - `log_stack_diagnostics()` called in `print_results()` for automatic reporting
+    Analysis shows whether high-stack games have systematic bias (ME > ±2.0 triggers warning).
+    Soft cap not enabled by default - use `calculate_soft_cap()` if analysis shows bias.
 
 - [x] **P2.12 Evaluate timezone offsets/DST policy (Hawaii/Arizona edge cases)** ✅ COMPLETE
   - **Files:** `config/teams.py`, `src/adjustments/travel.py`

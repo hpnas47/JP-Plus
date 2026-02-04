@@ -17,6 +17,11 @@ from src.adjustments.situational import SituationalAdjuster
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
+from src.adjustments.diagnostics import (
+    AdjustmentStackDiagnostics,
+    extract_stack_from_prediction,
+    HIGH_STACK_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +82,16 @@ class SpreadComponents:
     fcs_adjustment: float = 0.0  # Penalty when FBS plays FCS
     pace_adjustment: float = 0.0  # Compression for triple-option teams
     qb_adjustment: float = 0.0  # Adjustment when starting QB is out
+
+    @property
+    def correlated_stack(self) -> float:
+        """Sum of correlated adjustments (HFA + travel + altitude).
+
+        These adjustments are correlated because they all favor the home team
+        in the same scenarios. P2.11 tracks these to detect potential over-
+        penalization of away teams in extreme cases.
+        """
+        return self.home_field + self.travel + self.altitude
 
 
 @dataclass
@@ -140,6 +155,7 @@ class PredictedSpread:
             "situational": self.components.situational,
             "travel": self.components.travel,
             "altitude": self.components.altitude,
+            "correlated_stack": self.components.correlated_stack,  # P2.11: HFA+travel+altitude
             "special_teams": self.components.special_teams,
             "finishing_drives": self.components.finishing_drives,
             "early_down": self.components.early_down,
@@ -196,6 +212,7 @@ class SpreadGenerator:
         fcs_penalty_standard: Optional[float] = None,
         elite_fcs_teams: Optional[set[str]] = None,
         qb_adjuster: Optional[QBInjuryAdjuster] = None,
+        track_diagnostics: bool = False,
     ):
         """Initialize spread generator with model components.
 
@@ -215,6 +232,7 @@ class SpreadGenerator:
             fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
             elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS)
             qb_adjuster: QB injury adjuster (optional, for QB-out adjustments)
+            track_diagnostics: If True, track adjustment stacks for P2.11 analysis
         """
         self.ridge_model = ridge_model or RidgeRatingsModel()
         self.luck_regressor = luck_regressor or LuckRegressor()
@@ -240,6 +258,10 @@ class SpreadGenerator:
 
         # QB injury adjuster (optional)
         self.qb_adjuster = qb_adjuster
+
+        # P2.11: Adjustment stack diagnostics
+        self.track_diagnostics = track_diagnostics
+        self.diagnostics = AdjustmentStackDiagnostics() if track_diagnostics else None
 
     def _get_pace_adjustment(
         self, home_team: str, away_team: str, spread: float
@@ -497,7 +519,7 @@ class SpreadGenerator:
 
         # Store full precision values internally
         # Rounding is done at display/reporting time (see PredictedSpread.to_dict())
-        return PredictedSpread(
+        prediction = PredictedSpread(
             home_team=home_team,
             away_team=away_team,
             spread=spread,  # Full precision for MAE/ATS calculations
@@ -505,6 +527,21 @@ class SpreadGenerator:
             components=components,
             confidence=confidence,
         )
+
+        # P2.11: Track adjustment stack for diagnostics
+        if self.diagnostics is not None:
+            stack = extract_stack_from_prediction(prediction)
+            self.diagnostics.add_game(stack)
+            # Log warning for extreme stacks
+            if stack.is_extreme_stack:
+                logger.warning(
+                    f"Extreme adjustment stack ({stack.correlated_stack:.1f} pts): "
+                    f"{away_team} @ {home_team} "
+                    f"(HFA={components.home_field:.1f}, travel={components.travel:.1f}, "
+                    f"alt={components.altitude:.1f})"
+                )
+
+        return prediction
 
     def predict_week(
         self,
@@ -559,3 +596,58 @@ class SpreadGenerator:
         ).reset_index(drop=True)
 
         return df
+
+    def log_stack_diagnostics(self) -> None:
+        """Log adjustment stack diagnostics summary (P2.11).
+
+        Call this after making predictions to see high-stack games
+        and distribution statistics.
+        """
+        if self.diagnostics is None:
+            logger.info("Diagnostics not enabled (set track_diagnostics=True)")
+            return
+        self.diagnostics.log_summary()
+
+    def evaluate_stack_errors(
+        self,
+        predictions_df: pd.DataFrame,
+        results_df: pd.DataFrame,
+    ) -> dict:
+        """Evaluate prediction errors for high-stack vs low-stack games (P2.11).
+
+        Args:
+            predictions_df: DataFrame with predictions
+            results_df: DataFrame with actual results
+
+        Returns:
+            Dict with error analysis
+        """
+        if self.diagnostics is None:
+            return {"error": "Diagnostics not enabled"}
+        return self.diagnostics.evaluate_errors(predictions_df, results_df)
+
+    def log_stack_error_analysis(
+        self,
+        predictions_df: pd.DataFrame,
+        results_df: pd.DataFrame,
+    ) -> None:
+        """Log error analysis for high-stack vs low-stack games (P2.11)."""
+        if self.diagnostics is None:
+            logger.info("Diagnostics not enabled (set track_diagnostics=True)")
+            return
+        self.diagnostics.log_error_analysis(predictions_df, results_df)
+
+    def get_high_stack_games(self) -> list:
+        """Get games with high correlated stacks (>5 pts).
+
+        Returns:
+            List of AdjustmentStack objects for high-stack games
+        """
+        if self.diagnostics is None:
+            return []
+        return self.diagnostics.get_high_stack_games()
+
+    def reset_diagnostics(self) -> None:
+        """Reset diagnostics for a new prediction run."""
+        if self.diagnostics is not None:
+            self.diagnostics = AdjustmentStackDiagnostics()

@@ -528,6 +528,11 @@ def walk_forward_predict(
                     "actual_margin": actual_margin,
                     "error": pred.spread - actual_margin,
                     "abs_error": abs(pred.spread - actual_margin),
+                    # P2.11: Track correlated adjustment stack (HFA + travel + altitude)
+                    "correlated_stack": pred.components.correlated_stack,
+                    "hfa": pred.components.home_field,
+                    "travel": pred.components.travel,
+                    "altitude": pred.components.altitude,
                 })
             except Exception as e:
                 logger.debug(f"Error predicting {game['away_team']} @ {game['home_team']}: {e}")
@@ -768,6 +773,11 @@ def walk_forward_predict_efm(
                     "actual_margin": actual_margin,
                     "error": pred.spread - actual_margin,
                     "abs_error": abs(pred.spread - actual_margin),
+                    # P2.11: Track correlated adjustment stack (HFA + travel + altitude)
+                    "correlated_stack": pred.components.correlated_stack,
+                    "hfa": pred.components.home_field,
+                    "travel": pred.components.travel,
+                    "altitude": pred.components.altitude,
                 })
             except Exception as e:
                 logger.debug(f"Error predicting {game['away_team']} @ {game['home_team']}: {e}")
@@ -946,6 +956,114 @@ def calculate_metrics(
                 )
 
     return metrics
+
+
+def analyze_stack_diagnostics(predictions_df: pd.DataFrame) -> dict:
+    """Analyze adjustment stack patterns for P2.11 diagnostics.
+
+    Evaluates whether correlated adjustments (HFA + travel + altitude) show
+    systematic error patterns, especially for high-stack games.
+
+    Args:
+        predictions_df: DataFrame with predictions including correlated_stack column
+
+    Returns:
+        Dictionary with stack analysis results
+    """
+    if "correlated_stack" not in predictions_df.columns:
+        return {"error": "No correlated_stack column in predictions"}
+
+    HIGH_STACK_THRESHOLD = 5.0
+    EXTREME_STACK_THRESHOLD = 7.0
+
+    df = predictions_df.copy()
+    df["is_high_stack"] = df["correlated_stack"].abs() > HIGH_STACK_THRESHOLD
+    df["is_extreme_stack"] = df["correlated_stack"].abs() > EXTREME_STACK_THRESHOLD
+
+    high_stack = df[df["is_high_stack"]]
+    low_stack = df[~df["is_high_stack"]]
+
+    result = {
+        "total_games": len(df),
+        "stack_mean": df["correlated_stack"].mean(),
+        "stack_std": df["correlated_stack"].std(),
+        "stack_min": df["correlated_stack"].min(),
+        "stack_max": df["correlated_stack"].max(),
+        "high_stack_count": len(high_stack),
+        "high_stack_pct": len(high_stack) / len(df) * 100 if len(df) > 0 else 0,
+        "extreme_stack_count": len(df[df["is_extreme_stack"]]),
+    }
+
+    # Compare errors between high-stack and low-stack games
+    if len(high_stack) > 0:
+        result["high_stack_mae"] = high_stack["abs_error"].mean()
+        result["high_stack_me"] = high_stack["error"].mean()  # Positive = over-predicting home
+
+    if len(low_stack) > 0:
+        result["low_stack_mae"] = low_stack["abs_error"].mean()
+        result["low_stack_me"] = low_stack["error"].mean()
+
+    # Check for systematic bias in high-stack games
+    if len(high_stack) >= 10 and "high_stack_me" in result:
+        me_high = result["high_stack_me"]
+        if me_high > 2.0:
+            result["warning"] = (
+                f"High-stack games show positive mean error ({me_high:.2f}), "
+                "suggesting over-prediction of home advantage. Consider capping adjustments."
+            )
+        elif me_high < -2.0:
+            result["warning"] = (
+                f"High-stack games show negative mean error ({me_high:.2f}), "
+                "suggesting under-prediction of home advantage."
+            )
+        else:
+            result["status"] = "OK - no systematic bias detected in high-stack games"
+
+    return result
+
+
+def log_stack_diagnostics(predictions_df: pd.DataFrame) -> None:
+    """Log adjustment stack diagnostics summary (P2.11).
+
+    Args:
+        predictions_df: DataFrame with predictions
+    """
+    analysis = analyze_stack_diagnostics(predictions_df)
+
+    if "error" in analysis:
+        logger.warning(f"Stack analysis failed: {analysis['error']}")
+        return
+
+    logger.info(
+        f"P2.11 Stack diagnostics: {analysis['total_games']} games, "
+        f"mean stack={analysis['stack_mean']:.2f}, "
+        f"range=[{analysis['stack_min']:.1f}, {analysis['stack_max']:.1f}]"
+    )
+
+    if analysis["high_stack_count"] > 0:
+        logger.info(
+            f"  High-stack games (>{5}): {analysis['high_stack_count']} "
+            f"({analysis['high_stack_pct']:.1f}%), "
+            f"MAE={analysis.get('high_stack_mae', 0):.2f}, "
+            f"ME={analysis.get('high_stack_me', 0):+.2f}"
+        )
+
+    if analysis.get("low_stack_mae"):
+        logger.info(
+            f"  Low-stack games: MAE={analysis['low_stack_mae']:.2f}, "
+            f"ME={analysis['low_stack_me']:+.2f}"
+        )
+
+    if analysis["extreme_stack_count"] > 0:
+        logger.warning(
+            f"  Extreme stack games (>{7}): {analysis['extreme_stack_count']} - "
+            "consider investigating"
+        )
+
+    if "warning" in analysis:
+        logger.warning(f"  ⚠️  {analysis['warning']}")
+    elif "status" in analysis:
+        logger.info(f"  ✓ {analysis['status']}")
 
 
 def fetch_all_season_data(
@@ -1371,6 +1489,11 @@ def print_results(results: dict) -> None:
         )
         for week, row in weekly.iterrows():
             print(f"  Week {week:2d}: MAE={row['mae']:5.2f}  (n={int(row['games'])})")
+
+    # P2.11: Stack diagnostics (HFA + travel + altitude)
+    if "correlated_stack" in predictions_df.columns:
+        print(f"\nP2.11 Adjustment Stack Diagnostics:")
+        log_stack_diagnostics(predictions_df)
 
 
 def main():
