@@ -80,7 +80,7 @@ JP+ includes a complete special teams model that captures the marginal point con
 **Components:**
 
 **1. Field Goals (PAAE)**
-- **Expected make rates by distance:** <30 yards (92%), 30-40 (83%), 40-50 (72%), 50-55 (55%), 55+ (30%)
+- **Expected make rates by distance:** <30 yards (92%), 30-40 (83%), 40-50 (72%), 50-60 (55%), 60+ (30%)
 - **Calculation:** Actual points (3 if made, 0 if missed) minus expected points (3 × expected rate)
 - **Per-game rating:** Total PAAE divided by games played
 
@@ -108,7 +108,7 @@ After calculating base ratings, JP+ adjusts for:
 - **Altitude** (playing at BYU, Air Force, or Colorado is tough)
 - **Situational factors** (bye weeks, lookahead spots, letdown games)
 - **FCS opponent penalty** (tiered: +18 pts for elite FCS, +32 pts for standard FCS)
-- **FG efficiency differential** (kicker PAAE difference between teams)
+- **Special teams differential** (full ST PBTA difference: FG + Punt + Kickoff)
 - **Pace adjustment** (spread compression for triple-option teams)
 - **Weather adjustment** (for totals: wind, cold, and precipitation penalties)
 
@@ -174,7 +174,6 @@ If you just look at "Team A beat Team B by 21 points," you're including:
 - Turnover luck (fumble bounces are random)
 - Garbage time scores (backups vs backups)
 - Weather flukes
-- Special teams chaos
 
 These things don't repeat consistently.
 
@@ -183,6 +182,7 @@ These things don't repeat consistently.
 By analyzing every play individually:
 - We filter out garbage time (blowout situations)
 - We measure what teams *do*, not what *happens to them*
+- We capture special teams skill (kicking, punting, returns) as a separate component
 - We get a more stable, predictive signal
 
 ---
