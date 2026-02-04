@@ -18,7 +18,12 @@ import pandas as pd
 from sklearn.linear_model import Ridge
 
 from config.settings import get_settings
-from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER
+from config.play_types import (
+    TURNOVER_PLAY_TYPES,
+    POINTS_PER_TURNOVER,
+    SCRIMMAGE_PLAY_TYPES,
+    NON_SCRIMMAGE_PLAY_TYPES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +60,28 @@ def is_garbage_time(quarter: int, score_diff: int) -> bool:
 def is_successful_play(down: int, distance: float, yards_gained: float) -> bool:
     """Determine if play was successful.
 
+    Standard success rate definition:
+    - 1st down: Gain at least 50% of yards needed
+    - 2nd down: Gain at least 70% of yards needed
+    - 3rd/4th down: Gain 100% of yards needed (first down or TD)
+
+    Edge case handling:
+    - distance <= 0: Treat as goal-to-go or data error. Require positive yards
+      to be successful (any gain from the goal line is good).
+
     Args:
         down: Current down (1-4)
-        distance: Yards to go
+        distance: Yards to go (may be 0 at goal line or due to data issues)
         yards_gained: Yards gained on play
 
     Returns:
         True if successful
     """
+    # Handle distance=0 edge case (goal line or data error)
+    # Require positive yards to avoid auto-success on 0-gain plays
+    if distance <= 0:
+        return yards_gained > 0
+
     if down == 1:
         return yards_gained >= 0.5 * distance  # 50% of yards needed
     elif down == 2:
@@ -181,13 +200,49 @@ class EfficiencyFoundationModel:
     def _prepare_plays(self, plays_df: pd.DataFrame) -> pd.DataFrame:
         """Filter and prepare plays for analysis.
 
+        Filters:
+        1. Non-scrimmage plays (special teams, penalties, period markers)
+        2. Plays with missing/invalid data
+
         Args:
             plays_df: Raw play-by-play DataFrame
 
         Returns:
             Filtered DataFrame with success and garbage time flags
         """
+        initial_count = len(plays_df)
         df = plays_df.copy()
+
+        # Filter to scrimmage plays only (P2.8 fix)
+        # This excludes special teams, penalties, period markers, etc.
+        if "play_type" in df.columns:
+            scrimmage_mask = df["play_type"].isin(SCRIMMAGE_PLAY_TYPES)
+            non_scrimmage_count = (~scrimmage_mask).sum()
+            if non_scrimmage_count > 0:
+                # Log what's being filtered
+                filtered_types = df[~scrimmage_mask]["play_type"].value_counts()
+                logger.debug(
+                    f"Filtering {non_scrimmage_count} non-scrimmage plays: "
+                    f"{dict(filtered_types.head(5))}"
+                )
+            df = df[scrimmage_mask]
+
+        # Filter plays with invalid distance (P2.8 fix)
+        if "distance" in df.columns:
+            invalid_distance = df["distance"].isna() | (df["distance"] < 0)
+            invalid_count = invalid_distance.sum()
+            if invalid_count > 0:
+                logger.debug(f"Filtering {invalid_count} plays with invalid distance")
+            df = df[~invalid_distance]
+
+        filtered_count = initial_count - len(df)
+        if filtered_count > 0:
+            logger.info(
+                f"Prepared {len(df)} plays for EFM "
+                f"(filtered {filtered_count} non-scrimmage/invalid plays)"
+            )
+        else:
+            logger.info(f"Prepared {len(df)} plays for EFM")
 
         # Calculate success for each play
         df["is_success"] = df.apply(

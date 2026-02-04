@@ -24,7 +24,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
-from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER
+from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER, SCRIMMAGE_PLAY_TYPES
 from src.api.cfbd_client import CFBDClient
 from src.data.processors import DataProcessor, RecencyWeighter
 from src.models.efficiency_foundation_model import EfficiencyFoundationModel
@@ -255,13 +255,17 @@ def fetch_season_plays(
                         "defense_score": play.defense_score or 0,
                     })
 
-                # Collect all plays with PPA for efficiency model
-                if play.ppa is not None and play.down is not None:
+                # Collect scrimmage plays with PPA for efficiency model (P2.8 fix)
+                # Filter: has PPA, has down, is scrimmage play type, valid distance
+                if (play.ppa is not None and
+                    play.down is not None and
+                    play_type in SCRIMMAGE_PLAY_TYPES and
+                    play.distance is not None and play.distance >= 0):
                     efficiency_plays.append({
                         "week": week,
                         "game_id": play.game_id,
                         "down": play.down,
-                        "distance": play.distance or 0,
+                        "distance": play.distance,
                         "yards_gained": play.yards_gained or 0,
                         "play_type": play_type,
                         "play_text": play.play_text,  # Needed for TWP parsing

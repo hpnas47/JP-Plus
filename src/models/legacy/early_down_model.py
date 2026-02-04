@@ -14,26 +14,13 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from config.play_types import SCRIMMAGE_PLAY_TYPES
+from config.settings import get_settings
+
 logger = logging.getLogger(__name__)
 
 
-# Standard play types that count as actual scrimmage plays
-SCRIMMAGE_PLAY_TYPES = {
-    "Rush",
-    "Pass Reception",
-    "Pass Incompletion",
-    "Sack",
-    "Rushing Touchdown",
-    "Passing Touchdown",
-    "Fumble Recovery (Own)",
-    "Fumble Recovery (Opponent)",
-    "Interception Return",
-    "Pass Interception Return",
-    "Interception",
-}
-
-# Garbage time thresholds by quarter
-_GT_THRESHOLDS = np.array([28, 24, 21, 16])  # q1-q4
+# SCRIMMAGE_PLAY_TYPES imported from config.play_types (single source of truth)
 
 
 @dataclass
@@ -96,13 +83,20 @@ class EarlyDownModel:
         if df.empty:
             return self.team_ratings
 
-        # Vectorized garbage time filter
+        # Vectorized garbage time filter (use Settings as source of truth)
+        settings = get_settings()
+        gt_thresholds = np.array([
+            settings.garbage_time_q1,
+            settings.garbage_time_q2,
+            settings.garbage_time_q3,
+            settings.garbage_time_q4,
+        ])
         score_diff = (df["offense_score"] - df["defense_score"]).abs()
         period = df["period"].values
         # Map period to threshold; periods > 4 get threshold=999 (never garbage)
         gt_thresh = np.where(
             (period >= 1) & (period <= 4),
-            _GT_THRESHOLDS[np.clip(period - 1, 0, 3)],
+            gt_thresholds[np.clip(period - 1, 0, 3)],
             999,
         )
         df = df[score_diff.values < gt_thresh]

@@ -171,13 +171,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Clarify and enforce a single integration strategy for special teams: either treat ST purely as an adjustment layer in SpreadGenerator or incorporate it into base ratings—never both. Add documentation and a safeguard to prevent accidental double-counting.
   - **Notes:**
 
-- [ ] **P2.8 Filter non-scrimmage plays for efficiency dataset + fix distance=0**
+- [x] **P2.8 Filter non-scrimmage plays for efficiency dataset + fix distance=0** ✅ COMPLETE
   - **Files:** `scripts/backtest.py` (play ingestion), `src/models/efficiency_foundation_model.py`
   - **Issue:** Efficiency plays may include non-scrimmage/weird play types; distance=0 can auto-success.
   - **Acceptance criteria:** Clear filter rules; logs removed plays count; success logic handles edge cases.
   - **AI nudge prompt:**
     > Ensure efficiency modeling uses only meaningful scrimmage plays and that success-rate logic handles edge cases like distance=0. Add logging on how many plays are filtered and why, and ensure changes are consistent across backtest and weekly runs.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added `SCRIMMAGE_PLAY_TYPES` (14 types) and `NON_SCRIMMAGE_PLAY_TYPES` (19 types) to `config/play_types.py`. Updated backtest.py and EFM to filter efficiency plays to scrimmage only. Fixed `is_successful_play()` to handle distance<=0 edge case (requires positive yards). Added logging for filtered play counts. Also updated early_down_model.py to use shared SCRIMMAGE_PLAY_TYPES. Validation ensures no overlap between scrimmage/non-scrimmage sets. All 10 edge case tests pass.
 
 - [ ] **P2.9 Add validation + NaN handling + period/quarter normalization**
   - **Files:** `src/models/efficiency_foundation_model.py`
