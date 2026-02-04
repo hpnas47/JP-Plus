@@ -94,13 +94,15 @@ class TravelAdjuster:
         home_loc = TEAM_LOCATIONS.get(home_team)
 
         if away_loc and home_loc:
-            # Traveling east = going to smaller (less negative) longitude
+            # Longitude: West = more negative, East = less negative
+            # If away_lon < home_lon, away team is WEST of home → traveling EAST
+            # West-to-east travel is harder (losing time, jet lag worse)
             if away_loc["lon"] < home_loc["lon"]:
-                # Traveling west (easier)
-                return -base_adj * 0.8
-            else:
-                # Traveling east (harder)
+                # Traveling east (harder) - full penalty
                 return -base_adj
+            else:
+                # Traveling west (easier) - reduced penalty
+                return -base_adj * 0.8
 
         return -base_adj
 

@@ -142,6 +142,16 @@
   - **Action:** Added clarifying comment to `_normalize_ratings()` explaining the math.
   - **Files changed:** `src/models/efficiency_foundation_model.py`, `docs/Audit_Fixlist.md`
 
+- **Fixed P1.1: Travel Direction Logic Inversion** - West→East now correctly gets full penalty
+  - **Bug:** The longitude comparison in `get_timezone_adjustment()` was inverted.
+  - **Root cause:** When `away_lon < home_lon`, away team is WEST of home (more negative longitude), so they're traveling EAST. But the code was applying the 0.8x "easier" multiplier instead of full penalty.
+  - **Evidence:**
+    - Before fix: UCLA→Rutgers (West→East) got -1.20, Rutgers→UCLA (East→West) got -1.50
+    - After fix: UCLA→Rutgers (West→East) gets -1.50, Rutgers→UCLA (East→West) gets -1.20
+  - **Fix:** Swapped the condition branches so `away_lon < home_lon` → full penalty (traveling east, harder).
+  - **Verified:** All 6 test cases pass (UCLA↔Rutgers, Oregon↔Ohio State, USC↔Penn State).
+  - **Files changed:** `src/adjustments/travel.py`
+
 ---
 
 ## Session: February 2, 2026

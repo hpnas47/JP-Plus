@@ -58,13 +58,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## P1 — Correctness / consistency bugs (skew MAE/ATS)
 
-- [ ] **P1.1 Fix travel direction logic (longitude sign inversion)**
+- [x] **P1.1 Fix travel direction logic (longitude sign inversion)** ✅ COMPLETE
   - **Files:** `src/adjustments/travel.py`, `config/teams.py`
   - **Issue:** West→East vs East→West detection is inverted due to negative longitude conventions.
   - **Acceptance criteria:** Validated with real examples (e.g., UCLA→Rutgers, Rutgers→UCLA).
   - **AI nudge prompt:**
-    > Validate the west-to-east vs east-to-west travel logic in `TravelAdjuster.get_timezone_adjustment()` using real team examples from `config/teams.py`. Correct any inverted direction detection so “west-to-east is harder” is applied to the correct cases.
-  - **Notes:**
+    > Validate the west-to-east vs east-to-west travel logic in `TravelAdjuster.get_timezone_adjustment()` using real team examples from `config/teams.py`. Correct any inverted direction detection so "west-to-east is harder" is applied to the correct cases.
+  - **Notes:** FIXED 2026-02-03. The longitude comparison logic was inverted. When `away_lon < home_lon`, the away team is WEST of home (traveling EAST), but the code was applying the 0.8x "easier" multiplier instead of full penalty. Swapped the conditions so West→East gets full penalty and East→West gets 0.8x. Verified with UCLA→Rutgers (-1.50) vs Rutgers→UCLA (-1.20).
 
 - [ ] **P1.2 Simplify travel direction logic (prefer tz offsets over longitude heuristics)**
   - **Files:** `src/adjustments/travel.py`, `config/teams.py`
