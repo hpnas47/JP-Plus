@@ -51,6 +51,19 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 
 **Interpretation:** At 5+ point edge, the market moves **toward** our prediction by 1.22 points on average. This validates the edge is real—we're not just finding noise, we're finding value that sharps eventually agree with.
 
+### Performance by Season Phase
+
+| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 5+ Edge |
+|-------|-------|-------|-----|--------------|-------|---------|
+| **Calibration** | 1-3 | 597 | 14.75 | 7.42 | 47.1% | 48.7% |
+| **Core** | 4-15 | 2,485 | 12.54 | 4.37 | 50.8% | 52.8% |
+| **Postseason** | 16+ | 176 | 13.41 | 5.31 | 45.1% | 48.7% |
+
+**Phase insights:**
+- **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
+- **Core (Weeks 4-15)**: Profitable zone with 50.8% ATS and 52.8% at 5+ point edge
+- **Postseason (Weeks 16+)**: Bowl games struggle (45.1% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
+
 ### Results by Year
 
 | Year | Games | MAE | RMSE | ATS (Close) | 3+ (Close) | 5+ (Close) | ATS (Open) | 3+ (Open) | 5+ (Open) |
