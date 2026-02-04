@@ -133,6 +133,29 @@
     - Cache key includes all parameters that affect results
     - `data_hash` ensures cache correctness if data differs for same (season, week)
 
+- **P3.3: Vectorized Row-Wise Operations (~10x speedup)**
+  - **Problem:** Multiple `apply(axis=1)` and `iterrows()` patterns in hot paths caused O(n) Python interpreter overhead on play-level data (~50,000 plays/season)
+  - **Solution:** Replaced with vectorized NumPy/Pandas operations
+  - **Files modified:**
+    1. `src/models/special_teams.py`:
+       - `calc_paae`: `np.select()` for FG expected rate lookup
+       - `calc_net_yards`: `np.where()` + `np.minimum()` for punt net yards
+       - `calc_punt_value`: Vectorized arithmetic for punt value
+       - `calculate_from_game_stats`: `.sum()` instead of iterrows
+    2. `src/adjustments/home_field.py`:
+       - `calculate_league_hfa`: `.map(team_ratings)` for vectorized lookup
+       - `calculate_team_hfa`: `.map()` for opponent ratings lookup
+       - `calculate_dynamic_team_hfa`: `groupby` + `.map()` for residuals
+    3. `src/models/finishing_drives.py`:
+       - `calculate_from_game_stats`: `.sum()` instead of iterrows
+    4. `scripts/analyze_stack_bias.py`:
+       - Hard/soft cap: `np.minimum`, `np.where`
+       - Sqrt/log scaling: Direct numpy operations
+  - **Patterns NOT vectorized (justified):**
+    - Team-level loops on groupby results (~130 teams) that create dataclass objects
+    - Already O(teams) not O(plays), vectorization would require restructuring with minimal benefit
+  - **Verification:** Backtest 2024 weeks 5-8 passed with identical numerical results
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints
