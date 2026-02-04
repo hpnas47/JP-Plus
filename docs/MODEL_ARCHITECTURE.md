@@ -53,11 +53,11 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 
 ### Performance by Season Phase
 
-| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 5+ Edge |
-|-------|-------|-------|-----|--------------|-------|---------|
-| **Calibration** | 1-3 | 597 | 14.75 | 7.42 | 47.1% | 48.7% |
-| **Core** | 4-15 | 2,485 | 12.54 | 4.37 | 50.8% | 52.8% |
-| **Postseason** | 16+ | 176 | 13.41 | 5.31 | 45.1% | 48.7% |
+| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|--------------|-------|---------|---------|
+| **Calibration** | 1-3 | 597 | 14.75 | 7.42 | 47.1% | 47.2% | 48.7% |
+| **Core** | 4-15 | 2,485 | 12.54 | 4.37 | 50.8% | 51.7% | 52.8% |
+| **Postseason** | 16+ | 176 | 13.41 | 5.31 | 45.1% | 47.3% | 48.7% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
