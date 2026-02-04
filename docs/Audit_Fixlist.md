@@ -203,13 +203,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Add diagnostics that identify games where multiple correlated adjustments stack (travel + altitude + HFA + situational). Report these cases and evaluate whether they have systematic prediction errors. If stacking creates outliers, consider reasonable caps or scaling.
   - **Notes:**
 
-- [ ] **P2.12 Evaluate timezone offsets/DST policy (Hawaii/Arizona edge cases)**
+- [x] **P2.12 Evaluate timezone offsets/DST policy (Hawaii/Arizona edge cases)** ✅ COMPLETE
   - **Files:** `config/teams.py`, `src/adjustments/travel.py`
   - **Issue:** Fixed tz offsets ignore DST; may be wrong for some weeks.
   - **Acceptance criteria:** Document policy; validate edge cases; optionally use kickoff local time/timezone if available.
   - **AI nudge prompt:**
     > Decide and document a policy for timezone differences with DST effects (especially Hawaii and Arizona). Validate current offsets against the season calendar and either improve the calculation or add tests/documentation explaining the approximation.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Policy: Use DST-era offsets since ~70% of CFB regular season (weeks 0-10) is during DST. Arizona/Arizona State changed from tz_offset=2 to 3 (effectively PT during DST). Hawaii changed from 5 to 6 (6 hrs behind ET during DST). Added comprehensive documentation explaining policy and approximation error (~0.5 pts for late-season games). Example fix: UCLA @ Arizona now correctly shows 0 timezone difference (both effectively Pacific during DST).
 
 - [ ] **P2.13 Add centralized team-name normalization/aliasing**
   - **Files:** `config/teams.py`, any module doing lookups by team string
