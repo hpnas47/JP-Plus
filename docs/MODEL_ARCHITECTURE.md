@@ -66,14 +66,15 @@ For historical backtesting, lines are sourced from the [CFBD API](https://colleg
 **FBS games coverage (2022-2025):**
 | Provider | Games Used | With Opening Line |
 |----------|------------|-------------------|
-| DraftKings | 2,255 (39%) | 2,108 (93%) |
-| ESPN Bet | 1,671 (29%) | 165 (10%) |
-| Bovada | 908 (16%) | 901 (99%) |
-| William Hill | 498 (9%) | 0 (0%) |
-| Consensus | 404 (7%) | 0 (0%) |
-| **Total** | **5,800** | **3,174 (55%)** |
+| DraftKings | 1,360 (39%) | 1,265 (93%) |
+| ESPN Bet | 1,007 (29%) | 101 (10%) |
+| Bovada | 547 (16%) | 541 (99%) |
+| William Hill | 301 (8%) | 0 (0%) |
+| Consensus | 241 (7%) | 0 (0%) |
+| Other | 44 (1%) | 0 (0%) |
+| **Total** | **3,500** | **3,178 (91%)** |
 
-**Note on opening lines:** Only 55% of all games have true opening line data from CFBD. For FBS-only games, coverage is ~91%. The opening line ATS results are based on games with actual opening line data.
+**Note:** Opening line availability varies significantly by provider. DraftKings and Bovada provide opening lines for nearly all their games, while William Hill and Consensus only provide closing lines.
 
 #### Future Data (2026+): The Odds API
 
