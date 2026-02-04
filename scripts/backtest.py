@@ -120,10 +120,13 @@ def fetch_season_data(
     """
     games = []
     betting = []
+    failed_weeks = []
+    successful_weeks = []
 
     for week in range(1, 16):
         try:
             week_games = client.get_games(year, week)
+            week_game_count = 0
             for game in week_games:
                 if game.home_points is None:
                     continue
@@ -138,8 +141,22 @@ def fetch_season_data(
                     "away_points": game.away_points,
                     "neutral_site": game.neutral_site or False,
                 })
-        except Exception:
-            break
+                week_game_count += 1
+            if week_game_count > 0:
+                successful_weeks.append(week)
+        except Exception as e:
+            failed_weeks.append((week, str(e)))
+            logger.warning(f"Failed to fetch games for {year} week {week}: {e}")
+            continue  # Continue to next week instead of breaking
+
+    # Log fetch summary
+    if failed_weeks:
+        logger.warning(
+            f"Games fetch for {year}: {len(successful_weeks)} weeks OK, "
+            f"{len(failed_weeks)} weeks FAILED: {[w for w, _ in failed_weeks]}"
+        )
+    else:
+        logger.debug(f"Games fetch for {year}: all {len(successful_weeks)} weeks OK")
 
     # Fetch betting lines
     # Prefer DraftKings for consistency, fall back to any available
@@ -200,10 +217,13 @@ def fetch_season_plays(
     turnover_plays = []
     efficiency_plays = []  # All scrimmage plays with PPA for efficiency model
     fg_plays = []  # Field goal plays for special teams model
+    failed_weeks = []
+    successful_weeks = []
 
     for week in range(1, 16):
         try:
             plays = client.get_plays(year, week)
+            week_play_count = 0
             for play in plays:
                 play_type = play.play_type or ""
 
@@ -262,9 +282,23 @@ def fetch_season_plays(
                         "defense_score": play.defense_score or 0,
                         "home_team": play.home,  # For neutral-field ridge regression
                     })
+                    week_play_count += 1
+
+            if week_play_count > 0:
+                successful_weeks.append(week)
         except Exception as e:
-            logger.debug(f"Error fetching plays for week {week}: {e}")
-            break
+            failed_weeks.append((week, str(e)))
+            logger.warning(f"Failed to fetch plays for {year} week {week}: {e}")
+            continue  # Continue to next week instead of breaking
+
+    # Log fetch summary
+    if failed_weeks:
+        logger.warning(
+            f"Plays fetch for {year}: {len(successful_weeks)} weeks OK, "
+            f"{len(failed_weeks)} weeks FAILED: {[w for w, _ in failed_weeks]}"
+        )
+    else:
+        logger.debug(f"Plays fetch for {year}: all {len(successful_weeks)} weeks OK")
 
     logger.info(
         f"Fetched {len(early_down_plays)} early-down, {len(turnover_plays)} turnover, "
@@ -922,6 +956,22 @@ def fetch_all_season_data(
 
         turnover_df = build_game_turnovers(games_df, turnover_plays_df)
         logger.info(f"Built turnover margins for {len(turnover_df)} games")
+
+        # Sanity check: validate data completeness for determinism
+        weeks_with_games = games_df["week"].unique().to_list() if len(games_df) > 0 else []
+        weeks_with_plays = efficiency_plays_df["week"].unique().to_list() if len(efficiency_plays_df) > 0 else []
+        expected_weeks = set(range(1, 16))
+        missing_game_weeks = expected_weeks - set(weeks_with_games)
+        missing_play_weeks = expected_weeks - set(weeks_with_plays)
+
+        if missing_game_weeks or missing_play_weeks:
+            logger.warning(
+                f"Data completeness check for {year}: "
+                f"games missing weeks {sorted(missing_game_weeks) if missing_game_weeks else 'none'}, "
+                f"plays missing weeks {sorted(missing_play_weeks) if missing_play_weeks else 'none'}"
+            )
+        else:
+            logger.info(f"Data completeness check for {year}: all weeks 1-15 present")
 
         # Fetch FBS teams for EFM filtering
         fbs_teams_list = client.get_fbs_teams(year)

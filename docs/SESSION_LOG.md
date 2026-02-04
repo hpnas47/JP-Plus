@@ -116,6 +116,20 @@
   - **Key insight:** EFM's `_normalize_ratings()` (std=12.0) is now the ONLY normalization. `get_ratings_df()` is for presentation only, not for calculations.
   - **Files changed:** `scripts/backtest.py`
 
+- **Fixed P0.4: Prevent Silent Season Truncation** - Made data fetching resilient to transient API errors
+  - **Problem:** Both `fetch_season_data()` and `fetch_season_plays()` used `break` on exceptions, which silently dropped all remaining weeks if any single week failed.
+  - **Fix:**
+    1. Changed `break` to `continue` so errors skip only the affected week, not all remaining weeks
+    2. Added `failed_weeks` and `successful_weeks` tracking in both functions
+    3. Added warning logs when weeks fail, showing week number and error message
+    4. Added data completeness sanity check in `fetch_all_season_data()` that reports missing weeks
+  - **Logging examples:**
+    - On success: `"Data completeness check for 2024: all weeks 1-15 present"`
+    - On failure: `"Games fetch for 2024: 14 weeks OK, 1 weeks FAILED: [7]"`
+    - Per-week: `"Failed to fetch plays for 2024 week 7: <error>"`
+  - **Result:** Backtests remain deterministic - missing data is now explicit and logged rather than silently dropped.
+  - **Files changed:** `scripts/backtest.py`
+
 ---
 
 ## Session: February 2, 2026

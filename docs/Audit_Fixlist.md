@@ -46,13 +46,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Review how EFM ratings are normalized/scaled across `EfficiencyFoundationModel` and the EFM walk-forward backtest. Eliminate double-normalization and ensure numeric scaling never uses rounded/presentation outputs. Confirm weekly rating scale and predicted spreads are stable and comparable week-to-week.
   - **Notes:** FIXED 2026-02-03. Removed second normalization in `walk_forward_predict_efm()` that was rescaling from std=12 to std=10 using rounded DataFrame values. Now uses `efm.get_rating(team)` directly for full precision. EFM's `_normalize_ratings()` (std=12.0) is now the ONLY normalization. Test verified: full precision std=12.0000 stable across weeks 4-8, means centered at 0, rounding error minimal (<0.05).
 
-- [ ] **P0.4 Prevent silent season truncation on exceptions**
+- [x] **P0.4 Prevent silent season truncation on exceptions** ✅ COMPLETE
   - **Files:** `scripts/backtest.py` (`fetch_season_data`, `fetch_season_plays`)
   - **Issue:** Week loop `break` on exception drops remaining weeks silently.
-  - **Acceptance criteria:** Robust fetching; exceptions don’t truncate season; log missing weeks and reasons.
+  - **Acceptance criteria:** Robust fetching; exceptions don't truncate season; log missing weeks and reasons.
   - **AI nudge prompt:**
     > Make season data fetching resilient: transient API errors in a single week should not truncate the rest of the season. Add logging that clearly reports which weeks were missing/skipped and why, and ensure backtests remain deterministic.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Changed `break` to `continue` in both `fetch_season_data()` and `fetch_season_plays()` so transient API errors skip only the affected week, not all remaining weeks. Added per-week failure tracking with warning logs showing which weeks failed and why. Added data completeness sanity check in `fetch_all_season_data()` that reports missing weeks for games and plays. Test verified: all 15 weeks fetched successfully for 2024.
 
 ---
 
@@ -256,7 +256,7 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 1. ~~P0.1 Trajectory leakage~~ ✅ DONE
 2. ~~P0.2 game_id joins for ATS + VegasComparison~~ ✅ DONE
 3. ~~P0.3 EFM scaling/double-normalization + rounding contamination~~ ✅ DONE
-4. P0.4 robust season data fetching (no silent truncation)
+4. ~~P0.4 robust season data fetching (no silent truncation)~~ ✅ DONE
 5. P1.1/P1.2 travel direction + tz logic
 6. P1.5 unify turnover play types
 7. ~~P2.1 home/away context + isolate implicit HFA in EFM ridge~~ ✅ DONE
