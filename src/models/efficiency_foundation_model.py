@@ -18,6 +18,7 @@ import pandas as pd
 from sklearn.linear_model import Ridge
 
 from config.settings import get_settings
+from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER
 
 logger = logging.getLogger(__name__)
 
@@ -120,18 +121,7 @@ class EfficiencyFoundationModel:
     # Minimum plays for reliable rating
     MIN_PLAYS = 100
 
-    # Turnover play types (offense = team that lost the ball)
-    # Verified against CFBD API play_type values (2024 data)
-    TURNOVER_PLAY_TYPES = frozenset({
-        "Fumble Recovery (Opponent)",
-        "Pass Interception Return",
-        "Interception",
-        "Fumble Return Touchdown",
-        "Interception Return Touchdown",
-    })
-
-    # Points per turnover (empirical value)
-    POINTS_PER_TURNOVER = 4.5
+    # TURNOVER_PLAY_TYPES and POINTS_PER_TURNOVER imported from config.play_types
 
     def __init__(
         self,
@@ -438,7 +428,7 @@ class EfficiencyFoundationModel:
             return {}
 
         # Find turnover plays
-        turnover_plays = plays_df[plays_df["play_type"].isin(self.TURNOVER_PLAY_TYPES)]
+        turnover_plays = plays_df[plays_df["play_type"].isin(TURNOVER_PLAY_TYPES)]
 
         if len(turnover_plays) == 0:
             logger.warning("No turnover plays found")
@@ -582,7 +572,7 @@ class EfficiencyFoundationModel:
             games = self.team_games_played.get(team, 10)
             shrinkage = games / (games + self.turnover_prior_strength)
             shrunk_to_margin = raw_to_margin * shrinkage
-            turnover_rating = shrunk_to_margin * self.POINTS_PER_TURNOVER
+            turnover_rating = shrunk_to_margin * POINTS_PER_TURNOVER
 
             # Separate offensive and defensive ratings (weighted combo of eff + exp)
             # Note: turnover is a combined O+D metric, not split

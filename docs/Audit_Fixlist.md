@@ -90,13 +90,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Clean up rivalry metadata so the source list contains no duplicates or mirrored pairs. Add a validation check/test that asserts there are no duplicate rivalry definitions after normalization.
   - **Notes:**
 
-- [ ] **P1.5 Unify turnover play type definitions across repo**
+- [x] **P1.5 Unify turnover play type definitions across repo** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`, `scripts/backtest.py`, any turnover/FD logic
   - **Issue:** Different turnover play-type sets are used in different places.
   - **Acceptance criteria:** Single shared source of truth; small test/assertion ensures all modules use it.
   - **AI nudge prompt:**
     > Consolidate turnover play type definitions into a single shared source of truth used consistently by EFM turnover calculation, backtest turnover scrubbing, and any other turnover-related logic. Add a small test/assertion that fails if modules diverge.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Created `config/play_types.py` with unified `TURNOVER_PLAY_TYPES` and `POINTS_PER_TURNOVER`. Both EFM and backtest.py now import from this single source. Combined set includes all 6 types: Fumble Recovery (Opponent), Fumble Return Touchdown, Interception, Interception Return, Interception Return Touchdown, Pass Interception Return. Added `validate_turnover_play_types()` that runs on import to catch issues early. Verified both modules reference identical objects.
 
 - [x] **P1.6 Keep full precision spreads internally (don't round before evaluation)** ✅ COMPLETE
   - **Files:** `src/predictions/spread_generator.py`

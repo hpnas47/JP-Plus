@@ -24,6 +24,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
+from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER
 from src.api.cfbd_client import CFBDClient
 from src.data.processors import DataProcessor, RecencyWeighter
 from src.models.efficiency_foundation_model import EfficiencyFoundationModel
@@ -93,16 +94,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Play types where the offense is the team that lost the ball
-TURNOVER_PLAY_TYPES = frozenset({
-    "Fumble Recovery (Opponent)",
-    "Interception Return",
-    "Pass Interception Return",
-    "Interception",
-})
-
-# Approximate EPA impact per turnover (used for margin scrubbing)
-POINTS_PER_TURNOVER = 4.5
+# TURNOVER_PLAY_TYPES and POINTS_PER_TURNOVER imported from config.play_types
 
 
 def fetch_season_data(
