@@ -179,13 +179,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Ensure efficiency modeling uses only meaningful scrimmage plays and that success-rate logic handles edge cases like distance=0. Add logging on how many plays are filtered and why, and ensure changes are consistent across backtest and weekly runs.
   - **Notes:** FIXED 2026-02-03. Added `SCRIMMAGE_PLAY_TYPES` (14 types) and `NON_SCRIMMAGE_PLAY_TYPES` (19 types) to `config/play_types.py`. Updated backtest.py and EFM to filter efficiency plays to scrimmage only. Fixed `is_successful_play()` to handle distance<=0 edge case (requires positive yards). Added logging for filtered play counts. Also updated early_down_model.py to use shared SCRIMMAGE_PLAY_TYPES. Validation ensures no overlap between scrimmage/non-scrimmage sets. All 10 edge case tests pass.
 
-- [ ] **P2.9 Add validation + NaN handling + period/quarter normalization**
+- [x] **P2.9 Add validation + NaN handling + period/quarter normalization** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** Missing columns cause KeyErrors; NaN PPA can propagate; quarter naming mismatch can silently disable GT.
   - **Acceptance criteria:** Fail loudly when required schema missing; safe fallback when optional data missing; warnings/logs.
   - **AI nudge prompt:**
     > Add robust input validation and schema normalization for EFM training data, including NaN handling for PPA and consistent quarter/period handling. Ensure failures are explicit and logged instead of silently producing incorrect behavior.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added `_validate_and_normalize_plays()` method that: (1) Validates required columns (offense, defense, down, distance, yards_gained, offense_score, defense_score) and fails with clear error if missing; (2) Normalizes 'quarter' to 'period' column, warns loudly if neither present since this disables garbage time detection; (3) Warns about NaN in required columns and filters affected plays; (4) Warns about NaN in PPA and excludes from IsoPPP calculations to prevent NaN propagation; (5) Logs which optional columns are missing (play_type, week, game_id, home_team).
 
 - [x] **P2.10 Fix games-played assumptions for turnover shrinkage** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
