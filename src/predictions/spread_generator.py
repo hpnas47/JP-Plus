@@ -81,14 +81,29 @@ class SpreadComponents:
 
 @dataclass
 class PredictedSpread:
-    """Container for a predicted spread with full breakdown."""
+    """Container for a predicted spread with full breakdown.
+
+    Note: spread and home_win_probability are stored with full precision internally.
+    Use spread_display and win_prob_display for rounded presentation values.
+    Use to_dict() for DataFrame output (which rounds automatically).
+    """
 
     home_team: str
     away_team: str
-    spread: float  # Positive = home team favored
-    home_win_probability: float
+    spread: float  # Positive = home team favored (FULL PRECISION)
+    home_win_probability: float  # FULL PRECISION
     components: SpreadComponents = field(default_factory=SpreadComponents)
     confidence: str = "Medium"  # Low, Medium, High
+
+    @property
+    def spread_display(self) -> float:
+        """Get spread rounded to 0.5 for display (standard betting increment)."""
+        return round(self.spread * 2) / 2
+
+    @property
+    def win_prob_display(self) -> float:
+        """Get win probability rounded for display."""
+        return round(self.home_win_probability, 3)
 
     @property
     def favorite(self) -> str:
@@ -106,14 +121,19 @@ class PredictedSpread:
         return -abs(self.spread)
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for DataFrame creation."""
+        """Convert to dictionary for DataFrame creation.
+
+        Note: Spreads are rounded to 0.5 for display/reporting.
+        Use self.spread directly for full precision (e.g., MAE calculation).
+        """
         return {
             "home_team": self.home_team,
             "away_team": self.away_team,
-            "spread": self.spread,
+            "spread": round(self.spread * 2) / 2,  # Round to 0.5 for display
+            "spread_raw": self.spread,  # Full precision for analysis
             "favorite": self.favorite,
-            "spread_vs_favorite": self.spread_vs_favorite,
-            "home_win_prob": self.home_win_probability,
+            "spread_vs_favorite": round(self.spread_vs_favorite * 2) / 2,
+            "home_win_prob": round(self.home_win_probability, 3),
             "confidence": self.confidence,
             "base_margin": self.components.base_margin,
             "hfa": self.components.home_field,
@@ -461,11 +481,13 @@ class SpreadGenerator:
         # Determine confidence
         confidence = self._determine_confidence(spread, components)
 
+        # Store full precision values internally
+        # Rounding is done at display/reporting time (see PredictedSpread.to_dict())
         return PredictedSpread(
             home_team=home_team,
             away_team=away_team,
-            spread=round(spread, 1),
-            home_win_probability=round(win_prob, 3),
+            spread=spread,  # Full precision for MAE/ATS calculations
+            home_win_probability=win_prob,  # Full precision
             components=components,
             confidence=confidence,
         )

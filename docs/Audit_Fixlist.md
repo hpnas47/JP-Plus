@@ -98,13 +98,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Consolidate turnover play type definitions into a single shared source of truth used consistently by EFM turnover calculation, backtest turnover scrubbing, and any other turnover-related logic. Add a small test/assertion that fails if modules diverge.
   - **Notes:**
 
-- [ ] **P1.6 Keep full precision spreads internally (don’t round before evaluation)**
+- [x] **P1.6 Keep full precision spreads internally (don't round before evaluation)** ✅ COMPLETE
   - **Files:** `src/predictions/spread_generator.py`
   - **Issue:** Rounding spreads before MAE/edge bucketing changes metrics.
   - **Acceptance criteria:** Store float spread internally; round only in report/DF output.
   - **AI nudge prompt:**
     > Ensure spreads retain full numeric precision internally and are only rounded at reporting/UI boundaries. Confirm MAE and ATS edge bucketing operate on unrounded values.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. `PredictedSpread.spread` and `home_win_probability` now store full precision values internally. Added `spread_display` and `win_prob_display` properties for rounded presentation. `to_dict()` now includes both `spread` (rounded to 0.5 for display) and `spread_raw` (full precision for analysis). Backtest verified: 191/196 predictions have fractional precision, MAE diff ~0.004 pts, edge bucketing correctly uses full precision (107 vs 110 games at 3+ pt threshold).
 
 ---
 
