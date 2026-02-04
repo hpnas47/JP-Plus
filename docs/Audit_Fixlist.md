@@ -11,10 +11,10 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## How to use this file
 
-- Work top-down (P0 → P3).  
+- Work top-down (P0 → P3).
 - After each fix, re-run:
-  - `python scripts/backtest.py --use-efm ...` (your standard years)
-  - `python scripts/backtest.py --use-efm --opening-line` (if you track open)
+  - `python scripts/backtest.py --years 2022 2023 2024` (your standard years)
+  - `python scripts/backtest.py --years 2024 --opening-line` (if you track open)
 - Keep PRs small: **one checkbox = one PR**.
 - For each PR, record “before vs after” metrics (MAE, ATS, 3+/5+ edge) and attach output CSV diffs if possible.
 
@@ -253,13 +253,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Optimize EFM preprocessing and raw metric aggregation by removing row-wise apply and repeated per-team dataframe scans. Use vectorized operations/grouped aggregation while preserving correctness and outputs.
   - **Notes:**
 
-- [ ] **P3.3 Separate legacy ridge path from EFM in sweeps and reporting**
+- [x] **P3.3 Separate legacy ridge path from EFM in sweeps and reporting** ✅ N/A - LEGACY REMOVED
   - **Files:** `scripts/backtest.py`
   - **Issue:** Risk of confusing results between model types.
   - **Acceptance criteria:** Explicit labeling; prevent mixing incompatible settings; clear output.
   - **AI nudge prompt:**
     > Improve separation between legacy ridge and EFM backtests in CLI output and sweep logic. Make it difficult to conflate results, and ensure each mode reports its relevant parameters clearly.
-  - **Notes:**
+  - **Notes:** N/A as of 2026-02-03. Legacy models (RidgeRatingsModel, LuckRegressor, EarlyDownModel) completely removed from codebase. EFM is now the only model. Deleted src/models/legacy/ directory. Updated SpreadGenerator to use ratings dict instead of model objects. Backtest.py and run_weekly.py now only support EFM pipeline.
 
 - [ ] **P3.4 Add backtest sanity report**
   - **Files:** `scripts/backtest.py`
