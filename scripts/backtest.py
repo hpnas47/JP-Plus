@@ -452,6 +452,7 @@ def walk_forward_predict(
     efficiency_plays_df: pl.DataFrame,
     fbs_teams: set[str],
     start_week: int = 1,
+    end_week: Optional[int] = None,
     preseason_priors: Optional[PreseasonPriors] = None,
     hfa_value: float = 2.5,
     prior_weight: int = 8,
@@ -501,6 +502,10 @@ def walk_forward_predict(
     """
     results = []
     max_week = games_df["week"].max()
+
+    # Apply end_week limit if specified
+    if end_week is not None:
+        max_week = min(max_week, end_week)
 
     # Convert fbs_teams to list for Polars is_in()
     fbs_teams_list = list(fbs_teams)
@@ -1387,6 +1392,7 @@ def fetch_all_season_data(
 def run_backtest(
     years: list[int],
     start_week: int = 1,
+    end_week: Optional[int] = None,
     ridge_alpha: float = 50.0,
     use_priors: bool = True,
     hfa_value: float = 2.5,
@@ -1456,6 +1462,7 @@ def run_backtest(
             efficiency_plays_df,
             fbs_teams,
             start_week,
+            end_week=end_week,
             preseason_priors=priors,
             hfa_value=hfa_value,
             prior_weight=prior_weight,
@@ -1756,6 +1763,12 @@ def main():
         help="First week to start predictions (default: 1 for full season)",
     )
     parser.add_argument(
+        "--end-week",
+        type=int,
+        default=None,
+        help="Last week to predict (default: None = all weeks)",
+    )
+    parser.add_argument(
         "--alpha",
         type=float,
         default=50.0,
@@ -1875,7 +1888,7 @@ def main():
     print("BACKTEST CONFIGURATION (EFM)")
     print("=" * 60)
     print(f"  Years:              {args.years}")
-    print(f"  Start week:         {args.start_week}")
+    print(f"  Week range:         {args.start_week} - {args.end_week if args.end_week else 'end'}")
     print(f"  ATS line type:      {'opening' if args.opening_line else 'closing'}")
     print(f"  Ridge alpha:        {args.alpha}")
     print(f"  Preseason priors:   {'disabled' if args.no_priors else 'enabled'}")
@@ -1889,6 +1902,7 @@ def main():
     results = run_backtest(
         years=args.years,
         start_week=args.start_week,
+        end_week=args.end_week,
         ridge_alpha=args.alpha,
         use_priors=not args.no_priors,
         hfa_value=args.hfa,
