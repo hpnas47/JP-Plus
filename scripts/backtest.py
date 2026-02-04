@@ -1632,12 +1632,18 @@ def run_sweep(
     return df
 
 
-def print_results(results: dict, ats_df: pd.DataFrame = None) -> None:
+def print_results(
+    results: dict,
+    ats_df: pd.DataFrame = None,
+    diagnostics: bool = True,
+) -> None:
     """Print backtest results to console.
 
     Args:
         results: Dictionary with backtest results from run_backtest
         ats_df: Optional ATS results DataFrame for sanity reporting
+        diagnostics: Whether to print detailed diagnostics (stack, CLV, phase reports).
+                    Set False for faster output in sweeps. Default True.
     """
     print("\n" + "=" * 50)
     print("BACKTEST RESULTS")
@@ -1678,20 +1684,22 @@ def print_results(results: dict, ats_df: pd.DataFrame = None) -> None:
         for week, row in weekly.iterrows():
             print(f"  Week {week:2d}: MAE={row['mae']:5.2f}  (n={int(row['games'])})")
 
-    # P2.11: Stack diagnostics (HFA + travel + altitude)
-    if "correlated_stack" in predictions_df.columns:
-        print(f"\nP2.11 Adjustment Stack Diagnostics:")
-        log_stack_diagnostics(predictions_df)
+    # P3.7: Diagnostic reports are optional (skip with --no-diagnostics for faster sweeps)
+    if diagnostics:
+        # P2.11: Stack diagnostics (HFA + travel + altitude)
+        if "correlated_stack" in predictions_df.columns:
+            print(f"\nP2.11 Adjustment Stack Diagnostics:")
+            log_stack_diagnostics(predictions_df)
 
-    # CLV Report (Closing Line Value)
-    if ats_df is not None and not ats_df.empty:
-        print_clv_report(ats_df)
+        # CLV Report (Closing Line Value)
+        if ats_df is not None and not ats_df.empty:
+            print_clv_report(ats_df)
 
-    # Phase-by-Phase Report
-    if ats_df is not None and not ats_df.empty:
-        print_phase_report(ats_df, predictions_df)
+        # Phase-by-Phase Report
+        if ats_df is not None and not ats_df.empty:
+            print_phase_report(ats_df, predictions_df)
 
-    # P3.4: Sanity Report
+    # P3.4: Sanity Report (always run - lightweight validation)
     print_prediction_sanity_report(results, ats_df)
 
 
@@ -1890,6 +1898,11 @@ def main():
         action="store_true",
         help="Use opening lines for ATS calculation instead of closing lines",
     )
+    parser.add_argument(
+        "--no-diagnostics",
+        action="store_true",
+        help="Skip diagnostic reports (stack analysis, phase metrics, CLV). Faster for sweeps.",
+    )
 
     args = parser.parse_args()
 
@@ -1957,7 +1970,12 @@ def main():
     )
 
     # P3.4: Print results with ATS data for sanity report
-    print_results(results, ats_df=results.get("ats_results"))
+    # P3.7: Skip detailed diagnostics if --no-diagnostics flag is set
+    print_results(
+        results,
+        ats_df=results.get("ats_results"),
+        diagnostics=not args.no_diagnostics,
+    )
 
     # Save to CSV if requested
     if args.output:

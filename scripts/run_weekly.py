@@ -93,6 +93,11 @@ def parse_args():
         metavar="TEAM",
         help="Teams whose starting QB is out (e.g., --qb-out 'Georgia' 'Texas')",
     )
+    parser.add_argument(
+        "--no-reports",
+        action="store_true",
+        help="Skip Excel/HTML report generation (faster for testing/scripting)",
+    )
     return parser.parse_args()
 
 
@@ -251,6 +256,7 @@ def run_predictions(
     wait_for_data: bool = True,
     send_notifications: bool = True,
     qb_out_teams: list[str] = None,
+    generate_reports: bool = True,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -260,6 +266,8 @@ def run_predictions(
         wait_for_data: Whether to wait for data availability
         send_notifications: Whether to send notifications
         qb_out_teams: List of teams whose starting QB is out
+        generate_reports: Whether to generate Excel/HTML reports. Set False for
+                         faster execution in testing/scripting. Default True.
 
     Returns:
         Dictionary with results summary
@@ -446,28 +454,37 @@ def run_predictions(
         value_plays = vegas.identify_value_plays(predictions)
         value_plays_df = vegas.value_plays_to_dataframe(value_plays)
 
-        # Generate reports
-        logger.info("Generating reports...")
+        # P3.7: Generate reports (skip with --no-reports for faster testing)
+        excel_path = None
+        html_path = None
 
-        # Excel report
-        excel_exporter = ExcelExporter()
-        excel_path = excel_exporter.export(
-            predictions_df=comparison_df,
-            value_plays_df=value_plays_df,
-            ratings_df=ratings_df,
-            year=year,
-            week=week,
-        )
+        if generate_reports:
+            logger.info("Generating reports...")
 
-        # HTML report
-        html_reporter = HTMLReporter()
-        html_path = html_reporter.generate(
-            predictions_df=comparison_df,
-            value_plays_df=value_plays_df,
-            ratings_df=ratings_df,
-            year=year,
-            week=week,
-        )
+            # Excel report
+            excel_exporter = ExcelExporter()
+            excel_path = excel_exporter.export(
+                predictions_df=comparison_df,
+                value_plays_df=value_plays_df,
+                ratings_df=ratings_df,
+                year=year,
+                week=week,
+            )
+
+            # HTML report
+            html_reporter = HTMLReporter()
+            html_path = html_reporter.generate(
+                predictions_df=comparison_df,
+                value_plays_df=value_plays_df,
+                ratings_df=ratings_df,
+                year=year,
+                week=week,
+            )
+
+            logger.info(f"Excel report: {excel_path}")
+            logger.info(f"HTML report: {html_path}")
+        else:
+            logger.info("Skipping report generation (--no-reports)")
 
         # Send success notifications
         if notifier:
@@ -480,8 +497,6 @@ def run_predictions(
             )
 
         logger.info("Prediction run complete!")
-        logger.info(f"Excel report: {excel_path}")
-        logger.info(f"HTML report: {html_path}")
         logger.info(f"Games predicted: {len(predictions)}")
         logger.info(f"Value plays: {len(value_plays)}")
 
@@ -491,8 +506,8 @@ def run_predictions(
             "week": week,
             "games_predicted": len(predictions),
             "value_plays": len(value_plays),
-            "excel_path": str(excel_path),
-            "html_path": str(html_path),
+            "excel_path": str(excel_path) if excel_path else None,
+            "html_path": str(html_path) if html_path else None,
         }
 
     except Exception as e:
@@ -538,15 +553,17 @@ def main():
         wait_for_data=not args.no_wait,
         send_notifications=not args.no_notify,
         qb_out_teams=args.qb_out,
+        generate_reports=not args.no_reports,
     )
 
     if results["success"]:
         print(f"\nPredictions complete for {year} Week {week}")
         print(f"Games: {results['games_predicted']}")
         print(f"Value plays: {results['value_plays']}")
-        print(f"\nReports saved to:")
-        print(f"  Excel: {results['excel_path']}")
-        print(f"  HTML: {results['html_path']}")
+        if results.get("excel_path") and results.get("html_path"):
+            print(f"\nReports saved to:")
+            print(f"  Excel: {results['excel_path']}")
+            print(f"  HTML: {results['html_path']}")
     else:
         print(f"\nPrediction run failed: {results.get('error', 'Unknown error')}")
         sys.exit(1)

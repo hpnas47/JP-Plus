@@ -229,6 +229,34 @@
   - **Files audited:** EFM (optimized), special_teams.py, finishing_drives.py, home_field.py (all clean)
   - **Verification:** Backtest 2024 weeks 8-10 passed with identical results
 
+- **P3.7: Conditional Execution for Run Modes (Lazy Evaluation)**
+  - **Problem:** Weekly prediction and backtest modes share code paths but have different needs:
+    - Backtest needs detailed diagnostics (stack analysis, CLV, phase metrics)
+    - Weekly needs fast execution and report generation
+    - Sweeps need minimal overhead (no diagnostics, no reports)
+  - **Solution:** Added flags to skip unnecessary computations
+  - **New flags:**
+    | Script | Flag | What it skips | Savings |
+    |--------|------|--------------|---------|
+    | `backtest.py` | `--no-diagnostics` | Stack analysis, CLV report, phase metrics | ~150ms |
+    | `run_weekly.py` | `--no-reports` | Excel/HTML report generation | ~100-200ms |
+  - **Already lazy (no changes needed):**
+    - `SpreadGenerator.track_diagnostics` defaults to False
+    - Ridge regression cache already enabled in backtest
+    - Special teams uses simplified path in weekly mode
+  - **Implementation details:**
+    1. `backtest.py`: Added `diagnostics` parameter to `print_results()`, gated diagnostic blocks
+    2. `run_weekly.py`: Added `generate_reports` parameter to `run_predictions()`, conditional report creation
+  - **Usage examples:**
+    ```bash
+    # Fast backtest (skip verbose diagnostics)
+    python scripts/backtest.py --years 2024 --no-diagnostics
+
+    # Fast weekly test (skip report generation)
+    python scripts/run_weekly.py --year 2025 --week 5 --no-reports --no-wait
+    ```
+  - **Sanity report always runs:** `print_prediction_sanity_report()` is lightweight validation, not skipped
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints
