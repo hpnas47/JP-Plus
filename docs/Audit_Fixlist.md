@@ -139,13 +139,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Make IsoPPP (EPA/PPA on successful plays) computation consistent with the play weighting scheme used for success rate (garbage time weighting and any time decay). If a play is down-weighted for SR, it should also be down-weighted for IsoPPP.
   - **Notes:** FIXED 2026-02-03. In `_calculate_raw_metrics()`, changed IsoPPP calculation from `successful["ppa"].mean()` to weighted mean `(succ_ppa * succ_weights).sum() / succ_weights.sum()`. Now both SR and IsoPPP use identical play weighting (garbage time + time decay). Verified: synthetic test with inflated garbage time EPA shows weighted IsoPPP (0.34) properly lower than unweighted (0.52). Ridge adjustment already used weights correctly. Backtest unchanged (MAE 12.52, ATS 51.5%).
 
-- [ ] **P2.4 Consolidate garbage time thresholds (Settings → EFM)**
+- [x] **P2.4 Consolidate garbage time thresholds (Settings → EFM)** ✅ COMPLETE
   - **Files:** `config/settings.py`, `src/models/efficiency_foundation_model.py`
-  - **Issue:** Settings thresholds don’t control EFM; EFM has redundant logic.
+  - **Issue:** Settings thresholds don't control EFM; EFM has redundant logic.
   - **Acceptance criteria:** Single source of truth; clean non-overlapping logic; test coverage.
   - **AI nudge prompt:**
     > Consolidate garbage time threshold configuration so EFM uses a single source of truth (preferably Settings). Remove redundant/overlapping garbage time logic and add a test verifying garbage time classification behaves as intended by quarter.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Refactored `is_garbage_time()` to use Settings thresholds (Q1:28, Q2:24, Q3:21, Q4:16) instead of hardcoded overlapping conditions. Old logic had no Q1/Q2 detection and Q4>14; new uses per-quarter thresholds from Settings. Clean single-source lookup: `thresholds.get(quarter)`. Verified with 12 test cases (all boundaries + interior). Backtest: MAE 12.58, ATS 52.2% (improved from 51.5%), 3+ edge 53.7%.
 
 - [ ] **P2.5 Fix normalization of offense/defense components**
   - **Files:** `src/models/efficiency_foundation_model.py`

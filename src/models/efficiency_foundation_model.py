@@ -17,13 +17,17 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
 
+from config.settings import get_settings
+
 logger = logging.getLogger(__name__)
 
 
-# Garbage time thresholds (per spec)
-# >28 in 2nd half, >21 in 3rd quarter, >14 in 4th quarter
 def is_garbage_time(quarter: int, score_diff: int) -> bool:
     """Check if play is in garbage time.
+
+    Uses thresholds from Settings (single source of truth).
+    A play is garbage time if the score differential exceeds the
+    threshold for that quarter.
 
     Args:
         quarter: Game quarter (1-4)
@@ -31,14 +35,19 @@ def is_garbage_time(quarter: int, score_diff: int) -> bool:
 
     Returns:
         True if garbage time
+
+    Thresholds (from config/settings.py):
+        Q1: 28 pts, Q2: 24 pts, Q3: 21 pts, Q4: 16 pts
     """
-    if quarter >= 3 and score_diff > 28:  # 2nd half, >28
-        return True
-    if quarter == 3 and score_diff > 21:  # 3rd quarter, >21
-        return True
-    if quarter == 4 and score_diff > 14:  # 4th quarter, >14
-        return True
-    return False
+    settings = get_settings()
+    thresholds = {
+        1: settings.garbage_time_q1,
+        2: settings.garbage_time_q2,
+        3: settings.garbage_time_q3,
+        4: settings.garbage_time_q4,
+    }
+    threshold = thresholds.get(quarter, settings.garbage_time_q4)
+    return score_diff > threshold
 
 
 # Success rate thresholds
