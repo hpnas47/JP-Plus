@@ -52,26 +52,24 @@ Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained 
 
 ### Betting Line Data Sources
 
-Betting lines are sourced from the [CFBD API](https://collegefootballdata.com/), which aggregates lines from multiple sportsbooks. The backtest uses lines in the following priority order:
+Betting lines are sourced from the [CFBD API](https://collegefootballdata.com/), which aggregates lines from multiple sportsbooks. The backtest selects one provider per game in priority order:
 
-1. **DraftKings** (preferred) - 2,264 lines across 2022-2025
-2. **ESPN Bet** - 3,446 lines across 2022-2025
-3. **Bovada** - 3,264 lines across 2022-2025
+1. **DraftKings** (preferred)
+2. **ESPN Bet**
+3. **Bovada**
+4. Fallback to any available (William Hill, Consensus, Caesars)
 
-**Opening line availability by provider:**
-| Provider | Total Lines | With Opening Line |
-|----------|-------------|-------------------|
-| DraftKings | 2,264 | 2,108 (93%) |
-| ESPN Bet | 3,446 | 1,650 (48%) |
-| Bovada | 3,264 | 3,252 (99%) |
+**Actual provider usage in backtest (2022-2025):**
+| Provider | Games Used | With Opening Line |
+|----------|------------|-------------------|
+| DraftKings | 2,255 (39%) | 2,108 (93%) |
+| ESPN Bet | 1,671 (29%) | 165 (10%) |
+| Bovada | 908 (16%) | 901 (99%) |
+| William Hill | 498 (9%) | 0 (0%) |
+| Consensus | 404 (7%) | 0 (0%) |
+| **Total** | **5,800** | **3,174 (55%)** |
 
-**Additional providers in CFBD (used as fallback):**
-- William Hill (New Jersey) - 2,198 lines (2022-2023 only, no opening lines)
-- Consensus line - 1,230 lines (aggregated market line)
-- Caesars Sportsbook (Colorado) - 108 lines
-- TeamRankings - 776 lines
-
-The backtest prioritizes providers with opening line data (DraftKings, Bovada) to enable both opening and closing line ATS analysis.
+**Note on opening lines:** Only 55% of games have true opening line data. The opening line ATS results are based on this subset. DraftKings provides opening lines for 93% of its games, Bovada for 99%, but ESPN Bet only 10%. Games without opening lines use the closing line as a proxy in aggregate stats but are excluded from opening-line-specific ATS calculations.
 
 ---
 
