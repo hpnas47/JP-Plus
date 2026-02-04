@@ -342,7 +342,8 @@ class FinishingDrivesModel:
         if rz_plays.empty:
             return
 
-        all_teams = set(rz_plays["offense"].dropna())
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(rz_plays["offense"].dropna()))
 
         for team in all_teams:
             team_rz = rz_plays[rz_plays["offense"] == team]

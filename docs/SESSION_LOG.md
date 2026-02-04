@@ -154,6 +154,31 @@
   - **Documentation added:** Extended EFM class docstring with "FIELD POSITION INDEPENDENCE" section
   - **No refactoring needed:** Architecture already prevents double-counting by design
 
+- **Implemented Model Determinism Fixes**
+  - **Goal:** Ensure model produces identical outputs given identical inputs (week-by-week reproducibility)
+  - **Issues identified and fixed:**
+    1. **Set iteration order:** Python sets have non-deterministic iteration order. Fixed by using `sorted()` on all set unions.
+    2. **Sort stability:** When sorting teams by rating, ties produce non-deterministic ordering. Fixed by adding team name as secondary sort key.
+    3. **Floating-point summation order:** `np.mean()` results can vary slightly based on summation order. Fixed by sorting values before mean calculation where it matters.
+  - **Files modified:**
+    1. `src/models/efficiency_foundation_model.py`:
+       - Line 621: `all_teams = sorted(set(off_grouped.index) | set(def_grouped.index))`
+       - Line 856: `all_teams = sorted(set(turnovers_lost.index) | set(turnovers_forced.index))`
+       - Line 1040: `all_teams = sorted(set(adj_off_sr.keys()) | set(adj_def_sr.keys()))`
+       - Lines 1044-1050: Added `sorted()` to `np.mean()` value lists
+    2. `src/models/finishing_drives.py`:
+       - Line 346: `all_teams = sorted(set(rz_plays["offense"].dropna()))`
+    3. `src/models/special_teams.py`:
+       - Line 746: `sorted()` for kickoff coverage/return union
+       - Line 806: `sorted()` for FG/punt/kickoff union
+    4. `src/models/preseason_priors.py`:
+       - Lines 449, 688, 941: `sorted()` for all set unions
+    5. `src/adjustments/home_field.py`:
+       - Line 263: `sorted()` for team set union
+    6. `scripts/backtest.py`:
+       - Line 609: Added `(-x[1], x[0])` sort key for stable team ranking
+  - **Result:** Model now produces deterministic outputs for identical inputs across runs
+
 ### Scripts Added
 
 | Script | Purpose | Usage |

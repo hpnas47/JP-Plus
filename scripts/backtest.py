@@ -606,7 +606,8 @@ def walk_forward_predict(
             )
 
         # Build rankings for situational adjustments
-        sorted_teams = sorted(team_ratings.items(), key=lambda x: x[1], reverse=True)
+        # DETERMINISM: Use (rating, team_name) as sort key for stable ordering when ratings tie
+        sorted_teams = sorted(team_ratings.items(), key=lambda x: (-x[1], x[0]))
         rankings = {team: rank + 1 for rank, (team, _) in enumerate(sorted_teams)}
 
         # Calculate finishing drives with regression to mean

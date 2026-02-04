@@ -742,7 +742,8 @@ class SpecialTeamsModel:
             return_ratings[team] = return_value * returns_per_game / 3.0
 
         # Combine coverage and return ratings
-        all_teams = set(coverage_ratings.keys()) | set(return_ratings.keys())
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(coverage_ratings.keys()) | set(return_ratings.keys()))
         kickoff_ratings = {}
         for team in all_teams:
             coverage = coverage_ratings.get(team, 0.0)
@@ -802,7 +803,8 @@ class SpecialTeamsModel:
         kickoff_ratings = self.calculate_kickoff_ratings_from_plays(plays_df, games_played)
 
         # Merge all ratings
-        all_teams = set(fg_ratings.keys()) | set(punt_ratings.keys()) | set(kickoff_ratings.keys())
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(fg_ratings.keys()) | set(punt_ratings.keys()) | set(kickoff_ratings.keys()))
 
         for team in all_teams:
             fg_rating = fg_ratings.get(team, 0.0)

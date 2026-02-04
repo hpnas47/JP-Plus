@@ -617,7 +617,8 @@ class EfficiencyFoundationModel:
                         def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
 
         # Fill in missing teams with league average
-        all_teams = set(off_grouped.index) | set(def_grouped.index)
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(off_grouped.index) | set(def_grouped.index))
         for team in all_teams:
             if team not in off_sr:
                 off_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
@@ -851,8 +852,8 @@ class EfficiencyFoundationModel:
         # Count turnovers forced (defense = team that forced it)
         turnovers_forced = turnover_plays.groupby("defense").size()
 
-        # Get all teams
-        all_teams = set(turnovers_lost.index) | set(turnovers_forced.index)
+        # Get all teams - DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(turnovers_lost.index) | set(turnovers_forced.index))
 
         # Count games per team - MUST have reliable count for shrinkage calculation
         # P2.10: No arbitrary defaults; compute from data or fail loudly
@@ -1035,17 +1036,18 @@ class EfficiencyFoundationModel:
             self.turnover_margin = {}
 
         # Build team ratings
-        all_teams = set(adj_off_sr.keys()) | set(adj_def_sr.keys())
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(adj_off_sr.keys()) | set(adj_def_sr.keys()))
 
         # Calculate league averages from adjusted values
-        avg_sr = np.mean(list(adj_off_sr.values()))
-        avg_isoppp = np.mean([v for v in adj_off_isoppp.values() if v != self.LEAGUE_AVG_ISOPPP])
-        if np.isnan(avg_isoppp):
-            avg_isoppp = self.LEAGUE_AVG_ISOPPP
+        # DETERMINISM: Sort values for consistent floating-point summation order
+        avg_sr = np.mean(sorted(adj_off_sr.values()))
+        valid_isoppp = sorted([v for v in adj_off_isoppp.values() if v != self.LEAGUE_AVG_ISOPPP])
+        avg_isoppp = np.mean(valid_isoppp) if valid_isoppp else self.LEAGUE_AVG_ISOPPP
 
         # Calculate league average turnover rates for O/D split (P2.6)
-        avg_lost = np.mean(list(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
-        avg_forced = np.mean(list(self.turnovers_forced.values())) if self.turnovers_forced else 0.0
+        avg_lost = np.mean(sorted(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
+        avg_forced = np.mean(sorted(self.turnovers_forced.values())) if self.turnovers_forced else 0.0
 
         for team in all_teams:
             # Get adjusted metrics

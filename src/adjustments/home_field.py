@@ -259,8 +259,8 @@ class HomeFieldAdvantage:
         if years and "season" in games_df.columns:
             games_df = games_df[games_df["season"].isin(years)]
 
-        # Get all teams
-        all_teams = set(games_df["home_team"]) | set(games_df["away_team"])
+        # Get all teams - DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(games_df["home_team"]) | set(games_df["away_team"]))
 
         # Calculate league HFA first
         self.base_hfa = self.calculate_league_hfa(games_df, team_ratings)

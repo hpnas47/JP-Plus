@@ -445,7 +445,8 @@ class PreseasonPriors:
         incoming = incoming_df.groupby('destination')['total_ppa'].sum()
 
         # Calculate net impact for each team
-        all_teams = set(outgoing.index) | set(incoming.index)
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(outgoing.index) | set(incoming.index))
         portal_impact = {}
 
         for team in all_teams:
@@ -683,8 +684,8 @@ class PreseasonPriors:
         if use_portal:
             portal_impact = self.calculate_portal_impact(year, portal_scale=portal_scale)
 
-        # Get all teams
-        all_teams = set(prior_sp.keys()) | set(talent.keys())
+        # Get all teams - DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(prior_sp.keys()) | set(talent.keys()))
 
         # Calculate mean prior rating for regression
         if prior_sp:
@@ -937,7 +938,8 @@ class PreseasonPriors:
             f"inseason={inseason_weight:.1%}, talent_floor={talent_floor_weight:.1%}"
         )
 
-        all_teams = set(inseason_ratings.keys()) | set(self.preseason_ratings.keys())
+        # DETERMINISM: Sort for consistent iteration order
+        all_teams = sorted(set(inseason_ratings.keys()) | set(self.preseason_ratings.keys()))
         blended = {}
 
         for team in all_teams:
