@@ -51,6 +51,74 @@
 - **Actual Margin:** Positive (+) = Home Team Won
 - **Conversion:** `vegas_spread = -internal_spread`
 
+**10. Data Sources (Betting Lines)**
+- **Historical (2022-2025):** CFBD API - 91% FBS opening line coverage
+- **Future (2026+):** The Odds API - capture opening (Sunday) and closing (Saturday) lines
+- **Priority order:** DraftKings > ESPN Bet > Bovada > fallback
+- **Storage:** Odds API lines stored in `data/odds_api_lines.db` (SQLite)
+- **Merge logic:** `src/api/betting_lines.py` combines both sources, preferring Odds API when available
+- **Cost:** 2 credits/week for ongoing captures (opening + closing)
+
+---
+
+## Session: February 4, 2026
+
+### Completed Today
+
+- **Added 2022-2025 Backtest Performance Documentation**
+  - Walk-forward backtest across 4 seasons (2,477 FBS games, weeks 4-15)
+  - Aggregate: MAE 12.52, RMSE 15.80
+  - ATS vs Closing: 51.0% all, 51.8% at 3+ edge, 53.2% at 5+ edge
+  - ATS vs Opening: 53.1% all, 54.6% at 3+ edge, **57.0% at 5+ edge**
+  - Key insight: Opening line performance significantly exceeds closing, indicating model captures value that market prices out
+
+- **Documented Betting Line Data Sources**
+  - Analyzed actual provider usage in backtest
+  - DraftKings: 2,255 games (39%), 93% have opening lines
+  - ESPN Bet: 1,671 games (29%), only 10% have opening lines
+  - Bovada: 908 games (16%), 99% have opening lines
+  - Overall: 55% of all games have true opening lines from CFBD
+
+- **Integrated The Odds API for Future Data**
+  - Created `src/api/odds_api_client.py` - API client for current/historical odds
+  - Created `src/api/betting_lines.py` - Unified interface merging CFBD + Odds API
+  - Created `scripts/capture_odds.py` - Backfill and one-time capture utility
+  - Created `scripts/weekly_odds_capture.py` - Weekly scheduled captures
+  - **Note:** Historical backfill requires paid Odds API plan (free tier = current only)
+  - Tested current odds capture: 6 games returned, 1 credit used, 499 remaining
+
+- **Data Strategy Established**
+  - Historical (2022-2025): Continue using CFBD API (91% FBS opening line coverage)
+  - Future (2026+): The Odds API (2 credits/week for opening + closing)
+  - Opening lines: Capture Sunday ~6 PM ET
+  - Closing lines: Capture Saturday ~9 AM ET
+
+### Scripts Added
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `scripts/capture_odds.py` | One-time capture, backfill, quota check | `--check-quota`, `--capture-current`, `--backfill --year 2024` |
+| `scripts/weekly_odds_capture.py` | Scheduled weekly captures | `--opening` (Sunday), `--closing` (Saturday) |
+
+### Environment Setup
+
+```bash
+# Set API key
+export ODDS_API_KEY="your_key_here"
+
+# Check quota (free)
+python scripts/capture_odds.py --check-quota
+
+# Preview available odds (1 credit)
+python scripts/weekly_odds_capture.py --preview
+
+# Capture opening lines (1 credit)
+python scripts/weekly_odds_capture.py --opening
+
+# Capture closing lines (1 credit)
+python scripts/weekly_odds_capture.py --closing
+```
+
 ---
 
 ## Session: February 3, 2026

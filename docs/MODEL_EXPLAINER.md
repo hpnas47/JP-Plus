@@ -306,15 +306,33 @@ JP+ exposes separate offensive, defensive, and special teams ratings via `get_ra
 
 ---
 
-## Data Source
+## Data Sources
 
-All data comes from the College Football Data API (collegefootballdata.com), which provides:
+### Play-by-Play and Game Data
+
+All efficiency data comes from the **College Football Data API** (collegefootballdata.com):
 - Game scores and locations
 - Play-by-play data with EPA values
-- Vegas betting lines (spreads and totals)
 - Team rosters and recruiting rankings
 - Weather data (temperature, wind, precipitation, indoor flag)
 - SP+ and FPI ratings (for external comparison/validation)
+
+### Betting Lines
+
+JP+ uses a dual-source approach for betting lines:
+
+**Historical (2022-2025):** CFBD API
+- Aggregates lines from DraftKings, ESPN Bet, Bovada, and others
+- 91% of FBS games have opening line data
+- Used for backtesting ATS performance
+
+**Future (2026+):** The Odds API (the-odds-api.com)
+- Captures opening lines Sunday evening after posting
+- Captures closing lines Saturday morning before games
+- Primary sportsbooks: FanDuel, DraftKings, BetMGM, Caesars, Bovada
+- Data stored locally in `data/odds_api_lines.db`
+
+The `src/api/betting_lines.py` module merges both sources, preferring The Odds API data when available for better opening line coverage.
 
 ---
 
