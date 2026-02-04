@@ -159,6 +159,11 @@ class TravelAdjuster:
 
         The adjustment is from the home team's perspective (positive = favors home).
 
+        Note: Timezone penalty is reduced for short distances (<700 miles) because
+        analysis shows these "regional" games with timezone differences (e.g., due to
+        DST quirks or CT/ET border) are over-predicted when given full TZ penalty.
+        The 500-800mi TZ games showed +3.83 pts mean error vs -0.87 for no-TZ games.
+
         Args:
             home_team: Home team
             away_team: Away team
@@ -166,19 +171,33 @@ class TravelAdjuster:
         Returns:
             Tuple of (total adjustment favoring home, breakdown dict)
         """
-        tz_adj = self.get_timezone_adjustment(away_team, home_team)
+        tz_adj_raw = self.get_timezone_adjustment(away_team, home_team)
         dist_adj = self.get_distance_adjustment(away_team, home_team)
+
+        distance = self.get_distance(away_team, home_team)
+
+        # Reduce timezone penalty for short distances
+        # Rationale: DST quirks and CT/ET border crossings shouldn't penalize
+        # truly regional games where travel fatigue is minimal
+        tz_adj = tz_adj_raw
+        if distance is not None and abs(tz_adj_raw) > 0:
+            if distance < 400:
+                # Very short trips: eliminate TZ penalty entirely
+                tz_adj = 0.0
+            elif distance < 700:
+                # Short-medium trips: reduce TZ penalty by 50%
+                tz_adj = tz_adj_raw * 0.5
 
         # These are penalties on away team, so flip sign for home perspective
         total = -(tz_adj + dist_adj)
 
-        distance = self.get_distance(away_team, home_team)
         tz_diff = get_timezone_difference(away_team, home_team)
 
         breakdown = {
             "distance_miles": distance,
             "timezone_diff": tz_diff,
-            "timezone_penalty": -tz_adj,  # As home team advantage
+            "timezone_penalty_raw": -tz_adj_raw,  # Before distance dampening
+            "timezone_penalty": -tz_adj,  # After distance dampening (as home advantage)
             "distance_penalty": -dist_adj,  # As home team advantage
             "total_home_advantage": total,
         }
