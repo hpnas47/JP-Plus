@@ -21,9 +21,12 @@ Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained 
 
 | Metric | Value |
 |--------|-------|
-| **MAE** | 12.52 points |
-| **RMSE** | 15.80 points |
-| **Games** | 2,477 |
+| **MAE (vs actual)** | 12.54 points |
+| **MAE (vs closing)** | 4.37 points |
+| **RMSE** | 15.83 points |
+| **Games** | 2,489 |
+
+*MAE vs closing measures how close our predictions are to the efficient closing line - a cleaner engine quality metric.*
 
 ### Against The Spread (ATS)
 
