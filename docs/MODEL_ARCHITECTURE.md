@@ -777,7 +777,7 @@ The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 
 - [ ] Improve situational adjustment calibration
 
 ### Medium Priority
-- [ ] Multi-year backtesting to validate stability
+- [x] **Multi-year backtesting to validate stability** - ✅ DONE. Walk-forward backtest across 2022-2025 (4 seasons, 2,477 games weeks 4-15). Consistent performance: MAE 12.52, ATS 51.0% overall, 53.2% at 5+ edge. Opening line performance (57.0% at 5+ edge) indicates model captures value that market prices out.
 - [x] **Weather impact modeling** - ✅ DONE. Added `WeatherAdjuster` class that fetches weather data from CFBD API and calculates totals adjustments based on wind (>10 mph: -0.3 pts/mph), temperature (<40°F: -0.15 pts/degree), and precipitation (>0.02 in: -3.0 pts). Indoor games receive no adjustment. Ready for totals prediction integration.
 - [x] **Expand special teams beyond FG** - ✅ DONE. Added punt and kickoff ratings to complete ST model. All components expressed as PBTA (Points Better Than Average) per game. Punt rating: net yards vs expected (40 yds) converted to points + inside-20/touchback adjustments. Kickoff rating: coverage (touchback rate, return yards allowed) + returns (return yards gained). Overall = FG + Punt + Kickoff. FBS distribution: mean ~0, std ~1.0, 95% within ±2 pts/game.
 
