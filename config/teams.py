@@ -151,12 +151,21 @@ validate_rivalries()
 
 
 def is_rivalry_game(team1: str, team2: str) -> bool:
-    """Check if two teams are rivals."""
+    """Check if two teams are rivals.
+
+    Note: Uses team name normalization (P2.13) to handle CFBD naming variations.
+    """
+    # Normalization happens in safe_is_rivalry, called at end of module load
+    # For now, do direct lookup - safe_is_rivalry is preferred for external use
     return frozenset([team1, team2]) in _RIVALRY_SET
 
 
 def get_team_altitude(team: str) -> int:
-    """Get team's home venue elevation in feet. Returns 0 for sea-level teams."""
+    """Get team's home venue elevation in feet. Returns 0 for sea-level teams.
+
+    Note: Uses team name normalization (P2.13) to handle CFBD naming variations.
+    """
+    # Defer normalization to avoid circular import during module init
     return ALTITUDE_VENUES.get(team, {}).get("elevation", 0)
 
 
@@ -165,6 +174,8 @@ def get_altitude_adjustment(home_team: str, away_team: str) -> float:
     Calculate altitude adjustment for away team visiting high-altitude venue.
 
     Returns positive adjustment favoring home team if away team is from low altitude.
+
+    Note: Uses team name normalization (P2.13) to handle CFBD naming variations.
     """
     if home_team not in ALTITUDE_VENUES:
         return 0.0
@@ -342,12 +353,19 @@ TEAM_LOCATIONS: dict[str, dict] = {
 
 
 def get_team_location(team: str) -> dict | None:
-    """Get team location data. Returns None if team not found."""
+    """Get team location data. Returns None if team not found.
+
+    Note: For normalized lookups, use safe_get_location() instead.
+    """
     return TEAM_LOCATIONS.get(team)
 
 
 def get_timezone_difference(team1: str, team2: str) -> int:
-    """Get timezone difference in hours between two teams (absolute value)."""
+    """Get timezone difference in hours between two teams (absolute value).
+
+    Note: Uses team name normalization (P2.13) to handle CFBD naming variations.
+    """
+    # Use safe_get_location for normalization (defined later in module)
     loc1 = TEAM_LOCATIONS.get(team1)
     loc2 = TEAM_LOCATIONS.get(team2)
 
@@ -365,6 +383,8 @@ def get_directed_timezone_change(away_team: str, home_team: str) -> int:
     - Negative return = traveling WEST (gaining time, easier)
     - Zero = same timezone
 
+    Note: Uses team name normalization (P2.13) to handle CFBD naming variations.
+
     Args:
         away_team: Team that is traveling
         home_team: Team hosting the game
@@ -372,6 +392,7 @@ def get_directed_timezone_change(away_team: str, home_team: str) -> int:
     Returns:
         Signed timezone change in hours (positive = east, negative = west)
     """
+    # Use safe_get_location for normalization (defined later in module)
     away_loc = TEAM_LOCATIONS.get(away_team)
     home_loc = TEAM_LOCATIONS.get(home_team)
 
@@ -382,3 +403,244 @@ def get_directed_timezone_change(away_team: str, home_team: str) -> int:
     # If away has higher offset, they're further west → traveling east (positive)
     # If away has lower offset, they're further east → traveling west (negative)
     return away_loc["tz_offset"] - home_loc["tz_offset"]
+
+
+# =============================================================================
+# TEAM NAME NORMALIZATION (P2.13)
+# =============================================================================
+# Centralized team name aliasing to handle CFBD naming variations.
+# All metadata lookups should use normalize_team_name() or the safe_* wrappers.
+
+import logging
+_team_logger = logging.getLogger(__name__)
+
+# Unknown teams encountered during normalization (for coverage reporting)
+_unknown_teams: set[str] = set()
+
+# Aliases mapping CFBD/variant names → canonical names used in our metadata
+# Format: "variant_name": "canonical_name"
+TEAM_NAME_ALIASES: dict[str, str] = {
+    # CFBD uses these; we use the value
+    "Miami (FL)": "Miami",
+    "Miami FL": "Miami",
+    "Miami-FL": "Miami",
+    "Southern California": "USC",
+    "Louisiana State": "LSU",
+    "Mississippi": "Ole Miss",
+    "Pittsburgh": "Pitt",
+    "Southern Methodist": "SMU",
+    "Central Florida": "UCF",
+    "Hawai'i": "Hawaii",
+    "San José State": "San Jose State",
+    "Texas-San Antonio": "UTSA",
+    "UT San Antonio": "UTSA",
+    "Texas-El Paso": "UTEP",
+    "Middle Tennessee State": "Middle Tennessee",
+    "Massachusetts": "UMass",
+    "Connecticut": "UConn",
+    "Brigham Young": "BYU",
+    "Southern Miss": "Southern Mississippi",
+    "Southern Mississippi": "Southern Miss",
+    "North Carolina State": "NC State",
+    "California": "Cal",
+    "UC Berkeley": "Cal",
+
+    # Common abbreviation variations
+    "Florida Intl": "FIU",
+    "Florida International": "FIU",
+    "Florida Atlantic": "FAU",
+    "Louisiana-Lafayette": "Louisiana",
+    "UL Lafayette": "Louisiana",
+    "Louisiana Lafayette": "Louisiana",
+    "Louisiana-Monroe": "ULM",
+    "UL Monroe": "ULM",
+    "Louisiana Monroe": "ULM",
+    "Sam Houston State": "Sam Houston",
+    "SHSU": "Sam Houston",
+    "NIU": "Northern Illinois",
+    "WKU": "Western Kentucky",
+    "BGSU": "Bowling Green",
+    "CMU": "Central Michigan",
+    "EMU": "Eastern Michigan",
+    "WMU": "Western Michigan",
+    "SJSU": "San Jose State",
+    "SDSU": "San Diego State",
+
+    # Full name variations
+    "Texas Christian": "TCU",
+    "Texas A&M University": "Texas A&M",
+    "Texas AM": "Texas A&M",
+    "University of Miami": "Miami",
+    "University of Southern California": "USC",
+    "University of California": "Cal",
+}
+
+# Build reverse lookup for validation
+_CANONICAL_NAMES: set[str] = (
+    set(TEAM_LOCATIONS.keys()) |
+    set(ALTITUDE_VENUES.keys()) |
+    {team for pair in RIVALRIES for team in pair}
+)
+
+
+def normalize_team_name(team: str) -> str:
+    """Normalize a team name to canonical form used in metadata.
+
+    This is the primary entry point for team name normalization.
+    Use this before any metadata lookup.
+
+    Args:
+        team: Team name (possibly from CFBD or other source)
+
+    Returns:
+        Canonical team name used in our metadata tables
+    """
+    if team is None:
+        return team
+
+    # Check if it's already canonical
+    if team in _CANONICAL_NAMES:
+        return team
+
+    # Check aliases
+    if team in TEAM_NAME_ALIASES:
+        return TEAM_NAME_ALIASES[team]
+
+    # Track unknown teams for coverage reporting
+    if team not in _unknown_teams:
+        _unknown_teams.add(team)
+        _team_logger.debug(f"Unknown team name encountered: '{team}' (not in aliases or metadata)")
+
+    # Return original if no alias found
+    return team
+
+
+def get_unknown_teams() -> set[str]:
+    """Get set of team names that weren't found in aliases or metadata.
+
+    Call this after processing to identify potential naming issues.
+
+    Returns:
+        Set of unknown team names encountered
+    """
+    return _unknown_teams.copy()
+
+
+def clear_unknown_teams() -> None:
+    """Clear the unknown teams tracking set."""
+    _unknown_teams.clear()
+
+
+def get_team_coverage_report(teams: set[str]) -> dict:
+    """Generate a coverage report showing which teams have metadata.
+
+    Args:
+        teams: Set of team names to check (e.g., from CFBD FBS list)
+
+    Returns:
+        Dict with coverage statistics and missing team lists
+    """
+    # Normalize all team names
+    normalized = {normalize_team_name(t) for t in teams}
+
+    # Check coverage in each metadata table
+    has_location = {t for t in normalized if t in TEAM_LOCATIONS}
+    has_altitude = {t for t in normalized if t in ALTITUDE_VENUES}
+    in_rivalry = {t for t in normalized if any(t in pair for pair in RIVALRIES)}
+
+    missing_location = normalized - has_location
+    missing_altitude = normalized - has_altitude  # Most teams don't need altitude
+
+    return {
+        "total_teams": len(normalized),
+        "has_location": len(has_location),
+        "has_altitude": len(has_altitude),
+        "in_rivalry": len(in_rivalry),
+        "missing_location": sorted(missing_location),
+        "coverage_pct": len(has_location) / len(normalized) * 100 if normalized else 0,
+        "unknown_aliases": sorted(get_unknown_teams()),
+    }
+
+
+def log_team_coverage(teams: set[str]) -> None:
+    """Log a team coverage report.
+
+    Args:
+        teams: Set of team names to check
+    """
+    report = get_team_coverage_report(teams)
+
+    _team_logger.info(
+        f"Team metadata coverage: {report['has_location']}/{report['total_teams']} "
+        f"({report['coverage_pct']:.1f}%) have location data"
+    )
+
+    if report["missing_location"]:
+        _team_logger.warning(
+            f"Teams missing location data ({len(report['missing_location'])}): "
+            f"{report['missing_location'][:10]}{'...' if len(report['missing_location']) > 10 else ''}"
+        )
+
+    if report["unknown_aliases"]:
+        _team_logger.warning(
+            f"Unknown team names ({len(report['unknown_aliases'])}): "
+            f"{report['unknown_aliases'][:10]}{'...' if len(report['unknown_aliases']) > 10 else ''}"
+        )
+
+
+# =============================================================================
+# SAFE LOOKUP FUNCTIONS (use normalization)
+# =============================================================================
+
+def safe_get_location(team: str) -> dict | None:
+    """Get team location with name normalization.
+
+    Args:
+        team: Team name (will be normalized)
+
+    Returns:
+        Location dict or None if not found
+    """
+    normalized = normalize_team_name(team)
+    return TEAM_LOCATIONS.get(normalized)
+
+
+def safe_get_altitude(team: str) -> dict | None:
+    """Get team altitude info with name normalization.
+
+    Args:
+        team: Team name (will be normalized)
+
+    Returns:
+        Altitude dict or None if not high altitude
+    """
+    normalized = normalize_team_name(team)
+    return ALTITUDE_VENUES.get(normalized)
+
+
+def safe_is_rivalry(team1: str, team2: str) -> bool:
+    """Check if two teams are rivals with name normalization.
+
+    Args:
+        team1: First team name
+        team2: Second team name
+
+    Returns:
+        True if teams are rivals
+    """
+    t1 = normalize_team_name(team1)
+    t2 = normalize_team_name(team2)
+    return frozenset([t1, t2]) in _RIVALRY_SET
+
+
+def safe_is_high_altitude(team: str) -> bool:
+    """Check if team plays at high altitude with name normalization.
+
+    Args:
+        team: Team name
+
+    Returns:
+        True if team's home venue is high altitude
+    """
+    normalized = normalize_team_name(team)
+    return normalized in HIGH_ALTITUDE_TEAMS

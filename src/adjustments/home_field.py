@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from config.settings import get_settings
+from config.teams import normalize_team_name
 
 logger = logging.getLogger(__name__)
 
@@ -494,12 +495,15 @@ class HomeFieldAdvantage:
         if neutral_site:
             return 0.0, "neutral"
 
+        # P2.13: Normalize team name for lookups
+        normalized_team = normalize_team_name(home_team)
+
         # Get base HFA with source tracking
-        if home_team in TEAM_HFA_VALUES:
-            base = TEAM_HFA_VALUES[home_team]
+        if normalized_team in TEAM_HFA_VALUES:
+            base = TEAM_HFA_VALUES[normalized_team]
             source = "curated"
-        elif home_team in self.team_hfa:
-            base = self.team_hfa[home_team]
+        elif normalized_team in self.team_hfa:
+            base = self.team_hfa[normalized_team]
             source = "dynamic"
         elif conference:
             base = CONFERENCE_HFA_DEFAULTS.get(conference, self.base_hfa)
@@ -510,8 +514,8 @@ class HomeFieldAdvantage:
 
         # Apply trajectory modifier for rising/declining programs
         trajectory_applied = False
-        if apply_trajectory and home_team in self.trajectory_modifiers:
-            modifier = self.trajectory_modifiers[home_team]
+        if apply_trajectory and normalized_team in self.trajectory_modifiers:
+            modifier = self.trajectory_modifiers[normalized_team]
             base = base + modifier
             # Keep within reasonable bounds
             base = max(1.0, min(5.0, base))

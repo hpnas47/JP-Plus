@@ -13,7 +13,13 @@ from typing import Optional
 from geopy.distance import geodesic
 
 from config.settings import get_settings
-from config.teams import TEAM_LOCATIONS, get_timezone_difference, get_directed_timezone_change
+from config.teams import (
+    TEAM_LOCATIONS,
+    get_timezone_difference,
+    get_directed_timezone_change,
+    safe_get_location,
+    normalize_team_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +62,8 @@ class TravelAdjuster:
     ) -> Optional[float]:
         """Get distance between two teams' home venues in miles.
 
+        Uses team name normalization (P2.13) to handle CFBD naming variations.
+
         Args:
             team_a: First team
             team_b: Second team
@@ -63,8 +71,9 @@ class TravelAdjuster:
         Returns:
             Distance in miles or None if location data unavailable
         """
-        loc_a = TEAM_LOCATIONS.get(team_a)
-        loc_b = TEAM_LOCATIONS.get(team_b)
+        # P2.13: Use normalized lookups
+        loc_a = safe_get_location(team_a)
+        loc_b = safe_get_location(team_b)
 
         if loc_a is None or loc_b is None:
             return None

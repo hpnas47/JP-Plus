@@ -8,6 +8,8 @@ from config.teams import (
     HIGH_ALTITUDE_TEAMS,
     get_altitude_adjustment,
     get_team_altitude,
+    normalize_team_name,
+    safe_is_high_altitude,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,13 +50,15 @@ class AltitudeAdjuster:
     def is_high_altitude_team(self, team: str) -> bool:
         """Check if team plays at high altitude.
 
+        Uses team name normalization (P2.13) to handle CFBD naming variations.
+
         Args:
             team: Team name
 
         Returns:
             True if team's home venue is above 3000 feet
         """
-        return team in HIGH_ALTITUDE_TEAMS
+        return safe_is_high_altitude(team)
 
     def get_altitude_adjustment(
         self,
