@@ -203,12 +203,12 @@ def fetch_season_plays(
         year: Season year
 
     Returns:
-        Tuple of (early_down_plays_df, turnover_plays_df, efficiency_plays_df, fg_plays_df) as Polars DataFrames
+        Tuple of (early_down_plays_df, turnover_plays_df, efficiency_plays_df, st_plays_df) as Polars DataFrames
     """
     early_down_plays = []
     turnover_plays = []
     efficiency_plays = []  # All scrimmage plays with PPA for efficiency model
-    fg_plays = []  # Field goal plays for special teams model
+    st_plays = []  # Special teams plays (FG, Punt, Kickoff) for ST model
     failed_weeks = []
     successful_weeks = []
 
@@ -229,12 +229,13 @@ def fetch_season_plays(
                         "play_type": play_type,
                     })
 
-                # Collect field goal plays
-                if "Field Goal" in play_type:
-                    fg_plays.append({
+                # Collect special teams plays (FG, Punt, Kickoff) for ST model
+                if any(st in play_type for st in ["Field Goal", "Punt", "Kickoff"]):
+                    st_plays.append({
                         "week": week,
                         "game_id": play.game_id,
                         "offense": play.offense,
+                        "defense": play.defense,
                         "play_type": play_type,
                         "play_text": play.play_text,
                     })
@@ -298,13 +299,13 @@ def fetch_season_plays(
 
     logger.info(
         f"Fetched {len(early_down_plays)} early-down, {len(turnover_plays)} turnover, "
-        f"{len(efficiency_plays)} efficiency, {len(fg_plays)} FG plays for {year}"
+        f"{len(efficiency_plays)} efficiency, {len(st_plays)} ST plays for {year}"
     )
     return (
         pl.DataFrame(early_down_plays),
         pl.DataFrame(turnover_plays),
         pl.DataFrame(efficiency_plays),
-        pl.DataFrame(fg_plays),
+        pl.DataFrame(st_plays),
     )
 
 
@@ -552,7 +553,7 @@ def walk_forward_predict_efm(
     year: int = 2024,
     fcs_penalty_elite: float = 18.0,
     fcs_penalty_standard: float = 32.0,
-    fg_plays_df: Optional[pl.DataFrame] = None,
+    st_plays_df: Optional[pl.DataFrame] = None,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -581,7 +582,7 @@ def walk_forward_predict_efm(
         year: Current season year (for trajectory calculation)
         fcs_penalty_elite: Points for elite FCS teams (default 18.0)
         fcs_penalty_standard: Points for standard FCS teams (default 32.0)
-        fg_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
+        st_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
 
     Returns:
         List of prediction result dictionaries
@@ -708,15 +709,16 @@ def walk_forward_predict_efm(
 
         # Calculate FG efficiency ratings from FG plays
         special_teams = SpecialTeamsModel()
-        if fg_plays_df is not None and len(fg_plays_df) > 0:
-            # Filter to FG plays before this week (Polars filtering)
-            train_fg_pl = fg_plays_df.filter(pl.col("week") < pred_week)
-            if len(train_fg_pl) > 0:
-                train_fg_pd = train_fg_pl.to_pandas()
-                special_teams.calculate_fg_ratings_from_plays(train_fg_pd)
-                # Integrate special teams ratings into EFM for O/D/ST breakdown
+        if st_plays_df is not None and len(st_plays_df) > 0:
+            # Filter to ST plays before this week (Polars filtering)
+            train_st_pl = st_plays_df.filter(pl.col("week") < pred_week)
+            if len(train_st_pl) > 0:
+                train_st_pd = train_st_pl.to_pandas()
+                # Calculate all ST ratings (FG + Punt + Kickoff)
+                special_teams.calculate_all_st_ratings_from_plays(train_st_pd)
+                # Integrate special teams ratings into EFM for O/D/ST breakdown (diagnostic only)
                 for team, st_rating in special_teams.team_ratings.items():
-                    efm.set_special_teams_rating(team, st_rating.field_goal_rating)
+                    efm.set_special_teams_rating(team, st_rating.overall_rating)
 
         # Build spread generator with EFM as base model
         # NOTE: EFM is the foundation - no luck/early-down needed since it's built on efficiency
@@ -961,7 +963,7 @@ def fetch_all_season_data(
         portal_scale: How much to weight portal impact (default 0.15)
 
     Returns:
-        Dict mapping year to (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, fg_plays_df)
+        Dict mapping year to (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df)
     """
     client = CFBDClient()
     season_data = {}
@@ -972,7 +974,7 @@ def fetch_all_season_data(
         games_df, betting_df = fetch_season_data(client, year)
         logger.info(f"Loaded {len(games_df)} games, {len(betting_df)} betting lines")
 
-        plays_df, turnover_plays_df, efficiency_plays_df, fg_plays_df = fetch_season_plays(client, year)
+        plays_df, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
 
         turnover_df = build_game_turnovers(games_df, turnover_plays_df)
         logger.info(f"Built turnover margins for {len(turnover_df)} games")
@@ -1014,7 +1016,7 @@ def fetch_all_season_data(
                 logger.warning(f"Could not load preseason priors for {year}: {e}")
                 priors = None
 
-        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, fg_plays_df)
+        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df)
 
     return season_data
 
@@ -1094,7 +1096,7 @@ def run_backtest(
     for year in years:
         logger.info(f"\nBacktesting {year} season {'(EFM)' if use_efm else '(Ridge)'}...")
 
-        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, fg_plays_df = season_data[year]
+        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
 
         if use_efm:
             # Walk-forward predictions using EFM
@@ -1116,7 +1118,7 @@ def run_backtest(
                 year=year,
                 fcs_penalty_elite=fcs_penalty_elite,
                 fcs_penalty_standard=fcs_penalty_standard,
-                fg_plays_df=fg_plays_df,
+                st_plays_df=st_plays_df,
             )
         else:
             # Walk-forward predictions using ridge model (legacy - needs pandas)

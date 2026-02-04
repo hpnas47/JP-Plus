@@ -474,3 +474,310 @@ class SpecialTeamsModel:
         away_fg = away_rating.field_goal_rating if away_rating else 0.0
 
         return home_fg - away_fg
+
+    def calculate_punt_ratings_from_plays(
+        self,
+        plays_df: pd.DataFrame,
+        games_played: Optional[dict[str, int]] = None,
+    ) -> dict[str, float]:
+        """Calculate punt ratings for all teams from play-by-play data.
+
+        Parses punt plays and calculates net yards above expected.
+        Punting team is identified from the 'offense' column (team punting).
+
+        Expected punt net: 40 yards
+        Bonus: Inside-20 punts (+5 yards equivalent)
+        Penalty: Touchbacks (-3 yards equivalent)
+
+        Args:
+            plays_df: DataFrame with play-by-play data
+            games_played: Optional dict of team -> games played
+
+        Returns:
+            Dict mapping team to per-game punt rating (yards above expected)
+        """
+        if plays_df.empty:
+            logger.debug("Empty plays dataframe, skipping punt rating calculation")
+            return {}
+
+        # Filter to punt plays
+        punt_plays = plays_df[
+            plays_df["play_type"].str.contains("Punt", case=False, na=False)
+        ].copy()
+
+        if punt_plays.empty:
+            logger.debug("No punt plays found")
+            return {}
+
+        # Parse punt distance from play_text
+        # Examples: "John Smith punt for 45 yards", "punt for 52 Yds"
+        def extract_punt_yards(text):
+            if pd.isna(text):
+                return None
+            match = re.search(r'punt\s+(?:for\s+)?(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
+            return int(match.group(1)) if match else None
+
+        # Detect touchbacks (ball goes into end zone)
+        def is_touchback(text):
+            if pd.isna(text):
+                return False
+            return 'touchback' in str(text).lower()
+
+        # Detect inside-20 (fair catch or downed inside 20)
+        def is_inside_20(text):
+            if pd.isna(text):
+                return False
+            text_lower = str(text).lower()
+            # Look for indicators of inside-20
+            return ('inside' in text_lower and '20' in text_lower) or \
+                   ('downed' in text_lower) or \
+                   ('fair catch' in text_lower and 'to the' in text_lower)
+
+        # Parse return yards
+        def extract_return_yards(text):
+            if pd.isna(text):
+                return 0
+            # "returned by X for Y yards" or "return for Y yards"
+            match = re.search(r'return(?:ed)?.*?(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
+            return int(match.group(1)) if match else 0
+
+        punt_plays["gross_yards"] = punt_plays["play_text"].apply(extract_punt_yards)
+        punt_plays["is_touchback"] = punt_plays["play_text"].apply(is_touchback)
+        punt_plays["is_inside_20"] = punt_plays["play_text"].apply(is_inside_20)
+        punt_plays["return_yards"] = punt_plays["play_text"].apply(extract_return_yards)
+
+        # Filter out plays without parseable gross yards
+        punt_plays = punt_plays[punt_plays["gross_yards"].notna()].copy()
+
+        if punt_plays.empty:
+            logger.debug("No punt plays with parseable distance")
+            return {}
+
+        # Calculate net yards
+        # Touchback: ball placed at 20, so net = gross - (100 - 20) is wrong
+        # Actually, net = field_position_change. For touchback, opponent starts at 25.
+        # Simplified: net = gross - return_yards, touchback = gross - 25 (from own 25 equivalent)
+        def calc_net_yards(row):
+            gross = row["gross_yards"]
+            if row["is_touchback"]:
+                # Touchback: opponent gets ball at 25, so net is limited
+                # Approximation: net = min(gross, 55) since touchback from far means wasted yards
+                return min(gross, 55)
+            return gross - row["return_yards"]
+
+        punt_plays["net_yards"] = punt_plays.apply(calc_net_yards, axis=1)
+
+        # Calculate rating relative to expected (40 yards net)
+        # Plus bonuses/penalties
+        def calc_punt_value(row):
+            net_vs_expected = row["net_yards"] - self.EXPECTED_PUNT_NET
+            inside_20_bonus = 5.0 if row["is_inside_20"] else 0.0
+            touchback_penalty = -3.0 if row["is_touchback"] else 0.0
+            return net_vs_expected + inside_20_bonus + touchback_penalty
+
+        punt_plays["punt_value"] = punt_plays.apply(calc_punt_value, axis=1)
+
+        # Aggregate by punting team (offense column = team that punted)
+        team_punts = punt_plays.groupby("offense").agg(
+            total_value=("punt_value", "sum"),
+            punt_count=("punt_value", "count"),
+            avg_gross=("gross_yards", "mean"),
+            avg_net=("net_yards", "mean"),
+        )
+
+        # Convert to per-game rating
+        punt_ratings = {}
+        for team, row in team_punts.iterrows():
+            punt_count = row["punt_count"]
+            # Estimate games from punt count (avg ~5 punts per game)
+            estimated_games = max(1, punt_count / 5.0)
+            if games_played and team in games_played:
+                estimated_games = games_played[team]
+
+            per_game_rating = row["total_value"] / estimated_games
+            punt_ratings[team] = per_game_rating
+
+        logger.info(
+            f"Calculated punt ratings for {len(punt_ratings)} teams "
+            f"from {len(punt_plays)} punts"
+        )
+
+        return punt_ratings
+
+    def calculate_kickoff_ratings_from_plays(
+        self,
+        plays_df: pd.DataFrame,
+        games_played: Optional[dict[str, int]] = None,
+    ) -> dict[str, float]:
+        """Calculate kickoff ratings for all teams from play-by-play data.
+
+        Two components:
+        1. Coverage rating: How well team covers kickoffs (fewer return yards allowed)
+        2. Return rating: How well team returns kickoffs (more return yards gained)
+
+        Expected return: 23 yards (when not a touchback)
+        Expected touchback rate: 60%
+
+        Args:
+            plays_df: DataFrame with play-by-play data
+            games_played: Optional dict of team -> games played
+
+        Returns:
+            Dict mapping team to per-game kickoff rating
+        """
+        if plays_df.empty:
+            logger.debug("Empty plays dataframe, skipping kickoff rating calculation")
+            return {}
+
+        # Filter to kickoff plays (exclude touchdowns which are in play_type)
+        kickoff_plays = plays_df[
+            plays_df["play_type"].str.lower().str.contains("kickoff", na=False) &
+            ~plays_df["play_type"].str.lower().str.contains("touchdown", na=False)
+        ].copy()
+
+        if kickoff_plays.empty:
+            logger.debug("No kickoff plays found")
+            return {}
+
+        # Detect touchbacks
+        def is_touchback(text, play_type):
+            if pd.isna(text):
+                return False
+            text_lower = str(text).lower()
+            # Touchback if explicitly stated or "for a touchback"
+            return 'touchback' in text_lower
+
+        # Parse return yards
+        def extract_return_yards(text):
+            if pd.isna(text):
+                return None
+            # "returned by X for Y yards" or "return for Y yards"
+            match = re.search(r'return(?:ed)?.*?(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
+            return int(match.group(1)) if match else None
+
+        kickoff_plays["is_touchback"] = kickoff_plays.apply(
+            lambda r: is_touchback(r["play_text"], r["play_type"]), axis=1
+        )
+        kickoff_plays["return_yards"] = kickoff_plays["play_text"].apply(extract_return_yards)
+
+        # For non-touchbacks without parsed return yards, use average
+        kickoff_plays.loc[
+            ~kickoff_plays["is_touchback"] & kickoff_plays["return_yards"].isna(),
+            "return_yards"
+        ] = 23  # Default to expected
+
+        # Kicking team = offense (the team kicking off)
+        # Returning team = defense (the team receiving)
+
+        # Coverage rating (for kicking teams)
+        coverage_ratings = {}
+        kicker_groups = kickoff_plays.groupby("offense")
+        for team, group in kicker_groups:
+            touchbacks = group["is_touchback"].sum()
+            total_kicks = len(group)
+            tb_rate = touchbacks / total_kicks if total_kicks > 0 else 0.6
+
+            # Returns allowed (non-touchback kicks)
+            returns = group[~group["is_touchback"]]
+            if len(returns) > 0:
+                avg_return_allowed = returns["return_yards"].mean()
+            else:
+                avg_return_allowed = 23  # Expected
+
+            # Coverage value: touchback bonus + return yards saved
+            tb_bonus = (tb_rate - self.EXPECTED_TOUCHBACK_RATE) * 3.0  # 3 pts per 10% above expected
+            return_saved = (23.0 - avg_return_allowed) / 5.0  # ~0.2 pts per yard saved
+
+            # Estimate games
+            estimated_games = max(1, total_kicks / 5.0)
+            if games_played and team in games_played:
+                estimated_games = games_played[team]
+
+            coverage_ratings[team] = (tb_bonus + return_saved) * (total_kicks / estimated_games) / 5.0
+
+        # Return rating (for returning teams)
+        return_ratings = {}
+        returner_groups = kickoff_plays[~kickoff_plays["is_touchback"]].groupby("defense")
+        for team, group in returner_groups:
+            if len(group) == 0:
+                continue
+            avg_return = group["return_yards"].mean()
+            return_value = (avg_return - 23.0) / 5.0  # ~0.2 pts per yard above expected
+
+            # Estimate games
+            estimated_games = max(1, len(group) / 3.0)  # ~3 non-TB kickoffs per game to return
+            if games_played and team in games_played:
+                estimated_games = games_played[team]
+
+            return_ratings[team] = return_value * (len(group) / estimated_games) / 3.0
+
+        # Combine coverage and return ratings
+        all_teams = set(coverage_ratings.keys()) | set(return_ratings.keys())
+        kickoff_ratings = {}
+        for team in all_teams:
+            coverage = coverage_ratings.get(team, 0.0)
+            returns = return_ratings.get(team, 0.0)
+            kickoff_ratings[team] = coverage + returns
+
+        logger.info(
+            f"Calculated kickoff ratings for {len(kickoff_ratings)} teams "
+            f"from {len(kickoff_plays)} kickoffs"
+        )
+
+        return kickoff_ratings
+
+    def calculate_all_st_ratings_from_plays(
+        self,
+        plays_df: pd.DataFrame,
+        games_played: Optional[dict[str, int]] = None,
+    ) -> None:
+        """Calculate complete special teams ratings (FG + punt + kickoff) from plays.
+
+        This is the main entry point for populating ST ratings from play-by-play data.
+        Combines field goal PAAE, punt net yards, and kickoff coverage/return ratings.
+
+        Args:
+            plays_df: DataFrame with play-by-play data (needs play_type, play_text, offense, defense)
+            games_played: Optional dict of team -> games played for normalization
+        """
+        if plays_df.empty:
+            logger.warning("Empty plays dataframe, skipping all ST rating calculations")
+            return
+
+        # Calculate each component
+        # FG ratings (stored directly in self.team_ratings)
+        self.calculate_fg_ratings_from_plays(plays_df, games_played)
+
+        # Get existing FG ratings to merge with
+        fg_ratings = {team: r.field_goal_rating for team, r in self.team_ratings.items()}
+
+        # Punt ratings
+        punt_ratings = self.calculate_punt_ratings_from_plays(plays_df, games_played)
+
+        # Kickoff ratings
+        kickoff_ratings = self.calculate_kickoff_ratings_from_plays(plays_df, games_played)
+
+        # Merge all ratings
+        all_teams = set(fg_ratings.keys()) | set(punt_ratings.keys()) | set(kickoff_ratings.keys())
+
+        for team in all_teams:
+            fg_rating = fg_ratings.get(team, 0.0)
+            punt_rating = punt_ratings.get(team, 0.0)
+            kick_rating = kickoff_ratings.get(team, 0.0)
+
+            # Overall: weighted combination (FG is most impactful)
+            # Weights based on typical game impact: FG ~2pts, Punt ~1pt, Kickoff ~0.5pt
+            overall = fg_rating + (punt_rating / 5.0) + kick_rating
+
+            self.team_ratings[team] = SpecialTeamsRating(
+                team=team,
+                field_goal_rating=fg_rating,
+                punt_rating=punt_rating,
+                kickoff_rating=kick_rating,
+                overall_rating=overall,
+            )
+
+        logger.info(
+            f"Calculated complete ST ratings for {len(self.team_ratings)} teams "
+            f"(FG: {len(fg_ratings)}, Punt: {len(punt_ratings)}, Kickoff: {len(kickoff_ratings)})"
+        )
