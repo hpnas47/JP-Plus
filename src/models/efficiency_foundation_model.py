@@ -110,7 +110,7 @@ class TeamEFMRating:
     # Separate O/D/ST ratings (in points, relative to average)
     offensive_rating: float  # Higher = better offense
     defensive_rating: float  # Higher = better defense (fewer points allowed)
-    special_teams_rating: float  # FG efficiency (PAAE per game)
+    special_teams_rating: float  # FG efficiency - DIAGNOSTIC ONLY, not in overall (P2.7)
     turnover_rating: float  # Turnover margin contribution (higher = more takeaways)
 
     # Combined
@@ -126,6 +126,20 @@ class EfficiencyFoundationModel:
 
     The key insight: build ratings from play-by-play efficiency,
     then convert to point differential for predictions.
+
+    Rating Components:
+    - overall_rating = offensive_rating + defensive_rating
+    - offensive_rating = efficiency + explosiveness + ball_security (turnovers)
+    - defensive_rating = efficiency + explosiveness + takeaways (turnovers)
+
+    Special Teams Integration (P2.7):
+    - special_teams_rating is stored for DIAGNOSTIC/REPORTING purposes only
+    - It is NOT included in overall_rating to avoid double-counting
+    - SpreadGenerator applies ST as a separate adjustment layer using
+      SpecialTeamsModel.get_matchup_differential()
+    - This follows SP+ methodology: ST is a game-level adjustment, not a base rating
+    - If you need ST in ratings, use set_special_teams_rating() for reporting,
+      but the spread calculation handles ST separately
     """
 
     # Conversion factors (empirically derived)
@@ -846,7 +860,12 @@ class EfficiencyFoundationModel:
         return 0.0
 
     def get_special_teams_rating(self, team: str) -> float:
-        """Get special teams rating for a team.
+        """Get special teams rating for a team (DIAGNOSTIC ONLY).
+
+        NOTE (P2.7): This rating is NOT included in overall_rating.
+        Special teams is applied as a separate adjustment layer in SpreadGenerator
+        using SpecialTeamsModel.get_matchup_differential(). This method exists
+        for diagnostic/reporting purposes only.
 
         Args:
             team: Team name
@@ -859,9 +878,15 @@ class EfficiencyFoundationModel:
         return 0.0
 
     def set_special_teams_rating(self, team: str, rating: float) -> None:
-        """Set special teams rating for a team.
+        """Set special teams rating for a team (DIAGNOSTIC ONLY).
 
-        This is used to integrate FG efficiency from SpecialTeamsModel.
+        NOTE (P2.7): This rating is stored for reporting but NOT included in
+        overall_rating. SpreadGenerator handles ST as a separate adjustment layer
+        using SpecialTeamsModel.get_matchup_differential() to avoid double-counting.
+
+        Use this method to populate ST ratings for display in get_ratings_df(),
+        but do NOT expect it to affect spread predictions (those come from
+        SpecialTeamsModel directly in SpreadGenerator).
 
         Args:
             team: Team name

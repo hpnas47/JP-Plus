@@ -163,13 +163,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Refactor turnover handling so turnover effects are represented in offense and defense components (ball security vs takeaways) while keeping overall rating consistent. Ensure totals/matchup computations can use O/D ratings without missing turnover effects.
   - **Notes:** FIXED 2026-02-03. Refactored `_calculate_turnover_margin()` → `_calculate_turnover_stats()` to return separate `lost_per_game` and `forced_per_game` dicts. Offensive turnover component (ball security): `(avg_lost - team_lost) * shrinkage * POINTS_PER_TO`. Defensive turnover component (takeaways): `(team_forced - avg_forced) * shrinkage * POINTS_PER_TO`. Both components added to O/D ratings with turnover_weight. Relationship changed from `overall = off + def + w*TO` to `overall = off + def` (turnovers now inside O/D). Updated normalization accordingly. Combined `turnover_rating` kept for diagnostics. Test verified: mean=0 for all components, std=12, relationship holds with zero error.
 
-- [ ] **P2.7 Clarify special teams integration (avoid double-counting or no-counting)**
+- [x] **P2.7 Clarify special teams integration (avoid double-counting or no-counting)** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`, `src/predictions/spread_generator.py`, `src/models/special_teams.py`
   - **Issue:** ST stored in EFM but not in overall; also applied in SpreadGenerator as differential.
   - **Acceptance criteria:** One explicit integration strategy; documentation; guard against double-counting.
   - **AI nudge prompt:**
     > Clarify and enforce a single integration strategy for special teams: either treat ST purely as an adjustment layer in SpreadGenerator or incorporate it into base ratings—never both. Add documentation and a safeguard to prevent accidental double-counting.
-  - **Notes:**
+  - **Notes:** DOCUMENTED 2026-02-03. Strategy: ST is an adjustment layer in SpreadGenerator, NOT part of EFM base ratings (follows SP+ methodology). Added comprehensive docstrings to EFM class explaining the integration strategy. Marked `special_teams_rating` as "DIAGNOSTIC ONLY" in dataclass and getter/setter methods. Added P2.7 comments in SpreadGenerator documenting that ST is applied ONLY there. EFM.overall_rating explicitly does NOT include ST. If using a different model with ST built-in, set `special_teams=None` in SpreadGenerator.
 
 - [x] **P2.8 Filter non-scrimmage plays for efficiency dataset + fix distance=0** ✅ COMPLETE
   - **Files:** `scripts/backtest.py` (play ingestion), `src/models/efficiency_foundation_model.py`

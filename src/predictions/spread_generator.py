@@ -158,6 +158,19 @@ class SpreadGenerator:
     spread = base_margin + hfa + situational + travel + altitude +
              special_teams_diff + finishing_drives_diff + luck_adjustment +
              fcs_adjustment
+
+    Special Teams Integration (P2.7):
+    -----------------------------
+    Special teams is applied as a SEPARATE ADJUSTMENT LAYER here, not as part
+    of the base ratings. This follows SP+ methodology where ST is a game-level
+    differential rather than embedded in team ratings.
+
+    - SpecialTeamsModel.get_matchup_differential() provides ST point differential
+    - EFM's special_teams_rating is DIAGNOSTIC ONLY (not in EFM overall_rating)
+    - This prevents double-counting: ST is added once, here in SpreadGenerator
+
+    If using a ratings model that already includes ST in overall, set
+    special_teams=None to disable the adjustment layer here.
     """
 
     # Tiered FCS penalties based on backtest analysis (2022-2024)
@@ -423,7 +436,8 @@ class SpreadGenerator:
         alt_adj, _ = self.altitude.get_detailed_adjustment(home_team, away_team)
         components.altitude = alt_adj
 
-        # Special teams differential
+        # Special teams differential (P2.7: applied as adjustment layer, not in base_margin)
+        # This is the ONLY place ST is applied - EFM.overall_rating does not include ST
         components.special_teams = self.special_teams.get_matchup_differential(
             home_team, away_team
         )
