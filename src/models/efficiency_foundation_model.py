@@ -190,7 +190,11 @@ class EfficiencyFoundationModel:
         self.def_success_rate: dict[str, float] = {}
         self.off_isoppp: dict[str, float] = {}
         self.def_isoppp: dict[str, float] = {}
-        self.turnover_margin: dict[str, float] = {}  # Per-game turnover margin (raw, before shrinkage)
+
+        # Turnover stats (P2.6: split into O/D components)
+        self.turnovers_lost: dict[str, float] = {}  # Per-game turnovers lost (ball security)
+        self.turnovers_forced: dict[str, float] = {}  # Per-game turnovers forced (takeaways)
+        self.turnover_margin: dict[str, float] = {}  # Per-game net margin (for backward compat)
         self.team_games_played: dict[str, int] = {}  # Games played per team (for TO shrinkage)
 
         # Learned implicit HFA from ridge regression (for validation/logging)
@@ -464,30 +468,38 @@ class EfficiencyFoundationModel:
 
         return off_adjusted, def_adjusted, learned_hfa
 
-    def _calculate_turnover_margin(
+    def _calculate_turnover_stats(
         self,
         plays_df: pd.DataFrame,
         games_df: Optional[pd.DataFrame] = None,
-    ) -> dict[str, float]:
-        """Calculate per-game turnover margin for each team.
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        """Calculate per-game turnover stats for each team (P2.6: split O/D).
+
+        Returns separate stats for ball security (turnovers lost) and
+        takeaways (turnovers forced) to enable O/D-specific turnover ratings.
 
         Args:
             plays_df: Play-by-play data with 'play_type', 'offense', 'defense' columns
             games_df: Games data for counting games played
 
         Returns:
-            Dict mapping team to per-game turnover margin (positive = more takeaways)
+            Tuple of (lost_per_game, forced_per_game, margin_per_game) dicts
+            - lost_per_game: Turnovers lost per game (lower = better ball security)
+            - forced_per_game: Turnovers forced per game (higher = better takeaways)
+            - margin_per_game: Net margin (forced - lost) for backward compat
         """
+        empty_result = ({}, {}, {})
+
         if "play_type" not in plays_df.columns:
             logger.warning("No play_type column for turnover calculation")
-            return {}
+            return empty_result
 
         # Find turnover plays
         turnover_plays = plays_df[plays_df["play_type"].isin(TURNOVER_PLAY_TYPES)]
 
         if len(turnover_plays) == 0:
             logger.warning("No turnover plays found")
-            return {}
+            return empty_result
 
         # Count turnovers lost (offense = team that lost the ball)
         turnovers_lost = turnover_plays.groupby("offense").size()
@@ -516,21 +528,32 @@ class EfficiencyFoundationModel:
                 n_games = team_plays["game_id"].nunique() if "game_id" in team_plays.columns else 10
                 games_played[team] = max(n_games, 1)
 
-        # Calculate per-game turnover margin
-        turnover_margins = {}
+        # Calculate per-game stats (P2.6: separate lost/forced for O/D split)
+        lost_per_game = {}
+        forced_per_game = {}
+        margin_per_game = {}
+
         for team in all_teams:
             lost = turnovers_lost.get(team, 0)
             forced = turnovers_forced.get(team, 0)
-            margin = forced - lost
-            per_game = margin / games_played[team]
-            turnover_margins[team] = per_game
+            games = games_played[team]
+
+            lost_per_game[team] = lost / games
+            forced_per_game[team] = forced / games
+            margin_per_game[team] = (forced - lost) / games
 
         # Store games played for Bayesian shrinkage in calculate_ratings
         self.team_games_played = games_played
 
-        logger.info(f"Calculated turnover margins for {len(turnover_margins)} teams")
+        # Log summary stats
+        avg_lost = np.mean(list(lost_per_game.values()))
+        avg_forced = np.mean(list(forced_per_game.values()))
+        logger.info(
+            f"Calculated turnover stats for {len(all_teams)} teams: "
+            f"avg lost={avg_lost:.2f}/game, avg forced={avg_forced:.2f}/game"
+        )
 
-        return turnover_margins
+        return lost_per_game, forced_per_game, margin_per_game
 
     def calculate_ratings(
         self,
@@ -582,11 +605,14 @@ class EfficiencyFoundationModel:
         self.off_isoppp = adj_off_isoppp
         self.def_isoppp = adj_def_isoppp
 
-        # Calculate turnover margins if turnover_weight > 0
+        # Calculate turnover stats if turnover_weight > 0 (P2.6: split O/D)
         if self.turnover_weight > 0 and "play_type" in plays_df.columns:
-            logger.info("Calculating turnover margins...")
-            self.turnover_margin = self._calculate_turnover_margin(plays_df, games_df)
+            logger.info("Calculating turnover stats...")
+            self.turnovers_lost, self.turnovers_forced, self.turnover_margin = \
+                self._calculate_turnover_stats(plays_df, games_df)
         else:
+            self.turnovers_lost = {}
+            self.turnovers_forced = {}
             self.turnover_margin = {}
 
         # Build team ratings
@@ -597,6 +623,10 @@ class EfficiencyFoundationModel:
         avg_isoppp = np.mean([v for v in adj_off_isoppp.values() if v != self.LEAGUE_AVG_ISOPPP])
         if np.isnan(avg_isoppp):
             avg_isoppp = self.LEAGUE_AVG_ISOPPP
+
+        # Calculate league average turnover rates for O/D split (P2.6)
+        avg_lost = np.mean(list(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
+        avg_forced = np.mean(list(self.turnovers_forced.values())) if self.turnovers_forced else 0.0
 
         for team in all_teams:
             # Get adjusted metrics
@@ -619,30 +649,43 @@ class EfficiencyFoundationModel:
             efficiency_rating = off_eff_pts + def_eff_pts
             explosiveness_rating = off_exp_pts + def_exp_pts
 
-            # Turnover rating: convert per-game margin to points with Bayesian shrinkage
-            # Positive margin = more takeaways = good
-            # Apply shrinkage toward 0 based on games played (turnover margin is ~50-70% luck)
-            # With prior_strength=10, a 15-game team keeps 60% of their margin (15/(15+10))
-            raw_to_margin = self.turnover_margin.get(team, 0.0)
+            # P2.6: Split turnovers into offensive (ball security) and defensive (takeaways)
+            # Apply Bayesian shrinkage to each component separately
+            # Shrinkage: games / (games + prior_strength). E.g., 15-game team keeps 60% of raw value.
             games = self.team_games_played.get(team, 10)
             shrinkage = games / (games + self.turnover_prior_strength)
-            shrunk_to_margin = raw_to_margin * shrinkage
-            turnover_rating = shrunk_to_margin * POINTS_PER_TURNOVER
 
-            # Separate offensive and defensive ratings (weighted combo of eff + exp)
-            # Note: turnover is a combined O+D metric, not split
+            # Offensive turnover: ball security (fewer lost = better)
+            # Relative to average: (avg_lost - team_lost) * shrinkage * points_per_to
+            # Positive when team loses fewer than average
+            raw_lost = self.turnovers_lost.get(team, avg_lost)
+            off_to_pts = (avg_lost - raw_lost) * shrinkage * POINTS_PER_TURNOVER
+
+            # Defensive turnover: takeaways (more forced = better)
+            # Relative to average: (team_forced - avg_forced) * shrinkage * points_per_to
+            # Positive when team forces more than average
+            raw_forced = self.turnovers_forced.get(team, avg_forced)
+            def_to_pts = (raw_forced - avg_forced) * shrinkage * POINTS_PER_TURNOVER
+
+            # Combined turnover rating for backward compat (should equal off_to + def_to)
+            turnover_rating = off_to_pts + def_to_pts
+
+            # Separate offensive and defensive ratings (P2.6: now includes turnovers)
+            # offensive_rating = efficiency + explosiveness + ball_security
+            # defensive_rating = efficiency + explosiveness + takeaways
             offensive_rating = (
                 self.efficiency_weight * off_eff_pts +
-                self.explosiveness_weight * off_exp_pts
+                self.explosiveness_weight * off_exp_pts +
+                self.turnover_weight * off_to_pts
             )
             defensive_rating = (
                 self.efficiency_weight * def_eff_pts +
-                self.explosiveness_weight * def_exp_pts
+                self.explosiveness_weight * def_exp_pts +
+                self.turnover_weight * def_to_pts
             )
 
-            # Overall rating (weighted combination) = O + D + Turnovers
-            # Weights: efficiency + explosiveness + turnover = 1.0
-            overall = offensive_rating + defensive_rating + self.turnover_weight * turnover_rating
+            # Overall rating = O + D (turnovers now inside O/D, not separate)
+            overall = offensive_rating + defensive_rating
 
             # Get sample sizes
             off_plays = len(prepared[prepared["offense"] == team])
@@ -681,13 +724,14 @@ class EfficiencyFoundationModel:
         then scales all components uniformly. This ensures:
         - Overall rating has mean=0, std=rating_std (for spread calculation)
         - Each component is properly centered by its own mean
-        - Relationship overall = off + def + turnover_weight*TO is preserved
+        - Relationship overall = off + def is preserved (P2.6: turnovers now inside O/D)
         - Components remain interpretable (mean=0 for each)
 
-        Math verification:
-        - mean(overall) = mean(off) + mean(def) + w*mean(to) by linearity
-        - After centering each component: new_overall = new_off + new_def + w*new_to
-        - This equals (overall - mean_overall) * scale, preserving the relationship
+        Math verification (P2.6 update):
+        - mean(overall) = mean(off) + mean(def) by linearity
+        - After centering each component: new_overall = new_off + new_def
+        - Turnover effects are embedded in O (ball security) and D (takeaways)
+        - turnover_rating is kept as diagnostic (off_to + def_to)
 
         Args:
             fbs_teams: Set of FBS team names (normalization based on these)
@@ -741,8 +785,8 @@ class EfficiencyFoundationModel:
             new_efficiency = (rating.efficiency_rating - efficiency_mean) * scale
             new_explosiveness = (rating.explosiveness_rating - explosiveness_mean) * scale
 
-            # Overall = sum of centered components (preserves relationship)
-            new_overall = new_offense + new_defense + self.turnover_weight * new_turnover
+            # Overall = off + def (P2.6: turnovers now inside O/D, not separate)
+            new_overall = new_offense + new_defense
 
             # Update the rating object
             self.team_ratings[team] = TeamEFMRating(

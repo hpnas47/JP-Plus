@@ -155,13 +155,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Fix the rating normalization logic so offense and defense components are centered/scaled in a mathematically consistent way (not assuming overall_mean/2). Ensure component relationships remain interpretable and consistent after normalization.
   - **Notes:** FIXED 2026-02-03. Refactored `_normalize_ratings()` to center each component by its own mean instead of assuming `overall_mean/2`. Now computes separate means for offense, defense, turnover, efficiency, and explosiveness. Uses uniform scale factor (from overall std → 12.0). Relationship `overall = off + def + 0.1*TO` preserved with zero error. All components now have mean=0 (interpretable). Old method left asymmetric means (e.g., mean(off)=+8, mean(def)=-8). Added debug logging for component means.
 
-- [ ] **P2.6 Split turnovers into offense vs defense components**
+- [x] **P2.6 Split turnovers into offense vs defense components** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** Turnovers are only in overall; O/D ratings omit turnover effects (hurts totals modeling).
   - **Acceptance criteria:** O reflects ball security; D reflects takeaways; overall remains consistent.
   - **AI nudge prompt:**
     > Refactor turnover handling so turnover effects are represented in offense and defense components (ball security vs takeaways) while keeping overall rating consistent. Ensure totals/matchup computations can use O/D ratings without missing turnover effects.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Refactored `_calculate_turnover_margin()` → `_calculate_turnover_stats()` to return separate `lost_per_game` and `forced_per_game` dicts. Offensive turnover component (ball security): `(avg_lost - team_lost) * shrinkage * POINTS_PER_TO`. Defensive turnover component (takeaways): `(team_forced - avg_forced) * shrinkage * POINTS_PER_TO`. Both components added to O/D ratings with turnover_weight. Relationship changed from `overall = off + def + w*TO` to `overall = off + def` (turnovers now inside O/D). Updated normalization accordingly. Combined `turnover_rating` kept for diagnostics. Test verified: mean=0 for all components, std=12, relationship holds with zero error.
 
 - [ ] **P2.7 Clarify special teams integration (avoid double-counting or no-counting)**
   - **Files:** `src/models/efficiency_foundation_model.py`, `src/predictions/spread_generator.py`, `src/models/special_teams.py`
