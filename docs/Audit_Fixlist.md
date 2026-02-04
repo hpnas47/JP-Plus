@@ -131,13 +131,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     4. Formula `overall = off + def + 0.1*TO` holds exactly post-normalization (verified: error = 0.000000).
     5. Added clarifying comment to `_normalize_ratings()` explaining why this works.
 
-- [ ] **P2.3 Make IsoPPP computation consistent with weights**
+- [x] **P2.3 Make IsoPPP computation consistent with weights** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** SR is weighted; IsoPPP uses unweighted mean.
   - **Acceptance criteria:** IsoPPP uses the same play weights (GT/time decay) as SR.
   - **AI nudge prompt:**
     > Make IsoPPP (EPA/PPA on successful plays) computation consistent with the play weighting scheme used for success rate (garbage time weighting and any time decay). If a play is down-weighted for SR, it should also be down-weighted for IsoPPP.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. In `_calculate_raw_metrics()`, changed IsoPPP calculation from `successful["ppa"].mean()` to weighted mean `(succ_ppa * succ_weights).sum() / succ_weights.sum()`. Now both SR and IsoPPP use identical play weighting (garbage time + time decay). Verified: synthetic test with inflated garbage time EPA shows weighted IsoPPP (0.34) properly lower than unweighted (0.52). Ridge adjustment already used weights correctly. Backtest unchanged (MAE 12.52, ATS 51.5%).
 
 - [ ] **P2.4 Consolidate garbage time thresholds (Settings → EFM)**
   - **Files:** `config/settings.py`, `src/models/efficiency_foundation_model.py`

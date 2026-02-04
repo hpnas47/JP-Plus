@@ -245,8 +245,12 @@ class EfficiencyFoundationModel:
     ) -> tuple[dict, dict, dict, dict]:
         """Calculate raw (unadjusted) success rate and IsoPPP for all teams.
 
+        Both SR and IsoPPP use the same play weighting scheme (garbage time + time decay).
+        This ensures consistency: if a play is down-weighted for SR, it's also
+        down-weighted for IsoPPP.
+
         Args:
-            plays_df: Prepared plays DataFrame
+            plays_df: Prepared plays DataFrame (must have 'weight' column)
 
         Returns:
             Tuple of (off_sr, def_sr, off_isoppp, def_isoppp) dicts
@@ -267,10 +271,13 @@ class EfficiencyFoundationModel:
                 successes = off_plays["is_success"]
                 off_sr[team] = (successes * weights).sum() / weights.sum()
 
-                # IsoPPP: EPA on successful plays only
+                # IsoPPP: EPA on successful plays only, WEIGHTED (P2.3 fix)
+                # Use same play weights as SR for consistency
                 successful = off_plays[off_plays["is_success"]]
                 if len(successful) > 20 and "ppa" in successful.columns:
-                    off_isoppp[team] = successful["ppa"].mean()
+                    succ_weights = successful["weight"]
+                    succ_ppa = successful["ppa"]
+                    off_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
                 else:
                     off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
             else:
@@ -284,9 +291,12 @@ class EfficiencyFoundationModel:
                 successes = def_plays["is_success"]
                 def_sr[team] = (successes * weights).sum() / weights.sum()
 
+                # IsoPPP: EPA on successful plays only, WEIGHTED (P2.3 fix)
                 successful = def_plays[def_plays["is_success"]]
                 if len(successful) > 20 and "ppa" in successful.columns:
-                    def_isoppp[team] = successful["ppa"].mean()
+                    succ_weights = successful["weight"]
+                    succ_ppa = successful["ppa"]
+                    def_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
                 else:
                     def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
             else:
