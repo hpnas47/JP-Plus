@@ -82,13 +82,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Audit how baseline HFA is sourced and applied (settings defaults, CLI fallback, curated team HFA table, dynamic/team_hfa). Make behavior explicit and consistent, and add logging that reports the final HFA used (at least per team, ideally per game) during backtests.
   - **Notes:** FIXED 2026-02-03. Added source tracking to `get_hfa()` which now returns `(hfa_value, source_string)`. Sources are: "curated" (TEAM_HFA_VALUES), "dynamic" (calculated), "conf:XXX" (conference default), "fallback" (base_hfa). Trajectory modifiers append "+traj(±X.XX)" to source. Added `get_hfa_value()` for backward compatibility, `get_hfa_breakdown()` for per-team details, and `log_hfa_summary()` for aggregate stats. Backtest now logs: "HFA sources: curated=46, fallback=90, with_trajectory=108".
 
-- [ ] **P1.4 De-duplicate rivalry list + add validation**
+- [x] **P1.4 De-duplicate rivalry list + add validation** ✅ COMPLETE
   - **Files:** `config/teams.py`
-  - **Issue:** Duplicates in rivalry list don’t break runtime but signal drift and risk.
+  - **Issue:** Duplicates in rivalry list don't break runtime but signal drift and risk.
   - **Acceptance criteria:** Clean unique list; validator asserts no duplicates after normalization.
   - **AI nudge prompt:**
     > Clean up rivalry metadata so the source list contains no duplicates or mirrored pairs. Add a validation check/test that asserts there are no duplicate rivalry definitions after normalization.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Removed 4 mirrored duplicates: Clemson-South Carolina (was in SEC and ACC), Georgia Tech-Georgia (same), Louisville-Kentucky (same), Utah State-BYU (was in Big 12 and G5). Added comments noting where rivalries are listed. Added `validate_rivalries()` that runs on import to check for duplicates, self-rivalries, and list/set count mismatch. Reduced from 79 to 75 unique rivalries.
 
 - [x] **P1.5 Unify turnover play type definitions across repo** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`, `scripts/backtest.py`, any turnover/FD logic

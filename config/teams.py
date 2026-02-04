@@ -71,7 +71,7 @@ RIVALRIES: list[tuple[str, str]] = [
     ("Houston", "Rice"),
 
     # ACC
-    ("Clemson", "South Carolina"),
+    # Note: Clemson-South Carolina already listed under SEC
     ("North Carolina", "Duke"),
     ("North Carolina", "NC State"),
     ("NC State", "Wake Forest"),
@@ -79,8 +79,8 @@ RIVALRIES: list[tuple[str, str]] = [
     ("Boston College", "Notre Dame"),
     ("Miami", "Florida State"),
     ("Pitt", "Penn State"),
-    ("Georgia Tech", "Georgia"),
-    ("Louisville", "Kentucky"),
+    # Note: Georgia Tech-Georgia already listed under SEC
+    # Note: Louisville-Kentucky already listed under SEC
     ("Syracuse", "Boston College"),
     ("Stanford", "Cal"),
     ("SMU", "TCU"),
@@ -103,7 +103,7 @@ RIVALRIES: list[tuple[str, str]] = [
     ("Miami (OH)", "Cincinnati"),
     ("Kent State", "Akron"),
     ("Wyoming", "Colorado State"),
-    ("Utah State", "BYU"),
+    # Note: Utah State-BYU already listed under Big 12
     ("Troy", "South Alabama"),
     ("Louisiana", "Louisiana Tech"),
     ("Appalachian State", "Georgia Southern"),
@@ -111,6 +111,43 @@ RIVALRIES: list[tuple[str, str]] = [
 
 # Build lookup set for faster rivalry checking
 _RIVALRY_SET: set[frozenset] = {frozenset(r) for r in RIVALRIES}
+
+
+def validate_rivalries() -> bool:
+    """Validate rivalry list has no duplicates or mirrored pairs.
+
+    Runs on import to catch issues early.
+
+    Raises:
+        AssertionError: If duplicates are found
+    """
+    seen = {}
+    duplicates = []
+
+    for i, (team1, team2) in enumerate(RIVALRIES):
+        pair = frozenset([team1, team2])
+
+        # Check for self-rivalry (data error)
+        assert team1 != team2, f"Self-rivalry found: {team1}"
+
+        # Check for duplicates/mirrors
+        if pair in seen:
+            duplicates.append(f"({team1}, {team2}) duplicates ({seen[pair][0]}, {seen[pair][1]})")
+        else:
+            seen[pair] = (team1, team2)
+
+    assert not duplicates, f"Duplicate rivalries found: {duplicates}"
+
+    # Verify _RIVALRY_SET matches RIVALRIES count (no duplicates were lost)
+    assert len(_RIVALRY_SET) == len(RIVALRIES), (
+        f"Rivalry count mismatch: {len(RIVALRIES)} in list vs {len(_RIVALRY_SET)} unique"
+    )
+
+    return True
+
+
+# Validate on import
+validate_rivalries()
 
 
 def is_rivalry_game(team1: str, team2: str) -> bool:
