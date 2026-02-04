@@ -383,7 +383,9 @@ class EfficiencyFoundationModel:
 
         return df
 
-    def _prepare_plays(self, plays_df: pd.DataFrame) -> pd.DataFrame:
+    def _prepare_plays(
+        self, plays_df: pd.DataFrame, max_week: int | None = None
+    ) -> pd.DataFrame:
         """Filter and prepare plays for analysis.
 
         Filters:
@@ -392,6 +394,8 @@ class EfficiencyFoundationModel:
 
         Args:
             plays_df: Raw play-by-play DataFrame
+            max_week: Maximum week allowed in training data (for data leakage prevention).
+                      If provided, asserts no plays exceed this week and uses it for time_decay.
 
         Returns:
             Filtered DataFrame with success and garbage time flags
@@ -399,6 +403,14 @@ class EfficiencyFoundationModel:
         # P2.9: Validate and normalize input data first
         df = self._validate_and_normalize_plays(plays_df)
         initial_count = len(df)
+
+        # DATA LEAKAGE GUARD: Verify no future weeks in training data
+        if max_week is not None and "week" in df.columns:
+            actual_max = df["week"].max()
+            assert actual_max <= max_week, (
+                f"DATA LEAKAGE in EFM: plays include week {actual_max} "
+                f"but max_week={max_week}. Filter plays before calling calculate_ratings()."
+            )
 
         # Filter to scrimmage plays only (P2.8 fix)
         # This excludes special teams, penalties, period markers, etc.
@@ -484,10 +496,12 @@ class EfficiencyFoundationModel:
 
         # Apply time decay if enabled (decay < 1.0)
         if self.time_decay < 1.0 and "week" in df.columns:
-            max_week = df["week"].max()
-            # Weight = decay ^ (max_week - play_week)
-            # Recent plays (max_week) get weight 1.0, older plays get less
-            df["time_weight"] = self.time_decay ** (max_week - df["week"])
+            # Use explicit max_week if provided (prevents data leakage),
+            # otherwise fall back to df["week"].max()
+            decay_reference_week = max_week if max_week is not None else df["week"].max()
+            # Weight = decay ^ (reference_week - play_week)
+            # Recent plays (reference_week) get weight 1.0, older plays get less
+            df["time_weight"] = self.time_decay ** (decay_reference_week - df["week"])
             df["weight"] = df["weight"] * df["time_weight"]
 
         prep_time = time.time() - prep_start
@@ -897,18 +911,21 @@ class EfficiencyFoundationModel:
         self,
         plays_df: pd.DataFrame,
         games_df: Optional[pd.DataFrame] = None,
+        max_week: int | None = None,
     ) -> dict[str, TeamEFMRating]:
         """Calculate efficiency-based ratings for all teams.
 
         Args:
             plays_df: Play-by-play data
             games_df: Optional games data for sample size info
+            max_week: Maximum week allowed in training data (for data leakage prevention).
+                      If provided, asserts no plays exceed this week.
 
         Returns:
             Dict mapping team name to TeamEFMRating
         """
-        # Prepare plays
-        prepared = self._prepare_plays(plays_df)
+        # Prepare plays (with data leakage guard if max_week provided)
+        prepared = self._prepare_plays(plays_df, max_week=max_week)
         logger.info(f"Prepared {len(prepared)} plays for EFM")
 
         # Calculate raw metrics

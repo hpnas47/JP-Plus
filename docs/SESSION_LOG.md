@@ -93,6 +93,33 @@
   - Opening lines: Capture Sunday ~6 PM ET
   - Closing lines: Capture Saturday ~9 AM ET
 
+- **Reorganized Backtest Documentation**
+  - Restructured MODEL_ARCHITECTURE.md to lead with phase-based performance
+  - Added Full Season row to phase table (3,258 games, 49.5% ATS)
+  - Moved ATS/CLV tables under "Core Season Detail (Weeks 4-15)" with clear scope
+  - Removed redundant "Evaluation Results" section (had old metrics, conflicting phase definitions)
+  - Updated MODEL_EXPLAINER.md with consistent phase-based stats
+
+- **Implemented Data Leakage Prevention Guards**
+  - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
+  - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints
+  - **Files modified:**
+    1. `scripts/backtest.py` - Added assertions after filtering:
+       - `assert max_train_week < pred_week` for plays and games
+       - `assert max_st_week < pred_week` for special teams plays
+       - Passes `max_week=pred_week-1` to all model methods
+    2. `src/models/efficiency_foundation_model.py`:
+       - Added `max_week` parameter to `calculate_ratings()` and `_prepare_plays()`
+       - Guard assertion at start of `_prepare_plays()`
+       - Fixed `time_decay` to use explicit `max_week` instead of `df["week"].max()` (defense-in-depth)
+    3. `src/models/finishing_drives.py`:
+       - Added `max_week` parameter to `calculate_all_from_plays()`
+       - Guard assertion at start of method (before any processing)
+    4. `src/models/special_teams.py`:
+       - Added `max_week` parameter to `calculate_all_st_ratings_from_plays()`
+       - Guard assertion at start of method
+  - **Testing:** Verified guards catch leakage (assertion fires when week > max_week) and allow valid data through
+
 ### Scripts Added
 
 | Script | Purpose | Usage |

@@ -524,6 +524,20 @@ def walk_forward_predict(
         train_plays_pd = train_plays_pl.to_pandas()
         train_games_pd = games_df.filter(pl.col("week") < pred_week).to_pandas()
 
+        # DATA LEAKAGE GUARD: Verify no future data in training set
+        if "week" in train_plays_pd.columns:
+            max_train_week = train_plays_pd["week"].max()
+            assert max_train_week < pred_week, (
+                f"DATA LEAKAGE: Training plays include week {max_train_week} "
+                f"but predicting week {pred_week}. Training data must be < pred_week."
+            )
+        if "week" in train_games_pd.columns:
+            max_train_game_week = train_games_pd["week"].max()
+            assert max_train_game_week < pred_week, (
+                f"DATA LEAKAGE: Training games include week {max_train_game_week} "
+                f"but predicting week {pred_week}. Training data must be < pred_week."
+            )
+
         # Build EFM model
         efm = EfficiencyFoundationModel(
             ridge_alpha=ridge_alpha,
@@ -534,7 +548,7 @@ def walk_forward_predict(
             asymmetric_garbage=asymmetric_garbage,
         )
 
-        efm.calculate_ratings(train_plays_pd, train_games_pd)
+        efm.calculate_ratings(train_plays_pd, train_games_pd, max_week=pred_week - 1)
 
         # Get ratings directly from EFM (full precision, already normalized to std=12)
         # IMPORTANT: Do NOT use get_ratings_df() here - it rounds to 1 decimal place
@@ -598,7 +612,7 @@ def walk_forward_predict(
         # Calculate finishing drives with regression to mean
         finishing = FinishingDrivesModel(regress_to_mean=True, prior_strength=10)
         if "yards_to_goal" in train_plays_pd.columns:
-            finishing.calculate_all_from_plays(train_plays_pd)
+            finishing.calculate_all_from_plays(train_plays_pd, max_week=pred_week - 1)
 
         # Calculate FG efficiency ratings from FG plays
         special_teams = SpecialTeamsModel()
@@ -607,8 +621,17 @@ def walk_forward_predict(
             train_st_pl = st_plays_df.filter(pl.col("week") < pred_week)
             if len(train_st_pl) > 0:
                 train_st_pd = train_st_pl.to_pandas()
+                # DATA LEAKAGE GUARD: Verify ST plays are properly filtered
+                if "week" in train_st_pd.columns:
+                    max_st_week = train_st_pd["week"].max()
+                    assert max_st_week < pred_week, (
+                        f"DATA LEAKAGE: ST plays include week {max_st_week} "
+                        f"but predicting week {pred_week}."
+                    )
                 # Calculate all ST ratings (FG + Punt + Kickoff)
-                special_teams.calculate_all_st_ratings_from_plays(train_st_pd)
+                special_teams.calculate_all_st_ratings_from_plays(
+                    train_st_pd, max_week=pred_week - 1
+                )
                 # Integrate special teams ratings into EFM for O/D/ST breakdown (diagnostic only)
                 for team, st_rating in special_teams.team_ratings.items():
                     efm.set_special_teams_rating(team, st_rating.overall_rating)

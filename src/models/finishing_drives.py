@@ -312,14 +312,26 @@ class FinishingDrivesModel:
 
         return overall_a - overall_b
 
-    def calculate_all_from_plays(self, plays_df: pd.DataFrame) -> None:
+    def calculate_all_from_plays(
+        self, plays_df: pd.DataFrame, max_week: int | None = None
+    ) -> None:
         """Calculate finishing drives ratings for all teams from play-by-play data.
 
         Identifies red zone plays (yards_to_goal <= 20) and tracks scoring outcomes.
 
         Args:
             plays_df: Play-by-play DataFrame with yards_to_goal, offense, play_type columns
+            max_week: Maximum week allowed in training data (for data leakage prevention).
+                      If provided, asserts that no plays exceed this week.
         """
+        # DATA LEAKAGE GUARD: Verify no future weeks in training data (check FIRST)
+        if max_week is not None and "week" in plays_df.columns and not plays_df.empty:
+            actual_max = plays_df["week"].max()
+            assert actual_max <= max_week, (
+                f"DATA LEAKAGE in FinishingDrives: plays include week {actual_max} "
+                f"but max_week={max_week}. Filter plays before calling."
+            )
+
         if plays_df.empty or "yards_to_goal" not in plays_df.columns:
             logger.warning("No yards_to_goal data available for finishing drives calculation")
             return

@@ -760,6 +760,7 @@ class SpecialTeamsModel:
         self,
         plays_df: pd.DataFrame,
         games_played: Optional[dict[str, int]] = None,
+        max_week: int | None = None,
     ) -> None:
         """Calculate complete special teams ratings (FG + punt + kickoff) from plays.
 
@@ -772,10 +773,20 @@ class SpecialTeamsModel:
         Args:
             plays_df: DataFrame with play-by-play data (needs play_type, play_text, offense, defense)
             games_played: Optional dict of team -> games played for normalization
+            max_week: Maximum week allowed in training data (for data leakage prevention).
+                      If provided, asserts that no plays exceed this week.
         """
         if plays_df.empty:
             logger.warning("Empty plays dataframe, skipping all ST rating calculations")
             return
+
+        # DATA LEAKAGE GUARD: Verify no future weeks in training data
+        if max_week is not None and "week" in plays_df.columns:
+            actual_max = plays_df["week"].max()
+            assert actual_max <= max_week, (
+                f"DATA LEAKAGE in SpecialTeams: plays include week {actual_max} "
+                f"but max_week={max_week}. Filter plays before calling."
+            )
 
         # Calculate each component
         # FG ratings (stored directly in self.team_ratings)
