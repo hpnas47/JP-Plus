@@ -524,23 +524,43 @@ class EfficiencyFoundationModel:
         # Get all teams
         all_teams = set(turnovers_lost.index) | set(turnovers_forced.index)
 
-        # Count games per team (approximate from play data if games_df not provided)
-        if games_df is not None:
-            games_played = {}
+        # Count games per team - MUST have reliable count for shrinkage calculation
+        # P2.10: No arbitrary defaults; compute from data or fail loudly
+        games_played = {}
+        games_source = None
+
+        if games_df is not None and len(games_df) > 0:
+            # Primary: count from games_df (most reliable)
+            games_source = "games_df"
             for team in all_teams:
                 n_games = len(games_df[
                     (games_df["home_team"] == team) | (games_df["away_team"] == team)
                 ])
                 games_played[team] = max(n_games, 1)
-        else:
-            # Approximate from unique game_ids in plays
-            games_played = {}
+        elif "game_id" in plays_df.columns:
+            # Fallback: count unique game_ids from plays (reliable if game_id exists)
+            games_source = "plays_df.game_id"
             for team in all_teams:
                 team_plays = plays_df[
                     (plays_df["offense"] == team) | (plays_df["defense"] == team)
                 ]
-                n_games = team_plays["game_id"].nunique() if "game_id" in team_plays.columns else 10
-                games_played[team] = max(n_games, 1)
+                n_games = team_plays["game_id"].nunique()
+                if n_games == 0:
+                    logger.warning(
+                        f"Team {team} has turnover data but 0 games found via game_id; "
+                        "this may indicate data issues"
+                    )
+                    n_games = 1  # Minimum to avoid division by zero
+                games_played[team] = n_games
+        else:
+            # P2.10: Fail loudly - cannot compute reliable games count
+            raise ValueError(
+                "Cannot compute games played for turnover shrinkage: "
+                "games_df not provided and plays_df has no 'game_id' column. "
+                "Provide games_df or ensure plays_df contains game_id."
+            )
+
+        logger.info(f"Games played computed from {games_source} for {len(games_played)} teams")
 
         # Calculate per-game stats (P2.6: separate lost/forced for O/D split)
         lost_per_game = {}
@@ -666,7 +686,24 @@ class EfficiencyFoundationModel:
             # P2.6: Split turnovers into offensive (ball security) and defensive (takeaways)
             # Apply Bayesian shrinkage to each component separately
             # Shrinkage: games / (games + prior_strength). E.g., 15-game team keeps 60% of raw value.
-            games = self.team_games_played.get(team, 10)
+            # P2.10: No arbitrary defaults - must have reliable games count
+            if team not in self.team_games_played:
+                # Team has efficiency data but no turnover data - compute games from plays
+                if "game_id" in prepared.columns:
+                    team_plays = prepared[
+                        (prepared["offense"] == team) | (prepared["defense"] == team)
+                    ]
+                    games = max(team_plays["game_id"].nunique(), 1)
+                    logger.debug(
+                        f"Team {team} not in turnover stats; computed {games} games from plays"
+                    )
+                else:
+                    raise ValueError(
+                        f"Cannot determine games played for {team}: not in turnover stats "
+                        "and no game_id column in plays. Provide games_df to calculate_ratings."
+                    )
+            else:
+                games = self.team_games_played[team]
             shrinkage = games / (games + self.turnover_prior_strength)
 
             # Offensive turnover: ball security (fewer lost = better)
