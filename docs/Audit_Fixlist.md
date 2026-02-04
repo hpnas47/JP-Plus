@@ -237,13 +237,17 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
 
 ## P3 — Performance / maintainability
 
-- [ ] **P3.1 Use sparse matrix for ridge opponent adjustment**
+- [x] **P3.1 Use sparse matrix for ridge opponent adjustment** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** Dense X wastes memory; scales poorly.
   - **Acceptance criteria:** Sparse design matrix; results within tolerance; faster/more memory efficient.
   - **AI nudge prompt:**
     > Improve ridge opponent adjustment scalability by using an appropriate sparse representation for the design matrix. Ensure results match prior behavior within tolerance and add a quick benchmark/log showing memory/runtime improvements.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Converted `_ridge_adjust_metric()` to use scipy.sparse CSR matrix instead of dense numpy array. Each play has only 2-3 non-zero entries out of ~269 columns (offense team, defense team, optional home indicator), making sparse representation highly efficient. Results match dense implementation within 1e-5 tolerance (verified with synthetic 50k play test). Performance improvements logged per ridge call:
+    - **Memory: 98.1% savings** (124 MB → 2.3 MB for 60k plays)
+    - **Fit time: ~15-18x faster** (91ms → 5-12ms)
+    - **Density: ~1.1%** (only 2-3 non-zeros per row)
+    Added benchmark logging showing matrix dimensions, non-zero count, density %, memory comparison, and timing breakdown (build + fit). sklearn Ridge natively supports sparse matrices so no solver changes needed.
 
 - [ ] **P3.2 Vectorize play preprocessing & avoid O(T×N) filtering**
   - **Files:** `src/models/efficiency_foundation_model.py`

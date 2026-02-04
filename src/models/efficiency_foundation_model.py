@@ -10,11 +10,13 @@ per Game so that we are measuring efficiency, not just the scoreboard outcome."
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
 from sklearn.linear_model import Ridge
 
 from config.settings import get_settings
@@ -525,6 +527,10 @@ class EfficiencyFoundationModel:
         (EPA/success rates are higher for home teams), causing double-counting
         when SpreadGenerator adds explicit HFA.
 
+        P3.1 OPTIMIZATION: Uses sparse CSR matrix for the design matrix.
+        Each play has only 2-3 non-zero entries out of ~280 columns, so
+        sparse representation reduces memory by ~99% and speeds up fitting.
+
         Args:
             plays_df: Prepared plays with the metric column
             metric_col: Name of column to adjust (e.g., 'is_success')
@@ -533,6 +539,8 @@ class EfficiencyFoundationModel:
             Tuple of (off_adjusted, def_adjusted, learned_hfa) dicts
             learned_hfa is the implicit HFA coefficient (None if no home_team data)
         """
+        start_time = time.time()
+
         # Get all teams
         all_teams = sorted(set(plays_df["offense"]) | set(plays_df["defense"]))
         team_to_idx = {team: i for i, team in enumerate(all_teams)}
@@ -545,10 +553,13 @@ class EfficiencyFoundationModel:
         # Check if we have home team info for neutral-field regression
         has_home_info = "home_team" in plays_df.columns
 
-        # Build design matrix
+        # P3.1: Build sparse design matrix using COO format (efficient for construction)
         # Columns: [off_team_0, ..., off_team_n, def_team_0, ..., def_team_n, (home_indicator)]
+        # Each row has exactly 2-3 non-zero entries:
+        #   - 1 for offense team (+1)
+        #   - 1 for defense team (-1)
+        #   - optionally 1 for home indicator (+1 or -1)
         n_cols = 2 * n_teams + (1 if has_home_info else 0)
-        X = np.zeros((n_plays, n_cols))
 
         offenses = plays_df["offense"].values
         defenses = plays_df["defense"].values
@@ -557,21 +568,67 @@ class EfficiencyFoundationModel:
         if has_home_info:
             home_teams = plays_df["home_team"].values
         else:
-            home_teams = [None] * n_plays
+            home_teams = None
 
-        for i, (off, def_, home) in enumerate(zip(offenses, defenses, home_teams)):
+        # Pre-allocate arrays for COO sparse matrix
+        # Max entries: 2 per row (offense + defense) + 1 per row for home (if applicable)
+        max_nnz = 3 * n_plays if has_home_info else 2 * n_plays
+        row_indices = np.empty(max_nnz, dtype=np.int32)
+        col_indices = np.empty(max_nnz, dtype=np.int32)
+        data_values = np.empty(max_nnz, dtype=np.float64)
+
+        nnz = 0  # Number of non-zero entries
+
+        for i in range(n_plays):
+            off = offenses[i]
+            def_ = defenses[i]
             off_idx = team_to_idx[off]
             def_idx = team_to_idx[def_]
-            X[i, off_idx] = 1.0  # Offense contributes positively
-            X[i, n_teams + def_idx] = -1.0  # Defense reduces (good D = lower success)
+
+            # Offense contributes positively
+            row_indices[nnz] = i
+            col_indices[nnz] = off_idx
+            data_values[nnz] = 1.0
+            nnz += 1
+
+            # Defense reduces (good D = lower success)
+            row_indices[nnz] = i
+            col_indices[nnz] = n_teams + def_idx
+            data_values[nnz] = -1.0
+            nnz += 1
 
             # Home field indicator: +1 if offense is home, -1 if away, 0 if neutral
-            if has_home_info and home is not None:
+            if has_home_info and home_teams[i] is not None:
+                home = home_teams[i]
                 if off == home:
-                    X[i, -1] = 1.0  # Offense is home team
+                    row_indices[nnz] = i
+                    col_indices[nnz] = n_cols - 1
+                    data_values[nnz] = 1.0
+                    nnz += 1
                 elif def_ == home:
-                    X[i, -1] = -1.0  # Defense is home team (offense is away)
-                # else: neutral site or unknown, leave as 0
+                    row_indices[nnz] = i
+                    col_indices[nnz] = n_cols - 1
+                    data_values[nnz] = -1.0
+                    nnz += 1
+
+        # Trim arrays to actual size and create sparse matrix
+        row_indices = row_indices[:nnz]
+        col_indices = col_indices[:nnz]
+        data_values = data_values[:nnz]
+
+        X_sparse = sparse.csr_matrix(
+            (data_values, (row_indices, col_indices)),
+            shape=(n_plays, n_cols),
+            dtype=np.float64
+        )
+
+        # Calculate memory usage for logging
+        dense_memory_mb = (n_plays * n_cols * 8) / (1024 * 1024)  # 8 bytes per float64
+        sparse_memory_mb = (X_sparse.data.nbytes + X_sparse.indices.nbytes +
+                           X_sparse.indptr.nbytes) / (1024 * 1024)
+        memory_savings_pct = (1 - sparse_memory_mb / dense_memory_mb) * 100
+
+        build_time = time.time() - start_time
 
         # Target: the metric value (e.g., success = 1/0)
         if metric_col == "is_success":
@@ -579,9 +636,11 @@ class EfficiencyFoundationModel:
         else:
             y = plays_df[metric_col].values
 
-        # Fit weighted ridge regression
+        # Fit weighted ridge regression (sklearn Ridge supports sparse matrices)
+        fit_start = time.time()
         model = Ridge(alpha=self.ridge_alpha, fit_intercept=True)
-        model.fit(X, y, sample_weight=weights)
+        model.fit(X_sparse, y, sample_weight=weights)
+        fit_time = time.time() - fit_start
 
         # Extract coefficients
         coefficients = model.coef_
@@ -599,6 +658,20 @@ class EfficiencyFoundationModel:
         else:
             team_coefficients = coefficients
             logger.info(f"Ridge adjust {metric_col}: intercept={intercept:.4f} (no home info)")
+
+        total_time = time.time() - start_time
+        logger.info(
+            f"  Sparse matrix: {n_plays:,} plays × {n_cols} cols, "
+            f"{nnz:,} non-zeros ({100*nnz/(n_plays*n_cols):.2f}% density)"
+        )
+        logger.info(
+            f"  Memory: {sparse_memory_mb:.2f} MB sparse vs {dense_memory_mb:.2f} MB dense "
+            f"({memory_savings_pct:.1f}% savings)"
+        )
+        logger.info(
+            f"  Time: {build_time*1000:.1f}ms build + {fit_time*1000:.1f}ms fit = "
+            f"{total_time*1000:.1f}ms total"
+        )
 
         off_adjusted = {}
         def_adjusted = {}
