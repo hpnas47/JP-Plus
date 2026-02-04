@@ -249,13 +249,19 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     - **Density: ~1.1%** (only 2-3 non-zeros per row)
     Added benchmark logging showing matrix dimensions, non-zero count, density %, memory comparison, and timing breakdown (build + fit). sklearn Ridge natively supports sparse matrices so no solver changes needed.
 
-- [ ] **P3.2 Vectorize play preprocessing & avoid O(T×N) filtering**
+- [x] **P3.2 Vectorize play preprocessing & avoid O(T×N) filtering** ✅ COMPLETE
   - **Files:** `src/models/efficiency_foundation_model.py`
   - **Issue:** `df.apply(axis=1)` and per-team slicing loops are slow.
   - **Acceptance criteria:** Vectorized computations / groupby aggregation; same outputs; improved runtime.
   - **AI nudge prompt:**
     > Optimize EFM preprocessing and raw metric aggregation by removing row-wise apply and repeated per-team dataframe scans. Use vectorized operations/grouped aggregation while preserving correctness and outputs.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Replaced all row-wise `df.apply(axis=1)` calls with vectorized numpy operations:
+    - `is_successful_play_vectorized()`: Uses np.where for down-based thresholds (41.8x speedup: 21ms → 0.5ms)
+    - `is_garbage_time_vectorized()`: Uses array-based threshold lookup (31.8x speedup: 33ms → 1.0ms)
+    - Asymmetric garbage time weights: Vectorized with np.where instead of per-row function
+    - `_calculate_raw_metrics()`: Replaced O(T×N) per-team loops with groupby aggregation (single pass)
+    Results verified identical (100% match on 100k synthetic plays, backtest MAE/ATS unchanged).
+    Added timing logs for preprocessing and aggregation steps.
 
 - [x] **P3.3 Separate legacy ridge path from EFM in sweeps and reporting** ✅ N/A - LEGACY REMOVED
   - **Files:** `scripts/backtest.py`

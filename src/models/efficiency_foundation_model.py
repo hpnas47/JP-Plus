@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_garbage_time(quarter: int, score_diff: int) -> bool:
-    """Check if play is in garbage time.
+    """Check if play is in garbage time (scalar version for single plays).
 
     Uses thresholds from Settings (single source of truth).
     A play is garbage time if the score differential exceeds the
@@ -58,9 +58,34 @@ def is_garbage_time(quarter: int, score_diff: int) -> bool:
     return score_diff > threshold
 
 
+def is_garbage_time_vectorized(periods: np.ndarray, score_diffs: np.ndarray) -> np.ndarray:
+    """Vectorized garbage time detection for entire DataFrame.
+
+    P3.2 optimization: Replaces row-wise apply with vectorized numpy operations.
+
+    Args:
+        periods: Array of quarter/period values (1-4)
+        score_diffs: Array of absolute score differentials
+
+    Returns:
+        Boolean array indicating garbage time plays
+    """
+    settings = get_settings()
+
+    # Build threshold array based on period
+    # Default to Q4 threshold for periods outside 1-4 (OT, etc.)
+    thresholds = np.full(len(periods), settings.garbage_time_q4, dtype=np.float64)
+    thresholds[periods == 1] = settings.garbage_time_q1
+    thresholds[periods == 2] = settings.garbage_time_q2
+    thresholds[periods == 3] = settings.garbage_time_q3
+    thresholds[periods == 4] = settings.garbage_time_q4
+
+    return score_diffs > thresholds
+
+
 # Success rate thresholds
 def is_successful_play(down: int, distance: float, yards_gained: float) -> bool:
-    """Determine if play was successful.
+    """Determine if play was successful (scalar version for single plays).
 
     Standard success rate definition:
     - 1st down: Gain at least 50% of yards needed
@@ -90,6 +115,37 @@ def is_successful_play(down: int, distance: float, yards_gained: float) -> bool:
         return yards_gained >= 0.7 * distance  # 70% of yards needed
     else:  # 3rd or 4th down
         return yards_gained >= distance  # 100% of yards needed
+
+
+def is_successful_play_vectorized(
+    downs: np.ndarray, distances: np.ndarray, yards_gained: np.ndarray
+) -> np.ndarray:
+    """Vectorized success rate calculation for entire DataFrame.
+
+    P3.2 optimization: Replaces row-wise apply with vectorized numpy operations.
+
+    Args:
+        downs: Array of down values (1-4)
+        distances: Array of yards to go
+        yards_gained: Array of yards gained
+
+    Returns:
+        Boolean array indicating successful plays
+    """
+    # Handle distance <= 0 edge case: require positive yards
+    zero_distance_mask = distances <= 0
+    zero_distance_success = yards_gained > 0
+
+    # Calculate required yards based on down
+    # 1st down: 50%, 2nd down: 70%, 3rd/4th down: 100%
+    required_pct = np.where(downs == 1, 0.5, np.where(downs == 2, 0.7, 1.0))
+    required_yards = distances * required_pct
+
+    # Success if yards_gained >= required_yards
+    normal_success = yards_gained >= required_yards
+
+    # Combine: use zero_distance logic where distance <= 0, else normal logic
+    return np.where(zero_distance_mask, zero_distance_success, normal_success)
 
 
 @dataclass
@@ -383,20 +439,23 @@ class EfficiencyFoundationModel:
         else:
             logger.info(f"Prepared {len(df)} plays for EFM")
 
-        # Calculate success for each play
-        df["is_success"] = df.apply(
-            lambda r: is_successful_play(r["down"], r["distance"], r["yards_gained"]),
-            axis=1
+        # P3.2: Vectorized success calculation (replaces row-wise apply)
+        prep_start = time.time()
+
+        df["is_success"] = is_successful_play_vectorized(
+            df["down"].values,
+            df["distance"].values,
+            df["yards_gained"].values,
         )
 
-        # Calculate garbage time flag (P2.9: uses normalized 'period' column)
+        # P3.2: Vectorized garbage time detection (replaces row-wise apply)
         df["score_diff"] = (df["offense_score"] - df["defense_score"]).abs()
-        df["is_garbage_time"] = df.apply(
-            lambda r: is_garbage_time(r["period"], r["score_diff"]),
-            axis=1
+        df["is_garbage_time"] = is_garbage_time_vectorized(
+            df["period"].values,
+            df["score_diff"].values,
         )
 
-        # Apply garbage time weighting
+        # P3.2: Vectorized weight calculation (replaces row-wise apply)
         if self.garbage_time_weight == 0:
             # Discard garbage time plays entirely
             df = df[~df["is_garbage_time"]]
@@ -404,23 +463,23 @@ class EfficiencyFoundationModel:
         elif self.asymmetric_garbage:
             # Asymmetric: only penalize TRAILING team's garbage time plays
             # Leading team keeps full weight - they earned the blowout through efficiency
-            def calc_asymmetric_weight(row):
-                if not row["is_garbage_time"]:
-                    return 1.0
-                # In garbage time: is offense winning or losing?
-                margin = row["offense_score"] - row["defense_score"]
-                if margin > 0:
-                    # Offense is winning big - keep full weight
-                    return 1.0
-                else:
-                    # Offense is trailing - this is garbage time noise
-                    return self.garbage_time_weight
+            # Vectorized: weight = 1.0 unless (garbage_time AND offense trailing)
+            offense_margin = df["offense_score"].values - df["defense_score"].values
+            is_gt = df["is_garbage_time"].values
+            is_trailing = offense_margin <= 0
 
-            df["weight"] = df.apply(calc_asymmetric_weight, axis=1)
+            # Full weight unless in garbage time AND trailing
+            df["weight"] = np.where(
+                is_gt & is_trailing,
+                self.garbage_time_weight,
+                1.0
+            )
         else:
             # Symmetric: weight ALL garbage time plays at reduced value
-            df["weight"] = df["is_garbage_time"].apply(
-                lambda gt: self.garbage_time_weight if gt else 1.0
+            df["weight"] = np.where(
+                df["is_garbage_time"].values,
+                self.garbage_time_weight,
+                1.0
             )
 
         # Apply time decay if enabled (decay < 1.0)
@@ -431,12 +490,18 @@ class EfficiencyFoundationModel:
             df["time_weight"] = self.time_decay ** (max_week - df["week"])
             df["weight"] = df["weight"] * df["time_weight"]
 
+        prep_time = time.time() - prep_start
+        logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")
+
         return df
 
     def _calculate_raw_metrics(
         self, plays_df: pd.DataFrame
     ) -> tuple[dict, dict, dict, dict]:
         """Calculate raw (unadjusted) success rate and IsoPPP for all teams.
+
+        P3.2 optimization: Uses groupby aggregation instead of per-team loops.
+        This reduces complexity from O(T×N) to O(N) where T=teams, N=plays.
 
         Both SR and IsoPPP use the same play weighting scheme (garbage time + time decay).
         This ensures consistency: if a play is down-weighted for SR, it's also
@@ -448,63 +513,100 @@ class EfficiencyFoundationModel:
         Returns:
             Tuple of (off_sr, def_sr, off_isoppp, def_isoppp) dicts
         """
-        all_teams = set(plays_df["offense"]) | set(plays_df["defense"])
+        agg_start = time.time()
 
+        # Pre-compute weighted success column for efficiency
+        plays_df = plays_df.copy()
+        plays_df["weighted_success"] = plays_df["is_success"].astype(float) * plays_df["weight"]
+
+        # ===== OFFENSIVE METRICS (groupby offense) =====
+        off_grouped = plays_df.groupby("offense").agg(
+            play_count=("weight", "size"),
+            weight_sum=("weight", "sum"),
+            weighted_success_sum=("weighted_success", "sum"),
+        )
+
+        # Calculate weighted SR for teams with enough plays
         off_sr = {}
+        for team in off_grouped.index:
+            row = off_grouped.loc[team]
+            if row["play_count"] >= self.MIN_PLAYS:
+                off_sr[team] = row["weighted_success_sum"] / row["weight_sum"]
+            else:
+                off_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
+
+        # ===== DEFENSIVE METRICS (groupby defense) =====
+        def_grouped = plays_df.groupby("defense").agg(
+            play_count=("weight", "size"),
+            weight_sum=("weight", "sum"),
+            weighted_success_sum=("weighted_success", "sum"),
+        )
+
         def_sr = {}
+        for team in def_grouped.index:
+            row = def_grouped.loc[team]
+            if row["play_count"] >= self.MIN_PLAYS:
+                def_sr[team] = row["weighted_success_sum"] / row["weight_sum"]
+            else:
+                def_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
+
+        # ===== ISOPPP (successful plays only, with valid PPA) =====
         off_isoppp = {}
         def_isoppp = {}
 
-        for team in all_teams:
-            # Offensive plays
-            off_plays = plays_df[plays_df["offense"] == team]
-            if len(off_plays) >= self.MIN_PLAYS:
-                # Weighted success rate
-                weights = off_plays["weight"]
-                successes = off_plays["is_success"]
-                off_sr[team] = (successes * weights).sum() / weights.sum()
+        if "ppa" in plays_df.columns:
+            # Filter to successful plays with valid PPA
+            successful_plays = plays_df[plays_df["is_success"] & plays_df["ppa"].notna()].copy()
 
-                # IsoPPP: EPA on successful plays only, WEIGHTED (P2.3 fix)
-                # Use same play weights as SR for consistency
-                # P2.9: Filter out NaN PPA values to prevent propagation
-                successful = off_plays[off_plays["is_success"]]
-                if len(successful) > 20 and "ppa" in successful.columns:
-                    valid_ppa = successful[successful["ppa"].notna()]
-                    if len(valid_ppa) > 10:
-                        succ_weights = valid_ppa["weight"]
-                        succ_ppa = valid_ppa["ppa"]
-                        off_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
+            if len(successful_plays) > 0:
+                successful_plays["weighted_ppa"] = successful_plays["ppa"] * successful_plays["weight"]
+
+                # Offensive IsoPPP
+                off_isoppp_grouped = successful_plays.groupby("offense").agg(
+                    succ_count=("weight", "size"),
+                    weight_sum=("weight", "sum"),
+                    weighted_ppa_sum=("weighted_ppa", "sum"),
+                )
+
+                for team in off_isoppp_grouped.index:
+                    row = off_isoppp_grouped.loc[team]
+                    # Need at least 10 successful plays with valid PPA
+                    if row["succ_count"] >= 10 and team in off_sr and off_grouped.loc[team, "play_count"] >= self.MIN_PLAYS:
+                        off_isoppp[team] = row["weighted_ppa_sum"] / row["weight_sum"]
                     else:
                         off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
-                else:
-                    off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
-            else:
-                off_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
-                off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
 
-            # Defensive plays (what they allow)
-            def_plays = plays_df[plays_df["defense"] == team]
-            if len(def_plays) >= self.MIN_PLAYS:
-                weights = def_plays["weight"]
-                successes = def_plays["is_success"]
-                def_sr[team] = (successes * weights).sum() / weights.sum()
+                # Defensive IsoPPP
+                def_isoppp_grouped = successful_plays.groupby("defense").agg(
+                    succ_count=("weight", "size"),
+                    weight_sum=("weight", "sum"),
+                    weighted_ppa_sum=("weighted_ppa", "sum"),
+                )
 
-                # IsoPPP: EPA on successful plays only, WEIGHTED (P2.3 fix)
-                # P2.9: Filter out NaN PPA values to prevent propagation
-                successful = def_plays[def_plays["is_success"]]
-                if len(successful) > 20 and "ppa" in successful.columns:
-                    valid_ppa = successful[successful["ppa"].notna()]
-                    if len(valid_ppa) > 10:
-                        succ_weights = valid_ppa["weight"]
-                        succ_ppa = valid_ppa["ppa"]
-                        def_isoppp[team] = (succ_ppa * succ_weights).sum() / succ_weights.sum()
+                for team in def_isoppp_grouped.index:
+                    row = def_isoppp_grouped.loc[team]
+                    if row["succ_count"] >= 10 and team in def_sr and def_grouped.loc[team, "play_count"] >= self.MIN_PLAYS:
+                        def_isoppp[team] = row["weighted_ppa_sum"] / row["weight_sum"]
                     else:
                         def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
-                else:
-                    def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
-            else:
+
+        # Fill in missing teams with league average
+        all_teams = set(off_grouped.index) | set(def_grouped.index)
+        for team in all_teams:
+            if team not in off_sr:
+                off_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
+            if team not in def_sr:
                 def_sr[team] = self.LEAGUE_AVG_SUCCESS_RATE
+            if team not in off_isoppp:
+                off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
+            if team not in def_isoppp:
                 def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
+
+        agg_time = time.time() - agg_start
+        logger.debug(
+            f"  Groupby aggregation: {agg_time*1000:.1f}ms for {len(all_teams)} teams, "
+            f"{len(plays_df):,} plays"
+        )
 
         return off_sr, def_sr, off_isoppp, def_isoppp
 
