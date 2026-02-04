@@ -52,14 +52,18 @@ Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained 
 
 ### Betting Line Data Sources
 
-Betting lines are sourced from the [CFBD API](https://collegefootballdata.com/), which aggregates lines from multiple sportsbooks. The backtest selects one provider per game in priority order:
+JP+ uses a dual-source approach for betting lines:
+
+#### Historical Data (2022-2025): CFBD API
+
+For historical backtesting, lines are sourced from the [CFBD API](https://collegefootballdata.com/), which aggregates lines from multiple sportsbooks. Provider priority:
 
 1. **DraftKings** (preferred)
 2. **ESPN Bet**
 3. **Bovada**
 4. Fallback to any available (William Hill, Consensus, Caesars)
 
-**Actual provider usage in backtest (2022-2025):**
+**FBS games coverage (2022-2025):**
 | Provider | Games Used | With Opening Line |
 |----------|------------|-------------------|
 | DraftKings | 2,255 (39%) | 2,108 (93%) |
@@ -69,7 +73,24 @@ Betting lines are sourced from the [CFBD API](https://collegefootballdata.com/),
 | Consensus | 404 (7%) | 0 (0%) |
 | **Total** | **5,800** | **3,174 (55%)** |
 
-**Note on opening lines:** Only 55% of games have true opening line data. The opening line ATS results are based on this subset. DraftKings provides opening lines for 93% of its games, Bovada for 99%, but ESPN Bet only 10%. Games without opening lines use the closing line as a proxy in aggregate stats but are excluded from opening-line-specific ATS calculations.
+**Note on opening lines:** Only 55% of all games have true opening line data from CFBD. For FBS-only games, coverage is ~91%. The opening line ATS results are based on games with actual opening line data.
+
+#### Future Data (2026+): The Odds API
+
+For ongoing seasons, opening and closing lines are captured from [The Odds API](https://the-odds-api.com/):
+
+- **Opening lines**: Captured Sunday evening after lines post
+- **Closing lines**: Captured Saturday morning before games
+- **Cost**: 2 credits/week (1 for opening, 1 for closing)
+- **Primary sportsbooks**: FanDuel, DraftKings, BetMGM, Caesars, Bovada
+
+**Capture scripts:**
+- `scripts/weekly_odds_capture.py --opening` (run Sunday ~6 PM ET)
+- `scripts/weekly_odds_capture.py --closing` (run Saturday ~9 AM ET)
+
+**Data storage:** SQLite database at `data/odds_api_lines.db`
+
+**Merge logic:** The `src/data/betting_lines.py` module merges both sources, preferring The Odds API data when available for better opening line coverage.
 
 ---
 

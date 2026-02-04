@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Weekly odds capture for opening and closing lines.
+
+This script is designed to be run twice per week during CFB season:
+1. Sunday evening - Capture opening lines (after lines are posted)
+2. Saturday morning - Capture closing lines (before games start)
+
+Usage:
+    # Capture opening lines (run Sunday ~6 PM ET)
+    python scripts/weekly_odds_capture.py --opening
+
+    # Capture closing lines (run Saturday ~9 AM ET)
+    python scripts/weekly_odds_capture.py --closing
+
+    # Check what's available without capturing
+    python scripts/weekly_odds_capture.py --preview
+
+Schedule with cron (example):
+    # Opening lines: Sunday 6 PM ET (11 PM UTC)
+    0 23 * * 0 cd /path/to/project && python scripts/weekly_odds_capture.py --opening
+
+    # Closing lines: Saturday 9 AM ET (2 PM UTC)
+    0 14 * * 6 cd /path/to/project && python scripts/weekly_odds_capture.py --closing
+
+Environment:
+    ODDS_API_KEY: Your Odds API key (required)
+"""
+
+import argparse
+import logging
+import os
+import sqlite3
+import sys
+from datetime import datetime
+from pathlib import Path
+
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.api.odds_api_client import OddsAPIClient
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+DB_PATH = project_root / "data" / "odds_api_lines.db"
+
+
+def get_current_week() -> tuple[int, int]:
+    """Estimate current CFB week based on date.
+
+    Returns:
+        Tuple of (year, week_number)
+    """
+    now = datetime.now()
+    year = now.year
+
+    # CFB season typically runs late August through early January
+    # Week 0: Late August
+    # Week 1: First week of September
+    # Weeks 2-13: Regular season
+    # Weeks 14-15: Conference championships / bowl selection
+    # Week 16+: Bowl season
+
+    month = now.month
+    day = now.day
+
+    if month < 8:
+        # Before season - return previous year's bowl season or upcoming season
+        return (year, 0)
+    elif month == 8:
+        if day < 20:
+            return (year, 0)  # Pre-season
+        else:
+            return (year, 0)  # Week 0
+    elif month == 9:
+        # Weeks 1-4 roughly
+        week = (day - 1) // 7 + 1
+        return (year, min(week, 4))
+    elif month == 10:
+        # Weeks 5-9 roughly
+        week = (day - 1) // 7 + 5
+        return (year, min(week, 9))
+    elif month == 11:
+        # Weeks 10-14 roughly
+        week = (day - 1) // 7 + 10
+        return (year, min(week, 14))
+    elif month == 12:
+        # Weeks 14-16+ (conference champs, bowl season)
+        if day < 15:
+            return (year, 15)
+        else:
+            return (year, 16)
+    else:  # January
+        # Bowl season continuation
+        return (year - 1, 17)
+
+
+def init_database() -> sqlite3.Connection:
+    """Initialize database connection."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+
+    # Ensure tables exist
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS odds_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_type TEXT NOT NULL,
+            snapshot_time TEXT NOT NULL,
+            captured_at TEXT NOT NULL,
+            credits_used INTEGER,
+            UNIQUE(snapshot_type, snapshot_time)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS odds_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            game_id TEXT NOT NULL,
+            sportsbook TEXT NOT NULL,
+            home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL,
+            spread_home REAL NOT NULL,
+            spread_away REAL NOT NULL,
+            price_home INTEGER,
+            price_away INTEGER,
+            commence_time TEXT,
+            last_update TEXT,
+            FOREIGN KEY (snapshot_id) REFERENCES odds_snapshots(id),
+            UNIQUE(snapshot_id, game_id, sportsbook)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_lines_game_id ON odds_lines(game_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_lines_teams ON odds_lines(home_team, away_team)")
+    conn.commit()
+    return conn
+
+
+def capture_odds(
+    client: OddsAPIClient,
+    conn: sqlite3.Connection,
+    snapshot_type: str,
+) -> dict:
+    """Capture current odds and store them.
+
+    Args:
+        client: Odds API client
+        conn: Database connection
+        snapshot_type: 'opening' or 'closing'
+
+    Returns:
+        Summary dict
+    """
+    year, week = get_current_week()
+
+    logger.info(f"Capturing {snapshot_type} lines for {year} week {week}...")
+
+    snapshot = client.get_current_odds()
+
+    if not snapshot.lines:
+        logger.warning("No lines returned from API")
+        return {
+            'type': snapshot_type,
+            'year': year,
+            'week': week,
+            'games': 0,
+            'lines': 0,
+            'credits_remaining': snapshot.credits_remaining,
+        }
+
+    # Store snapshot
+    cursor = conn.cursor()
+    snapshot_label = f"{snapshot_type}_{year}_week{week}"
+
+    cursor.execute("""
+        INSERT OR REPLACE INTO odds_snapshots
+        (snapshot_type, snapshot_time, captured_at, credits_used)
+        VALUES (?, ?, ?, ?)
+    """, (
+        snapshot_label,
+        snapshot.timestamp.isoformat(),
+        datetime.now().isoformat(),
+        snapshot.credits_used,
+    ))
+    snapshot_id = cursor.lastrowid
+
+    # Store lines
+    games_seen = set()
+    for line in snapshot.lines:
+        games_seen.add(line.game_id)
+        cursor.execute("""
+            INSERT OR REPLACE INTO odds_lines
+            (snapshot_id, game_id, sportsbook, home_team, away_team,
+             spread_home, spread_away, price_home, price_away,
+             commence_time, last_update)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            snapshot_id,
+            line.game_id,
+            line.sportsbook,
+            line.home_team,
+            line.away_team,
+            line.spread_home,
+            line.spread_away,
+            line.price_home,
+            line.price_away,
+            line.commence_time.isoformat() if line.commence_time else None,
+            line.last_update.isoformat() if line.last_update else None,
+        ))
+
+    conn.commit()
+
+    logger.info(f"Stored {len(snapshot.lines)} lines for {len(games_seen)} games")
+    logger.info(f"Credits remaining: {snapshot.credits_remaining}")
+
+    return {
+        'type': snapshot_type,
+        'year': year,
+        'week': week,
+        'games': len(games_seen),
+        'lines': len(snapshot.lines),
+        'credits_remaining': snapshot.credits_remaining,
+    }
+
+
+def preview_odds(client: OddsAPIClient) -> None:
+    """Preview available odds without storing (still uses 1 credit)."""
+    year, week = get_current_week()
+
+    print(f"\nPreviewing NCAAF odds for {year} week {week}...")
+    print("(This will use 1 credit)\n")
+
+    snapshot = client.get_current_odds()
+
+    if not snapshot.lines:
+        print("No games currently available")
+        return
+
+    # Group by game
+    games = {}
+    for line in snapshot.lines:
+        key = (line.home_team, line.away_team)
+        if key not in games:
+            games[key] = {
+                'commence': line.commence_time,
+                'lines': []
+            }
+        games[key]['lines'].append(line)
+
+    print(f"Found {len(games)} games:\n")
+    for (home, away), info in sorted(games.items(), key=lambda x: str(x[1]['commence'])):
+        commence = info['commence'].strftime('%Y-%m-%d %H:%M') if info['commence'] else 'TBD'
+        print(f"{away} @ {home} ({commence})")
+        for line in info['lines'][:3]:  # Show up to 3 books
+            print(f"  {line.sportsbook}: {line.spread_home:+.1f} ({line.price_home})")
+        if len(info['lines']) > 3:
+            print(f"  ... and {len(info['lines']) - 3} more books")
+        print()
+
+    print(f"Credits remaining: {snapshot.credits_remaining}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Weekly odds capture")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--opening", action="store_true",
+                      help="Capture opening lines (run Sunday)")
+    group.add_argument("--closing", action="store_true",
+                      help="Capture closing lines (run Saturday)")
+    group.add_argument("--preview", action="store_true",
+                      help="Preview available odds")
+    parser.add_argument("--api-key", type=str,
+                       help="Odds API key (or set ODDS_API_KEY)")
+
+    args = parser.parse_args()
+
+    api_key = args.api_key or os.environ.get("ODDS_API_KEY")
+    if not api_key:
+        logger.error("API key required. Set ODDS_API_KEY or use --api-key")
+        sys.exit(1)
+
+    client = OddsAPIClient(api_key=api_key)
+
+    if args.preview:
+        preview_odds(client)
+    else:
+        conn = init_database()
+        snapshot_type = "opening" if args.opening else "closing"
+        result = capture_odds(client, conn, snapshot_type)
+        conn.close()
+
+        print(f"\n{snapshot_type.title()} lines captured:")
+        print(f"  Season: {result['year']} Week {result['week']}")
+        print(f"  Games: {result['games']}")
+        print(f"  Lines: {result['lines']}")
+        print(f"  Credits remaining: {result['credits_remaining']}")
+
+
+if __name__ == "__main__":
+    main()
