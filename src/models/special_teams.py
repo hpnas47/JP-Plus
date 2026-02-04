@@ -259,41 +259,28 @@ class SpecialTeamsModel:
         home_games = games_df[games_df["home_team"] == team]
         away_games = games_df[games_df["away_team"] == team]
 
-        # Aggregate stats (if available in the data)
+        # Aggregate stats if available (VECTORIZED)
+        # P3.3: Replaced iterrows with column-level .sum() for ~10x speedup
         fg_made = 0
         fg_attempts = 0
         punt_yards = 0
         punt_count = 0
 
-        stat_columns_home = {
-            "home_fg_made": "fg_made",
-            "home_fg_attempts": "fg_attempts",
-            "home_punt_yards": "punt_yards",
-            "home_punts": "punts",
-        }
+        if "home_fg_made" in games_df.columns:
+            fg_made += home_games["home_fg_made"].fillna(0).sum()
+            fg_attempts += home_games["home_fg_attempts"].fillna(0).sum()
 
-        stat_columns_away = {
-            "away_fg_made": "fg_made",
-            "away_fg_attempts": "fg_attempts",
-            "away_punt_yards": "punt_yards",
-            "away_punts": "punts",
-        }
+        if "away_fg_made" in games_df.columns:
+            fg_made += away_games["away_fg_made"].fillna(0).sum()
+            fg_attempts += away_games["away_fg_attempts"].fillna(0).sum()
 
-        for _, game in home_games.iterrows():
-            if "home_fg_made" in game:
-                fg_made += game.get("home_fg_made", 0)
-                fg_attempts += game.get("home_fg_attempts", 0)
-            if "home_punt_yards" in game:
-                punt_yards += game.get("home_punt_yards", 0)
-                punt_count += game.get("home_punts", 0)
+        if "home_punt_yards" in games_df.columns:
+            punt_yards += home_games["home_punt_yards"].fillna(0).sum()
+            punt_count += home_games["home_punts"].fillna(0).sum()
 
-        for _, game in away_games.iterrows():
-            if "away_fg_made" in game:
-                fg_made += game.get("away_fg_made", 0)
-                fg_attempts += game.get("away_fg_attempts", 0)
-            if "away_punt_yards" in game:
-                punt_yards += game.get("away_punt_yards", 0)
-                punt_count += game.get("away_punts", 0)
+        if "away_punt_yards" in games_df.columns:
+            punt_yards += away_games["away_punt_yards"].fillna(0).sum()
+            punt_count += away_games["away_punts"].fillna(0).sum()
 
         # Calculate simplified ratings
         fg_rating = 0.0
@@ -425,16 +412,25 @@ class SpecialTeamsModel:
             logger.warning("No field goal plays with parseable distance")
             return
 
-        # Calculate PAAE for each attempt
-        def calc_paae(row):
-            distance = row["distance"]
-            made = row["made"]
-            expected_rate = self._get_fg_expected_rate(distance)
-            actual_points = 3.0 if made else 0.0
-            expected_points = 3.0 * expected_rate
-            return actual_points - expected_points
+        # Calculate PAAE for each attempt (VECTORIZED)
+        # P3.3: Replaced apply(axis=1) with np.select for ~10x speedup
+        distance = fg_plays["distance"].values
+        made = fg_plays["made"].values
 
-        fg_plays["paae"] = fg_plays.apply(calc_paae, axis=1)
+        # Vectorized expected rate lookup using np.select
+        conditions = [
+            distance < 30,
+            (distance >= 30) & (distance < 40),
+            (distance >= 40) & (distance < 50),
+            (distance >= 50) & (distance < 60),
+        ]
+        choices = [0.92, 0.83, 0.72, 0.55]
+        expected_rate = np.select(conditions, choices, default=0.30)
+
+        # Vectorized PAAE: actual_points - expected_points
+        actual_points = np.where(made, 3.0, 0.0)
+        expected_points = 3.0 * expected_rate
+        fg_plays["paae"] = actual_points - expected_points
 
         # Aggregate by team
         team_fg = fg_plays.groupby("offense").agg(
@@ -572,32 +568,33 @@ class SpecialTeamsModel:
             return {}
 
         # Calculate net yards
-        # Touchback: ball placed at 20, so net = gross - (100 - 20) is wrong
-        # Actually, net = field_position_change. For touchback, opponent starts at 25.
-        # Simplified: net = gross - return_yards, touchback = gross - 25 (from own 25 equivalent)
-        def calc_net_yards(row):
-            gross = row["gross_yards"]
-            if row["is_touchback"]:
-                # Touchback: opponent gets ball at 25, so net is limited
-                # Approximation: net = min(gross, 55) since touchback from far means wasted yards
-                return min(gross, 55)
-            return gross - row["return_yards"]
+        # Calculate net yards (VECTORIZED)
+        # P3.3: Replaced apply(axis=1) with np.where for ~10x speedup
+        # Touchback: ball placed at 25, so net is limited
+        # Normal: net = gross - return_yards
+        gross = punt_plays["gross_yards"].values
+        return_yards = punt_plays["return_yards"].values
+        is_touchback = punt_plays["is_touchback"].values
 
-        punt_plays["net_yards"] = punt_plays.apply(calc_net_yards, axis=1)
+        # Touchback: net = min(gross, 55) since touchback from far means wasted yards
+        # Normal: net = gross - return_yards
+        punt_plays["net_yards"] = np.where(
+            is_touchback,
+            np.minimum(gross, 55),
+            gross - return_yards
+        )
 
-        # Calculate rating relative to expected (40 yards net)
-        # Convert to POINTS (marginal contribution)
-        def calc_punt_value(row):
-            net_vs_expected = row["net_yards"] - self.EXPECTED_PUNT_NET
-            # Convert yards to points: ~0.04 pts/yard
-            yards_value = net_vs_expected * self.YARDS_TO_POINTS
-            # Inside-20 bonus: ~0.5 pts (better starting field position for defense)
-            inside_20_bonus = 0.5 if row["is_inside_20"] else 0.0
-            # Touchback penalty: ~0.3 pts (opponent starts at 25 instead of worse)
-            touchback_penalty = -0.3 if row["is_touchback"] else 0.0
-            return yards_value + inside_20_bonus + touchback_penalty
+        # Calculate punt value (VECTORIZED)
+        # P3.3: Replaced apply(axis=1) with vectorized arithmetic
+        net_yards = punt_plays["net_yards"].values
+        is_inside_20 = punt_plays["is_inside_20"].values
 
-        punt_plays["punt_value"] = punt_plays.apply(calc_punt_value, axis=1)
+        # Components: yards value + inside-20 bonus + touchback penalty
+        yards_value = (net_yards - self.EXPECTED_PUNT_NET) * self.YARDS_TO_POINTS
+        inside_20_bonus = np.where(is_inside_20, 0.5, 0.0)
+        touchback_penalty = np.where(is_touchback, -0.3, 0.0)
+
+        punt_plays["punt_value"] = yards_value + inside_20_bonus + touchback_penalty
 
         # Aggregate by punting team (offense column = team that punted)
         team_punts = punt_plays.groupby("offense").agg(

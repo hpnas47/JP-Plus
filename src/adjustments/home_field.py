@@ -173,17 +173,14 @@ class HomeFieldAdvantage:
         # Calculate home margins
         completed["home_margin"] = completed["home_points"] - completed["away_points"]
 
-        # If we have team ratings, adjust for team strength
+        # If we have team ratings, adjust for team strength (VECTORIZED)
+        # P3.3: Replaced iterrows with .map() for ~10x speedup
         if team_ratings:
-            adjusted_margins = []
-            for _, game in completed.iterrows():
-                home_rating = team_ratings.get(game["home_team"], 0)
-                away_rating = team_ratings.get(game["away_team"], 0)
-                expected_margin = home_rating - away_rating
-                adjusted_margin = game["home_margin"] - expected_margin
-                adjusted_margins.append(adjusted_margin)
-
-            return np.mean(adjusted_margins)
+            home_rating = completed["home_team"].map(team_ratings).fillna(0)
+            away_rating = completed["away_team"].map(team_ratings).fillna(0)
+            expected_margin = home_rating - away_rating
+            adjusted_margin = completed["home_margin"] - expected_margin
+            return adjusted_margin.mean()
 
         # Simple average home margin (biased by schedule imbalances)
         return completed["home_margin"].mean()
@@ -218,18 +215,14 @@ class HomeFieldAdvantage:
         # Calculate home margin
         home_games["home_margin"] = home_games["home_points"] - home_games["away_points"]
 
-        # Adjust for opponent strength if ratings available
+        # Adjust for opponent strength if ratings available (VECTORIZED)
+        # P3.3: Replaced iterrows with .map() for ~10x speedup
         if team_ratings:
-            adjusted_margins = []
             team_rating = team_ratings.get(team, 0)
-
-            for _, game in home_games.iterrows():
-                away_rating = team_ratings.get(game["away_team"], 0)
-                expected_margin = team_rating - away_rating
-                adjusted_margin = game["home_margin"] - expected_margin
-                adjusted_margins.append(adjusted_margin)
-
-            team_hfa = np.mean(adjusted_margins)
+            away_rating = home_games["away_team"].map(team_ratings).fillna(0)
+            expected_margin = team_rating - away_rating
+            adjusted_margin = home_games["home_margin"] - expected_margin
+            team_hfa = adjusted_margin.mean()
         else:
             team_hfa = home_games["home_margin"].mean()
 
@@ -311,39 +304,29 @@ class HomeFieldAdvantage:
 
         completed["home_margin"] = completed["home_points"] - completed["away_points"]
 
-        # Calculate residuals for each game
-        residuals_by_team = {}
-        for _, game in completed.iterrows():
-            home = game["home_team"]
-            away = game["away_team"]
+        # Calculate residuals vectorized (P3.3: replaced iterrows with .map())
+        completed["home_rating"] = completed["home_team"].map(team_ratings).fillna(0)
+        completed["away_rating"] = completed["away_team"].map(team_ratings).fillna(0)
+        completed["expected_margin"] = completed["home_rating"] - completed["away_rating"]
+        completed["residual"] = completed["home_margin"] - completed["expected_margin"]
 
-            home_rating = team_ratings.get(home, 0)
-            away_rating = team_ratings.get(away, 0)
-
-            # Expected margin without HFA
-            expected = home_rating - away_rating
-            actual = game["home_margin"]
-
-            # Residual is the "extra" margin at home beyond talent difference
-            residual = actual - expected
-
-            if home not in residuals_by_team:
-                residuals_by_team[home] = []
-            residuals_by_team[home].append(residual)
+        # Aggregate residuals by home team using groupby
+        residual_stats = completed.groupby("home_team").agg(
+            raw_hfa=("residual", "mean"),
+            n_games=("residual", "count"),
+        )
 
         # Calculate regressed HFA for each team
         calculated_hfa = {}
-        for team, residuals in residuals_by_team.items():
-            n_games = len(residuals)
+        for team in residual_stats.index:
+            n_games = residual_stats.loc[team, "n_games"]
+            raw_hfa = residual_stats.loc[team, "raw_hfa"]
 
             if n_games < min_games:
                 # Not enough data, use conference prior
                 conf = team_conferences.get(team, "default")
                 calculated_hfa[team] = CONFERENCE_HFA_PRIORS.get(conf, CONFERENCE_HFA_PRIORS["default"])
                 continue
-
-            # Raw average residual
-            raw_hfa = np.mean(residuals)
 
             # Get conference prior for regression
             conf = team_conferences.get(team, "default")

@@ -187,46 +187,33 @@ def run_analysis(year: int = 2025):
     original_me = df['error'].mean()
     original_mae = df['abs_error'].mean()
 
-    # Approach 1: Hard cap at 5 points
-    def apply_hard_cap(stack, cap=5.0):
-        return min(stack, cap)
-
-    df['stack_capped_5'] = df['correlated_stack'].apply(lambda x: apply_hard_cap(x, 5.0))
+    # Approach 1: Hard cap at 5 points (VECTORIZED)
+    stack = df['correlated_stack'].values
+    df['stack_capped_5'] = np.minimum(stack, 5.0)
     df['adj_spread_cap5'] = df['predicted_spread'] - (df['correlated_stack'] - df['stack_capped_5'])
     df['error_cap5'] = df['adj_spread_cap5'] - df['actual_margin']
 
-    # Approach 2: Hard cap at 6 points
-    df['stack_capped_6'] = df['correlated_stack'].apply(lambda x: apply_hard_cap(x, 6.0))
+    # Approach 2: Hard cap at 6 points (VECTORIZED)
+    df['stack_capped_6'] = np.minimum(stack, 6.0)
     df['adj_spread_cap6'] = df['predicted_spread'] - (df['correlated_stack'] - df['stack_capped_6'])
     df['error_cap6'] = df['adj_spread_cap6'] - df['actual_margin']
 
-    # Approach 3: Soft cap (50% reduction above 5 pts)
-    def apply_soft_cap(stack, cap_start=5.0, cap_factor=0.5):
-        if stack <= cap_start:
-            return stack
-        excess = stack - cap_start
-        return cap_start + excess * cap_factor
-
-    df['stack_soft'] = df['correlated_stack'].apply(lambda x: apply_soft_cap(x, 5.0, 0.5))
+    # Approach 3: Soft cap (50% reduction above 5 pts) (VECTORIZED)
+    cap_start, cap_factor = 5.0, 0.5
+    excess = np.maximum(stack - cap_start, 0)
+    df['stack_soft'] = np.where(stack <= cap_start, stack, cap_start + excess * cap_factor)
     df['adj_spread_soft'] = df['predicted_spread'] - (df['correlated_stack'] - df['stack_soft'])
     df['error_soft'] = df['adj_spread_soft'] - df['actual_margin']
 
-    # Approach 4: Square root scaling (diminishing returns)
-    def apply_sqrt_scaling(stack, scale=2.5):
-        # sqrt scaling: effective_stack = scale * sqrt(stack)
-        # Calibrated so stack=4 -> ~5, stack=6 -> ~6.1
-        return scale * np.sqrt(stack)
-
-    df['stack_sqrt'] = df['correlated_stack'].apply(lambda x: apply_sqrt_scaling(x, 2.5))
+    # Approach 4: Square root scaling (diminishing returns) (VECTORIZED)
+    scale_sqrt = 2.5
+    df['stack_sqrt'] = scale_sqrt * np.sqrt(stack)
     df['adj_spread_sqrt'] = df['predicted_spread'] - (df['correlated_stack'] - df['stack_sqrt'])
     df['error_sqrt'] = df['adj_spread_sqrt'] - df['actual_margin']
 
-    # Approach 5: Logarithmic scaling
-    def apply_log_scaling(stack, scale=3.0):
-        # log scaling: effective_stack = scale * ln(1 + stack)
-        return scale * np.log1p(stack)
-
-    df['stack_log'] = df['correlated_stack'].apply(lambda x: apply_log_scaling(x, 3.0))
+    # Approach 5: Logarithmic scaling (VECTORIZED)
+    scale_log = 3.0
+    df['stack_log'] = scale_log * np.log1p(stack)
     df['adj_spread_log'] = df['predicted_spread'] - (df['correlated_stack'] - df['stack_log'])
     df['error_log'] = df['adj_spread_log'] - df['actual_margin']
 

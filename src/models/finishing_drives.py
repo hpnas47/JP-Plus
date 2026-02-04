@@ -226,30 +226,26 @@ class FinishingDrivesModel:
         home_games = games_df[games_df["home_team"] == team]
         away_games = games_df[games_df["away_team"] == team]
 
-        # Aggregate red zone stats if available
+        # Aggregate red zone stats if available (VECTORIZED)
+        # P3.3: Replaced iterrows with .sum() for ~10x speedup
         rz_attempts = 0
         rz_tds = 0
 
-        for _, game in home_games.iterrows():
-            if "home_rz_attempts" in game:
-                rz_attempts += game.get("home_rz_attempts", 0)
-                rz_tds += game.get("home_rz_tds", 0)
+        if "home_rz_attempts" in games_df.columns:
+            rz_attempts += home_games["home_rz_attempts"].fillna(0).sum()
+            rz_tds += home_games["home_rz_tds"].fillna(0).sum()
 
-        for _, game in away_games.iterrows():
-            if "away_rz_attempts" in game:
-                rz_attempts += game.get("away_rz_attempts", 0)
-                rz_tds += game.get("away_rz_tds", 0)
+        if "away_rz_attempts" in games_df.columns:
+            rz_attempts += away_games["away_rz_attempts"].fillna(0).sum()
+            rz_tds += away_games["away_rz_tds"].fillna(0).sum()
 
         if rz_attempts == 0:
-            # Use scoring as proxy
-            total_points = 0
-            total_games = 0
-            for _, game in home_games.iterrows():
-                total_points += game["home_points"]
-                total_games += 1
-            for _, game in away_games.iterrows():
-                total_points += game["away_points"]
-                total_games += 1
+            # Use scoring as proxy (VECTORIZED)
+            total_points = (
+                home_games["home_points"].sum() +
+                away_games["away_points"].sum()
+            )
+            total_games = len(home_games) + len(away_games)
 
             if total_games == 0:
                 return self.calculate_team_rating(team, 0, 0, 0, 0)
