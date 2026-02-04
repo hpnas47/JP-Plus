@@ -294,7 +294,7 @@ def get_team_location(team: str) -> dict | None:
 
 
 def get_timezone_difference(team1: str, team2: str) -> int:
-    """Get timezone difference in hours between two teams."""
+    """Get timezone difference in hours between two teams (absolute value)."""
     loc1 = TEAM_LOCATIONS.get(team1)
     loc2 = TEAM_LOCATIONS.get(team2)
 
@@ -302,3 +302,30 @@ def get_timezone_difference(team1: str, team2: str) -> int:
         return 0
 
     return abs(loc1["tz_offset"] - loc2["tz_offset"])
+
+
+def get_directed_timezone_change(away_team: str, home_team: str) -> int:
+    """Get directed timezone change for a traveling team.
+
+    Uses tz_offset (hours behind Eastern Time) to determine direction:
+    - Positive return = traveling EAST (losing time, harder)
+    - Negative return = traveling WEST (gaining time, easier)
+    - Zero = same timezone
+
+    Args:
+        away_team: Team that is traveling
+        home_team: Team hosting the game
+
+    Returns:
+        Signed timezone change in hours (positive = east, negative = west)
+    """
+    away_loc = TEAM_LOCATIONS.get(away_team)
+    home_loc = TEAM_LOCATIONS.get(home_team)
+
+    if away_loc is None or home_loc is None:
+        return 0
+
+    # tz_offset = hours behind ET (0=ET, 1=CT, 2=MT, 3=PT, 5=Hawaii)
+    # If away has higher offset, they're further west → traveling east (positive)
+    # If away has lower offset, they're further east → traveling west (negative)
+    return away_loc["tz_offset"] - home_loc["tz_offset"]

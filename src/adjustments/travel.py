@@ -6,7 +6,7 @@ from typing import Optional
 from geopy.distance import geodesic
 
 from config.settings import get_settings
-from config.teams import TEAM_LOCATIONS, get_timezone_difference
+from config.teams import TEAM_LOCATIONS, get_timezone_difference, get_directed_timezone_change
 
 logger = logging.getLogger(__name__)
 
@@ -81,30 +81,24 @@ class TravelAdjuster:
         Returns:
             Points adjustment (negative = penalty for away team)
         """
-        tz_diff = get_timezone_difference(away_team, home_team)
+        # Get directed timezone change (positive = east, negative = west)
+        directed_tz = get_directed_timezone_change(away_team, home_team)
 
-        if tz_diff == 0:
+        if directed_tz == 0:
             return 0.0
 
-        # Base adjustment per timezone
-        base_adj = tz_diff * self.timezone_adjustment
+        # Base adjustment per timezone crossed
+        base_adj = abs(directed_tz) * self.timezone_adjustment
 
-        # West-to-east is harder (losing time)
-        away_loc = TEAM_LOCATIONS.get(away_team)
-        home_loc = TEAM_LOCATIONS.get(home_team)
-
-        if away_loc and home_loc:
-            # Longitude: West = more negative, East = less negative
-            # If away_lon < home_lon, away team is WEST of home → traveling EAST
-            # West-to-east travel is harder (losing time, jet lag worse)
-            if away_loc["lon"] < home_loc["lon"]:
-                # Traveling east (harder) - full penalty
-                return -base_adj
-            else:
-                # Traveling west (easier) - reduced penalty
-                return -base_adj * 0.8
-
-        return -base_adj
+        # Direction affects severity:
+        # - Traveling EAST (positive directed_tz): harder, losing time → full penalty
+        # - Traveling WEST (negative directed_tz): easier, gaining time → 0.8x penalty
+        if directed_tz > 0:
+            # Traveling east (harder)
+            return -base_adj
+        else:
+            # Traveling west (easier)
+            return -base_adj * 0.8
 
     def get_distance_adjustment(
         self,

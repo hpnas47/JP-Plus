@@ -152,6 +152,19 @@
   - **Verified:** All 6 test cases pass (UCLA↔Rutgers, Oregon↔Ohio State, USC↔Penn State).
   - **Files changed:** `src/adjustments/travel.py`
 
+- **Simplified P1.2: Travel Direction Uses TZ Offsets Instead of Longitude** - Cleaner, more direct logic
+  - **Problem:** Direction detection used longitude comparison which was confusing (negative values, less-than vs greater-than).
+  - **Solution:** Added `get_directed_timezone_change()` function that returns signed timezone difference:
+    - Positive = traveling EAST (losing time, harder)
+    - Negative = traveling WEST (gaining time, easier)
+  - **Logic simplification:**
+    - Old: `if away_loc["lon"] < home_loc["lon"]` (confusing with negative numbers)
+    - New: `if directed_tz > 0` (clear: positive = east)
+  - **Verified:** All 8 test cases pass including Hawaii (5 TZ difference):
+    - Hawaii→Ohio State: directed_tz=+5, adj=-2.50 (full penalty)
+    - Ohio State→Hawaii: directed_tz=-5, adj=-2.00 (0.8x penalty)
+  - **Files changed:** `config/teams.py`, `src/adjustments/travel.py`
+
 ---
 
 ## Session: February 2, 2026

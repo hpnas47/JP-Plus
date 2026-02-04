@@ -66,13 +66,13 @@ Each item includes an **AI nudge prompt** (non-prescriptive) you can paste into 
     > Validate the west-to-east vs east-to-west travel logic in `TravelAdjuster.get_timezone_adjustment()` using real team examples from `config/teams.py`. Correct any inverted direction detection so "west-to-east is harder" is applied to the correct cases.
   - **Notes:** FIXED 2026-02-03. The longitude comparison logic was inverted. When `away_lon < home_lon`, the away team is WEST of home (traveling EAST), but the code was applying the 0.8x "easier" multiplier instead of full penalty. Swapped the conditions so West→East gets full penalty and East→West gets 0.8x. Verified with UCLA→Rutgers (-1.50) vs Rutgers→UCLA (-1.20).
 
-- [ ] **P1.2 Simplify travel direction logic (prefer tz offsets over longitude heuristics)**
+- [x] **P1.2 Simplify travel direction logic (prefer tz offsets over longitude heuristics)** ✅ COMPLETE
   - **Files:** `src/adjustments/travel.py`, `config/teams.py`
   - **Issue:** You already store tz offsets; direction inference should be consistent and non-contradictory.
   - **Acceptance criteria:** One clear rule for direction; consistent application; documented.
   - **AI nudge prompt:**
     > Simplify travel direction detection so it uses a single consistent source of truth (timezone offsets and/or kickoff context). Remove redundant/contradictory longitude heuristics and ensure west-to-east penalties trigger correctly in all relevant cases.
-  - **Notes:**
+  - **Notes:** FIXED 2026-02-03. Added `get_directed_timezone_change()` function that returns signed timezone difference (positive = east, negative = west). Refactored `get_timezone_adjustment()` to use this instead of longitude comparisons. Logic is now simpler: `directed_tz > 0` → traveling east (full penalty), `directed_tz < 0` → traveling west (0.8x penalty). Verified with 8 test cases including Hawaii.
 
 - [ ] **P1.3 Make baseline HFA sourcing explicit and consistent**
   - **Files:** `config/settings.py`, `src/adjustments/home_field.py`, `scripts/backtest.py`
