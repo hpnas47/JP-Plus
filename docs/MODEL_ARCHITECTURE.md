@@ -15,20 +15,29 @@
 
 ## Backtest Performance (2022-2025)
 
-Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained on data available at prediction time—no future leakage.
+Walk-forward backtest across 4 seasons covering the full CFB calendar. Model trained on data available at prediction time—no future leakage.
 
-### Aggregate Results
+### Performance by Season Phase
 
-| Metric | Value |
-|--------|-------|
-| **MAE (vs actual)** | 12.54 points |
-| **MAE (vs closing)** | 4.37 points |
-| **RMSE** | 15.83 points |
-| **Games** | 2,489 |
+| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|--------------|-------|---------|---------|
+| **Calibration** | 1-3 | 597 | 14.75 | 7.42 | 47.1% | 47.2% | 48.7% |
+| **Core** | 4-15 | 2,485 | 12.54 | 4.37 | 50.8% | 51.7% | 52.8% |
+| **Postseason** | 16+ | 176 | 13.41 | 5.31 | 45.1% | 47.3% | 48.7% |
+| **Full Season** | 1-17 | 3,258 | 13.03 | 5.03 | 49.5% | 50.4% | 51.4% |
 
-*MAE vs closing measures how close our predictions are to the efficient closing line - a cleaner engine quality metric.*
+**Phase insights:**
+- **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
+- **Core (Weeks 4-15)**: Profitable zone with 50.8% ATS and 52.8% at 5+ point edge
+- **Postseason (Weeks 16+)**: Bowl games struggle (45.1% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
-### Against The Spread (ATS)
+*MAE vs closing measures distance to the efficient closing line—a cleaner engine quality metric than MAE vs actual.*
+
+### Core Season Detail (Weeks 4-15)
+
+The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,485-game sample.
+
+#### Against The Spread (ATS)
 
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
@@ -38,7 +47,7 @@ Walk-forward backtest across 4 seasons (2,477 games, weeks 4-15). Model trained 
 
 **Key insight:** Opening line performance (57.0% at 5+ edge) significantly exceeds closing line (53.2%), indicating the model captures value that the market prices out by game time. Early-week betting recommended.
 
-### Closing Line Value (CLV)
+#### Closing Line Value (CLV)
 
 CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
 
@@ -51,19 +60,6 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 
 **Interpretation:** At 5+ point edge, the market moves **toward** our prediction by 1.22 points on average. This validates the edge is real—we're not just finding noise, we're finding value that sharps eventually agree with.
 
-### Performance by Season Phase
-
-| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge |
-|-------|-------|-------|-----|--------------|-------|---------|---------|
-| **Calibration** | 1-3 | 597 | 14.75 | 7.42 | 47.1% | 47.2% | 48.7% |
-| **Core** | 4-15 | 2,485 | 12.54 | 4.37 | 50.8% | 51.7% | 52.8% |
-| **Postseason** | 16+ | 176 | 13.41 | 5.31 | 45.1% | 47.3% | 48.7% |
-
-**Phase insights:**
-- **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone with 50.8% ATS and 52.8% at 5+ point edge
-- **Postseason (Weeks 16+)**: Bowl games struggle (45.1% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
-
 ### Results by Year
 
 | Year | Games | MAE | RMSE | ATS (Close) | 3+ (Close) | 5+ (Close) | ATS (Open) | 3+ (Open) | 5+ (Open) |
@@ -74,10 +70,16 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 | 2025 | 638 | 12.21 | 15.45 | 52.2% | 54.8% | 55.3% | 53.8% | 55.8% | 58.9% |
 
 **Notes:**
+- Results by Year shows Core season (Weeks 4-15) performance only
 - 2022 had fewer opening lines available (96% coverage vs 100% in 2024-2025)
 - Best performance in 2023 and 2025 seasons
 - Model shows consistent improvement in MAE over time (12.87 → 12.21)
 - Opening line edge is consistently higher than closing line edge across all years
+
+**2025 Top 25** (end-of-season including CFP):
+1. Ohio State (+27.5), 2. Indiana (+26.8) ★, 3. Notre Dame (+25.4), 4. Oregon (+23.4), 5. Miami (+22.8)
+
+★ Indiana - National Champions, beat Alabama 38-3, Oregon 56-22, Miami 27-21 in CFP.
 
 ### Betting Line Data Sources
 
@@ -618,57 +620,6 @@ SpreadGenerator
     │
     └── Apply adjustments → Predicted Spread
 ```
-
----
-
-## Evaluation Results
-
-### JP+ Multi-Year Results (2022-2025)
-
-| Metric | Value |
-|--------|-------|
-| **MAE** | 12.37 |
-| **ATS Record** | 1114-1070-43 |
-| **ATS %** | 51.0% |
-
-#### ATS by Edge Threshold (vs Closing Lines)
-
-| Edge | Record | ATS % |
-|------|--------|-------|
-| **2+ pts** | 759-711 | 51.6% |
-| **3+ pts** | 612-521 | **54.0%** |
-| **5+ pts** | 365-272 | **57.3%** |
-
-Opening lines contain more inefficiencies; by closing, sharp money has moved lines toward true value.
-
-#### ATS by Season Phase
-| Phase | Record | ATS % |
-|-------|--------|-------|
-| Weeks 4-6 (early) | 242-252 | 49.0% |
-| Weeks 7-10 (mid) | 336-321 | 51.1% |
-| Weeks 11+ (late) | 371-327 | 53.2% |
-
-### 2025 Season Results (Final)
-
-| Metric | vs Closing | vs Opening |
-|--------|------------|------------|
-| **MAE** | 12.21 | 12.21 |
-| **ATS Record** | 325-301-12 | 336-298-4 |
-| **ATS %** | 51.9% | **53.0%** |
-| **3+ pt edge** | 54.1% (172-146) | **55.3%** (189-153) |
-| **5+ pt edge** | 55.4% (98-79) | **58.3%** (119-85) |
-
-**2025 Top 25** (end-of-season including CFP):
-1. Ohio State (+27.5), 2. Indiana (+26.8) ★, 3. Notre Dame (+25.4), 4. Oregon (+23.4), 5. Miami (+22.8)
-
-★ National Champions - beat Alabama 38-3, Oregon 56-22, Miami 27-21 in CFP.
-
-### Key Findings
-1. JP+ has significantly better prediction accuracy than margin-based approaches (MAE ~1.5 points lower)
-2. Consistent ATS improvement across all four years tested (2022-2025)
-3. Red zone regression provides modest but consistent lift (~0.1 MAE, ~1% ATS)
-4. Turnover component (10%) with Bayesian shrinkage improves team rankings alignment with consensus
-4. FG efficiency adds ~0.6% ATS improvement
 
 ---
 
