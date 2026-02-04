@@ -120,6 +120,22 @@
        - Guard assertion at start of method
   - **Testing:** Verified guards catch leakage (assertion fires when week > max_week) and allow valid data through
 
+- **Audited Normalization Order (Confirmed Correct)**
+  - **Question:** Should normalization happen before or after opponent adjustment?
+  - **Finding:** Current order is mathematically correct: Raw → Opponent Adjust → Points → Normalize
+  - **Why current order is RIGHT:**
+    1. Ridge regression is scale-sensitive; alpha (50.0) tuned for metric scale (SR 0-1, IsoPPP ~0.3)
+    2. Intercept has natural interpretation on metric scale (≈0.42 = league avg SR)
+    3. Implicit HFA extraction works correctly on metric scale (≈0.03 = 3% higher SR at home)
+    4. Point conversion factors (80.0, 15.0) calibrated for opponent-adjusted metrics
+  - **Why normalizing first would be WRONG:**
+    1. Would change ridge alpha needed (different scale)
+    2. Intercept would be ~0 (meaningless)
+    3. HFA coefficient would be on arbitrary scale
+    4. Point conversion factors would need recalibration
+  - **Documentation added:** Extended docstring in `calculate_ratings()` with full mathematical justification
+  - **Key insight:** Normalization is a linear transform that preserves all inter-team relationships; it can safely happen last
+
 ### Scripts Added
 
 | Script | Purpose | Usage |

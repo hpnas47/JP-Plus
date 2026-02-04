@@ -915,6 +915,58 @@ class EfficiencyFoundationModel:
     ) -> dict[str, TeamEFMRating]:
         """Calculate efficiency-based ratings for all teams.
 
+        DATA FLOW AND NORMALIZATION ORDER
+        =================================
+        The pipeline processes data in this specific order:
+
+        1. RAW METRICS (metric scale)
+           - Success Rate: 0.0-1.0 (proportion)
+           - IsoPPP: ~0.3 (EPA per successful play)
+
+        2. OPPONENT ADJUSTMENT via Ridge Regression (still metric scale)
+           - Ridge regression on metric-scale data (NOT normalized)
+           - Intercept = league average (interpretable on metric scale)
+           - Team coefficients = deviation from average
+           - Implicit HFA extracted separately (neutral-field regression)
+
+        3. POINT CONVERSION
+           - SR points = (adj_sr - avg) × 80.0
+           - IsoPPP points = (adj_iso - avg) × 15.0
+           - Turnovers = margin × shrinkage × 4.5 pts/turnover
+
+        4. FINAL NORMALIZATION (mean=0, std=12)
+           - Each component centered by its own mean
+           - All components scaled uniformly by overall std
+
+        WHY THIS ORDER IS MATHEMATICALLY CORRECT
+        ========================================
+        Normalizing BEFORE opponent adjustment would be WRONG because:
+
+        1. Ridge regression is scale-sensitive. The regularization penalty
+           ||β||² depends on coefficient scale. Ridge alpha (50.0) is tuned
+           for metric-scale inputs (SR in 0-1, IsoPPP in ~0.3).
+
+        2. The intercept has natural interpretation on metric scale:
+           intercept ≈ 0.42 (league average success rate)
+           If data were pre-normalized, intercept would be ~0 (meaningless).
+
+        3. Implicit HFA extraction requires metric-scale regression:
+           HFA coefficient ≈ 0.03 (3% higher SR at home)
+           This is interpretable and correctly separates from team skill.
+
+        4. Point conversion factors (80.0, 15.0) are calibrated for
+           opponent-adjusted metrics, not normalized values.
+
+        The final normalization step is a simple linear transformation
+        (center + scale) that preserves all inter-team relationships while
+        mapping to SP+-compatible scale for spread calculation.
+
+        MATHEMATICAL PROOF (additivity preservation):
+        - Before: overall = off + def
+        - After centering: new_off = (off - off_mean), new_def = (def - def_mean)
+        - After scaling: new_off × scale, new_def × scale
+        - Result: new_overall = new_off + new_def (relationship preserved)
+
         Args:
             plays_df: Play-by-play data
             games_df: Optional games data for sample size info
@@ -1091,6 +1143,12 @@ class EfficiencyFoundationModel:
 
     def _normalize_ratings(self, fbs_teams: set[str]) -> None:
         """Normalize ratings to target standard deviation.
+
+        IMPORTANT: This is the FINAL step after opponent adjustment and point
+        conversion. Normalization must happen AFTER ridge regression because:
+        1. Ridge regression needs metric-scale input (not normalized)
+        2. Normalization is a linear transform that preserves all relationships
+        3. This order ensures team coefficients have proper interpretation
 
         Centers each component (O/D/TO/efficiency/explosiveness) by its own mean,
         then scales all components uniformly. This ensures:
