@@ -127,13 +127,15 @@ class SpecialTeamsModel:
         self,
         punts: list[dict],  # List of {gross: int, net: int, inside_20: bool, touchback: bool}
     ) -> float:
-        """Calculate punt efficiency rating.
+        """Calculate punt efficiency rating IN POINTS per punt.
+
+        P0.1 FIX: All components converted to POINTS using YARDS_TO_POINTS = 0.04.
 
         Args:
             punts: List of punt data
 
         Returns:
-            Punt rating (yards above expected per punt)
+            Punt rating in POINTS per punt (PBTA)
         """
         if not punts:
             return 0.0
@@ -147,54 +149,67 @@ class SpecialTeamsModel:
         inside_20_rate = inside_20_count / total_punts
         touchback_rate = touchback_count / total_punts
 
-        # Base rating: net yards vs expected
-        net_rating = avg_net - self.EXPECTED_PUNT_NET
+        # P0.1: Convert yards to POINTS (base rating)
+        net_yards_diff = avg_net - self.EXPECTED_PUNT_NET
+        net_rating_points = net_yards_diff * self.YARDS_TO_POINTS
 
-        # Bonus for inside 20s, penalty for touchbacks
-        positional_rating = (inside_20_rate * 5.0) - (touchback_rate * 3.0)
+        # P0.1: Bonuses already in points
+        # Inside-20 bonus: +0.5 pts (better field position for defense)
+        # Touchback penalty: -0.3 pts (opponent starts at 25 instead of worse)
+        inside_20_bonus = inside_20_rate * 0.5
+        touchback_penalty = touchback_rate * -0.3
 
-        return net_rating + positional_rating
+        return net_rating_points + inside_20_bonus + touchback_penalty
 
     def calculate_kickoff_rating(
         self,
         kickoffs: list[dict],  # List of {touchback: bool, return_yards: int}
         kickoff_returns: list[dict],  # List of {return_yards: int} for returns allowed
     ) -> float:
-        """Calculate kickoff efficiency rating.
+        """Calculate kickoff efficiency rating IN POINTS per kickoff.
+
+        P0.1 FIX: All components converted to POINTS using YARDS_TO_POINTS = 0.04.
 
         Args:
             kickoffs: Kickoffs by the team
             kickoff_returns: Returns against the team's kickoffs
 
         Returns:
-            Kickoff rating (combined coverage and return efficiency)
+            Kickoff rating in POINTS per kickoff (PBTA)
         """
         coverage_rating = 0.0
         return_rating = 0.0
 
-        # Coverage rating (for kickoffs by team)
+        # Coverage rating (for kickoffs by team) - IN POINTS
         if kickoffs:
             touchbacks = sum(1 for k in kickoffs if k.get("touchback", False))
             touchback_rate = touchbacks / len(kickoffs)
 
-            # Returns allowed
+            # Returns allowed - convert yards to POINTS
             returns = [k for k in kickoffs if not k.get("touchback", False)]
             if returns:
                 avg_return = np.mean(
                     [k.get("return_yards", 20) for k in returns]
                 )
                 # Expected return is ~23 yards
-                coverage_rating = (23.0 - avg_return) / 5.0
+                # P0.1: Convert yards saved to POINTS (~0.04 pts/yard)
+                yards_saved = 23.0 - avg_return
+                coverage_rating = yards_saved * self.YARDS_TO_POINTS
 
-            # Bonus for touchback rate above expected
-            coverage_rating += (touchback_rate - self.EXPECTED_TOUCHBACK_RATE) * 3.0
+            # P0.1: Touchback bonus in POINTS
+            # Touchback vs avg return (23yd → 27yd line) is ~2 yards = ~0.08 pts
+            # Per 10% touchback rate above expected ≈ 0.1 pts per game
+            touchback_bonus = (touchback_rate - self.EXPECTED_TOUCHBACK_RATE) * 0.1
+            coverage_rating += touchback_bonus
 
-        # Return rating (for team's own returns)
+        # Return rating (for team's own returns) - IN POINTS
         if kickoff_returns:
             avg_return = np.mean(
                 [r.get("return_yards", 20) for r in kickoff_returns]
             )
-            return_rating = (avg_return - 23.0) / 5.0
+            # P0.1: Convert yards gained to POINTS (~0.04 pts/yard)
+            yards_gained = avg_return - 23.0
+            return_rating = yards_gained * self.YARDS_TO_POINTS
 
         return coverage_rating + return_rating
 
@@ -218,15 +233,26 @@ class SpecialTeamsModel:
         Returns:
             SpecialTeamsRating for the team
         """
-        fg_rating = self.calculate_fg_paar(fg_attempts or [])
-        punt_rating = self.calculate_punt_rating(punts or [])
-        kick_rating = self.calculate_kickoff_rating(
+        # P0.1: All component methods now return per-event ratings in POINTS
+        # We need to normalize to per-GAME ratings
+        fg_rating_per_attempt = self.calculate_fg_paar(fg_attempts or [])
+        punt_rating_per_punt = self.calculate_punt_rating(punts or [])
+        kick_rating_per_kick = self.calculate_kickoff_rating(
             kickoffs or [], kickoff_returns or []
         )
 
-        # Overall is sum, but normalized to per-game impact
+        # P0.1: Convert per-event to per-GAME (PBTA points per game)
         # Typical game has ~3 FG attempts, ~5 punts, ~5 kickoffs
-        overall = (fg_rating / 3.0) + (punt_rating / 5.0) + (kick_rating / 5.0)
+        num_fg = len(fg_attempts) if fg_attempts else 3
+        num_punts = len(punts) if punts else 5
+        num_kicks = len(kickoffs) if kickoffs else 5
+
+        fg_rating = (fg_rating_per_attempt / max(1, num_fg)) * 3.0  # Scale to ~3 FG/game
+        punt_rating = (punt_rating_per_punt / max(1, num_punts)) * 5.0  # Scale to ~5 punts/game
+        kick_rating = (kick_rating_per_kick / max(1, num_kicks)) * 5.0  # Scale to ~5 kicks/game
+
+        # P0.1: Overall is SUM of per-game components (all in PBTA points/game)
+        overall = fg_rating + punt_rating + kick_rating
 
         rating = SpecialTeamsRating(
             team=team,
@@ -282,23 +308,33 @@ class SpecialTeamsModel:
             punt_yards += away_games["away_punt_yards"].fillna(0).sum()
             punt_count += away_games["away_punts"].fillna(0).sum()
 
-        # Calculate simplified ratings
+        # P0.1: Calculate simplified ratings - ALL in PBTA points per game
         fg_rating = 0.0
         if fg_attempts > 0:
             actual_rate = fg_made / fg_attempts
             # Compare to expected rate for average distance (~35 yards)
             expected_rate = 0.78
-            fg_rating = (actual_rate - expected_rate) * fg_attempts * 3.0
+            # Total points above expected across all attempts
+            total_paae = (actual_rate - expected_rate) * fg_attempts * 3.0
+            # Convert to per-game rating (typical team has ~2.5 FG attempts per game)
+            n_games = len(home_games) + len(away_games)
+            fg_rating = total_paae / max(1, n_games)
 
         punt_rating = 0.0
         if punt_count > 0:
             avg_gross = punt_yards / punt_count
             expected_gross = 42.0
-            punt_rating = avg_gross - expected_gross
+            # P0.1: Convert yards difference to POINTS (was missing!)
+            yards_diff = avg_gross - expected_gross
+            punt_rating_per_punt = yards_diff * self.YARDS_TO_POINTS
+            # Convert to per-game rating (typical team has ~5 punts per game)
+            n_games = len(home_games) + len(away_games)
+            punt_rating = punt_rating_per_punt * (punt_count / max(1, n_games))
 
         # Kickoff rating defaulted without detailed data
         kick_rating = 0.0
 
+        # P0.1: Overall is SUM of per-game components (all in PBTA points/game)
         overall = fg_rating + punt_rating + kick_rating
 
         rating = SpecialTeamsRating(

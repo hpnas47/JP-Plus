@@ -176,13 +176,30 @@ class VegasComparison:
     ) -> Optional[dict]:
         """Compare a single prediction to Vegas line.
 
+        P0.1 FIX: Uses game_id for reliable matching when available,
+        falls back to team name matching for backward compatibility.
+
         Args:
             prediction: Model prediction
 
         Returns:
             Comparison dict or None if no Vegas line available
         """
-        vegas = self.get_line(prediction.home_team, prediction.away_team)
+        # P0.1: Prefer game_id matching (reliable), fallback to team names
+        vegas = self.get_line(
+            prediction.home_team,
+            prediction.away_team,
+            game_id=prediction.game_id if hasattr(prediction, 'game_id') else None
+        )
+
+        # P0.1: Log diagnostic when falling back to team name matching
+        if vegas is None and hasattr(prediction, 'game_id') and prediction.game_id is not None:
+            logger.debug(
+                f"No Vegas line found via game_id={prediction.game_id} for "
+                f"{prediction.home_team} vs {prediction.away_team}, trying team name fallback"
+            )
+            # Retry without game_id as explicit fallback
+            vegas = self.get_line(prediction.home_team, prediction.away_team, game_id=None)
 
         if vegas is None:
             return None

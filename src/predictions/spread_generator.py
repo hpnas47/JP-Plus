@@ -167,6 +167,7 @@ class PredictedSpread:
     home_win_probability: float  # FULL PRECISION
     components: SpreadComponents = field(default_factory=SpreadComponents)
     confidence: str = "Medium"  # Low, Medium, High
+    game_id: Optional[int] = None  # P0.1: For reliable Vegas line matching
 
     @property
     def spread_display(self) -> float:

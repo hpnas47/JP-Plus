@@ -970,9 +970,42 @@ class EfficiencyFoundationModel:
 
         for team, idx in team_to_idx.items():
             # Offensive rating: intercept + off_coef (now neutral-field)
+            # Intercept = league average metric (e.g., ~0.42 for SR)
+            # Team coef = deviation from average (positive = better than average)
             off_adjusted[team] = intercept + team_coefficients[idx]
             # Defensive rating: intercept - def_coef (negative because good D has negative coef)
+            # Good defense has negative coef (reduces opponent success rate)
+            # So intercept - def_coef gives higher value for good defenses
             def_adjusted[team] = intercept - team_coefficients[n_teams + idx]
+
+        # P0.1: Validate ridge baseline interpretation via invariants
+        # Mean of adjusted metrics should be close to intercept (league average)
+        # This confirms that team coefficients represent deviations from baseline
+        mean_off = np.mean(list(off_adjusted.values()))
+        mean_def = np.mean(list(def_adjusted.values()))
+
+        # Log deviations from expected baseline
+        # For Success Rate: intercept ≈ 0.42, mean should match within ~0.01
+        # For IsoPPP: intercept ≈ 0.30, mean should match within ~0.02
+        off_baseline_error = abs(mean_off - intercept)
+        def_baseline_error = abs(mean_def - intercept)
+
+        logger.debug(
+            f"  Ridge baseline check ({metric_col}): "
+            f"intercept={intercept:.4f}, "
+            f"mean_off={mean_off:.4f} (Δ={off_baseline_error:.4f}), "
+            f"mean_def={mean_def:.4f} (Δ={def_baseline_error:.4f})"
+        )
+
+        # Warn if baseline drift is large (>5% of intercept magnitude)
+        max_acceptable_drift = abs(intercept) * 0.05 if intercept != 0 else 0.05
+        if off_baseline_error > max_acceptable_drift or def_baseline_error > max_acceptable_drift:
+            logger.warning(
+                f"Ridge baseline drift detected for {metric_col}: "
+                f"mean_off and mean_def should equal intercept±{max_acceptable_drift:.4f}, "
+                f"but deviations are off={off_baseline_error:.4f}, def={def_baseline_error:.4f}. "
+                f"This may indicate numerical instability or data issues."
+            )
 
         # =================================================================
         # CACHE STORAGE

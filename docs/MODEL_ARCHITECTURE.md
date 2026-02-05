@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 5, 2026 (Unified Environmental Stack)
+**Last Updated:** February 5, 2026 (P0 Audit Fixes + Backtest Refresh)
 
 ## Overview
 
@@ -21,15 +21,15 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar. Model tra
 
 | Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge |
 |-------|-------|-------|-----|--------------|-------|---------|---------|
-| **Calibration** | 1-3 | 597 | 14.75 | 7.42 | 47.1% | 47.2% | 48.7% |
-| **Core** | 4-15 | 2,485 | 12.54 | 4.37 | 50.8% | 51.7% | 52.8% |
-| **Postseason** | 16+ | 176 | 13.41 | 5.31 | 45.1% | 47.3% | 48.7% |
-| **Full Season** | 1-17 | 3,258 | 13.03 | 5.03 | 49.5% | 50.4% | 51.4% |
+| **Calibration** | 1-3 | 597 | 14.79 | 7.57 | 47.3% | 48.0% | 48.4% |
+| **Core** | 4-15 | 2,485 | 12.55 | 4.47 | 52.0% | 51.9% | 53.2% |
+| **Postseason** | 16+ | 176 | 13.48 | 5.41 | 44.5% | 46.1% | 46.7% |
+| **Full Season** | All | 3,273 | 13.02 | 5.09 | 50.7% | 50.8% | 51.6% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone with 50.8% ATS and 52.8% at 5+ point edge
-- **Postseason (Weeks 16+)**: Bowl games struggle (45.1% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
+- **Core (Weeks 4-15)**: Profitable zone with 52.0% ATS and 53.2% at 5+ point edge
+- **Postseason (Weeks 16+)**: Bowl games struggle (44.5% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 *MAE vs closing measures distance to the efficient closing line—a cleaner engine quality metric than MAE vs actual.*
 
@@ -42,8 +42,8 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
 | **All picks** | 1238-1190-49 (51.0%) | 1277-1130-37 (53.1%) |
-| **3+ pt edge** | 727-676 (51.8%) | 783-651 (54.6%) |
-| **5+ pt edge** | 454-400 (53.2%) | 516-389 (57.0%) |
+| **3+ pt edge** | 748-692 (51.9%) | 783-651 (54.6%) |
+| **5+ pt edge** | 478-421 (53.2%) | 516-389 (57.0%) |
 
 **Key insight:** Opening line performance (57.0% at 5+ edge) significantly exceeds closing line (53.2%), indicating the model captures value that the market prices out by game time. Early-week betting recommended.
 
@@ -890,7 +890,7 @@ from src.models.efficiency_foundation_model import (
 - [ ] Improve situational adjustment calibration
 
 ### Medium Priority
-- [x] **Multi-year backtesting to validate stability** - ✅ DONE. Walk-forward backtest across 2022-2025 (4 seasons, 2,477 games weeks 4-15). Consistent performance: MAE 12.52, ATS 51.0% overall, 53.2% at 5+ edge. Opening line performance (57.0% at 5+ edge) indicates model captures value that market prices out.
+- [x] **Multi-year backtesting to validate stability** - ✅ DONE. Walk-forward backtest across 2022-2025 (4 seasons, 2,485 games weeks 4-15). Consistent performance: MAE 12.55, ATS 52.0% overall, 53.2% at 5+ edge. Opening line performance (57.0% at 5+ edge) indicates model captures value that market prices out.
 - [x] **Weather impact modeling** - ✅ DONE. Added `WeatherAdjuster` class that fetches weather data from CFBD API and calculates totals adjustments based on wind (>10 mph: -0.3 pts/mph), temperature (<40°F: -0.15 pts/degree), and precipitation (>0.02 in: -3.0 pts). Indoor games receive no adjustment. Ready for totals prediction integration.
 - [x] **Expand special teams beyond FG** - ✅ DONE. Added punt and kickoff ratings to complete ST model. All components expressed as PBTA (Points Better Than Average) per game. Punt rating: net yards vs expected (40 yds) converted to points + inside-20/touchback adjustments. Kickoff rating: coverage (touchback rate, return yards allowed) + returns (return yards gained). Overall = FG + Punt + Kickoff. FBS distribution: mean ~0, std ~1.0, 95% within ±2 pts/game.
 
@@ -926,6 +926,7 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
+- **P0 Audit Fixes (Postseason Chronology + EFM Robustness)** - Fixed 6 structural issues from code audit: (1) Postseason games now mapped to sequential pseudo-weeks by date instead of all lumped into week 16, preserving walk-forward chronology; (2) home_team validated via game join on game_id for reliable neutral-field ridge regression; (3) ATS unmatched mask uses vegas_spread.isna() instead of game_id.isna(); (4) EFM uses pd.notna() for home_team check with coverage logging; (5) Ridge cache hash strengthened with MD5 of team sequences + metric stats; (6) Unused imports removed. Performance tables refreshed with post-fix baseline: Core MAE 12.55, Core ATS 52.0%, Core 5+ Edge 53.2%.
 - **Fixed Double-Damping Bug with Unified Environmental Stack** - Major fix to the adjustment aggregator. The previous four-bucket design applied smoothing to the physical bucket (100%/25%) and then soft cap on top, creating two layers of penalty that destroyed valid betting edges. The fix consolidates all environmental factors (HFA, travel, altitude, rest, consecutive_road) into a single stack with one soft cap layer: threshold 5.0 pts, excess weight 60%. Standard games (stack ≤5.0) get no dampening at all—only extreme stacks are smoothed. Mental bucket (letdown, lookahead, sandwich) unchanged at 100%/50%/25%. Boosts bucket (rivalry) unchanged as linear sum. Performance restored to baseline: Core MAE 12.21, Core 5+ Edge 57.1%.
 - **Consolidated All Adjustment Smoothing into AdjustmentAggregator** - Major architectural refactor to eliminate double-smoothing. All game adjustments (HFA, travel, altitude, rest, letdown, lookahead, sandwich, consecutive road, rivalry) now flow through a single aggregator. Global cap at ±7.0 points. This replaces the previous separate smoothing in `smooth_correlated_stack()` and `SituationalFactors.__post_init__()`. New file: `src/adjustments/aggregator.py`.
 - **Simplified SituationalFactors to Raw Container** - Removed all smoothing logic from SituationalFactors dataclass. It now stores raw adjustment values only. Added `get_matchup_factors()` method that returns raw factors for the aggregator. Legacy `get_matchup_adjustment()` retained for backward compatibility.
@@ -934,7 +935,7 @@ from src.models.efficiency_foundation_model import (
 - **Added Letdown Persistence Through Bye Weeks** - Letdown spot now persists through bye weeks by finding the team's *last played game* regardless of which week it occurred. If a team has a big win followed by a bye, they still get letdown penalty in their next game. Added 3-week staleness threshold—after 3+ weeks since the big win, the emotional effect has faded and letdown doesn't trigger.
 - **Season Opener Gets Maximum Rest** - Teams playing their first game of the season now get 14 days rest (maximum) instead of 7 days. This correctly models that a fresh team facing a Week 0 opponent has a rest advantage.
 - **Integrated The Odds API for Betting Lines** - Added dual-source approach for betting line data: CFBD API for historical data (2022-2025, 91% FBS opening line coverage), The Odds API for future seasons (2026+). Created `src/api/odds_api_client.py` for API access, `src/api/betting_lines.py` for unified data merging, `scripts/capture_odds.py` for backfill/one-time captures, and `scripts/weekly_odds_capture.py` for scheduled weekly captures (opening lines Sunday, closing lines Saturday). Data stored in SQLite at `data/odds_api_lines.db`. Cost: 2 credits/week for ongoing captures. Note: Historical backfill requires paid Odds API plan; free tier (500 credits/month) supports current odds only.
-- **Added 2022-2025 Backtest Performance Section** - Comprehensive walk-forward backtest results across 4 seasons (2,477 games). Key findings: MAE 12.52, RMSE 15.80, ATS 51.0% vs closing lines, 53.1% vs opening lines. At 5+ point edge: 53.2% vs closing, 57.0% vs opening. Opening line performance significantly exceeds closing line, indicating model captures value that the market prices out by game time. Results broken down by year show consistent improvement in MAE (12.87→12.21) and stable ATS performance. Added P3.4 sanity report infrastructure for data and prediction validation.
+- **Added 2022-2025 Backtest Performance Section** - Comprehensive walk-forward backtest results across 4 seasons (3,273 games total, 2,485 Core weeks 4-15). Key findings: Core MAE 12.55, ATS 52.0% vs closing lines. At 5+ point edge: 53.2% vs closing, 57.0% vs opening. Opening line performance significantly exceeds closing line, indicating model captures value that the market prices out by game time. Results broken down by year show consistent improvement in MAE (12.87→12.21) and stable ATS performance. Added P3.4 sanity report infrastructure for data and prediction validation.
 - **Implemented Correlated Stack Smoothing** - Fixed systematic over-prediction in high-stack games (HFA + travel + altitude combined). Analysis of 2024-2025 data revealed games with >5 pts combined adjustment over-predicted home team margins by ~2.3 pts. The fix applies two mechanisms: (1) **Altitude-travel interaction**: When travel > 1.5 pts AND altitude > 0, reduce altitude by 30% to account for partial overlap between effects; (2) **Soft cap**: When combined stack exceeds 5 pts, reduce excess by 50% and distribute reduction proportionally across all three components. Example: stack of 7 → 5 + (7-5)×0.5 = 6 effective. Results: max stack reduced from 6.41 to 5.71 pts, error-per-stack-point reduced from 0.94 to 0.88. Added `smooth_correlated_stack()` function to `spread_generator.py` with parameters `smooth_stacks`, `stack_cap_start`, `stack_cap_factor`, `altitude_travel_interaction`. Enabled by default.
 - **Added Distance-Based Timezone Penalty Dampening** - Fixed over-aggressive timezone penalty for short-distance regional games. Analysis showed 500-800mi games crossing timezone lines (due to DST quirks or CT/ET border) had +3.83 mean error vs -0.87 for no-TZ games. The fix: (1) **<400 miles**: TZ penalty eliminated entirely (truly regional games like Illinois @ Purdue); (2) **400-700 miles**: TZ penalty reduced by 50% (e.g., Arizona @ Colorado at 623mi now gets 0.25 pts instead of 0.50); (3) **>700 miles**: Full TZ penalty (true cross-country travel). This ensures timezone effects are only applied when there's meaningful travel fatigue. Updated `get_total_travel_adjustment()` in `travel.py`.
 - **Expanded Special Teams to Full PBTA Model** - Complete overhaul of special teams from FG-only to comprehensive FG + Punt + Kickoff model. All components now expressed as PBTA (Points Better Than Average) - the marginal point contribution per game compared to a league-average unit. Key changes: (1) Added `YARDS_TO_POINTS = 0.04` constant for field position value conversion, (2) Punt rating now converts net yards above expected (40 yds) to points + inside-20 bonus (+0.5 pts) + touchback penalty (-0.3 pts), (3) Kickoff rating combines coverage (touchback rate, return yards allowed) and returns (return yards gained), all converted to points, (4) Overall ST = simple sum of components (no weighting needed since all in points). FBS distribution: mean ~0, std ~1.0, 95% range [-2, +2] pts/game. Top 2024 ST unit: Vanderbilt (+2.34 pts/game), worst: UTEP (-2.83 pts/game). Added `calculate_punt_ratings_from_plays()`, `calculate_kickoff_ratings_from_plays()`, and `calculate_all_st_ratings_from_plays()` to `src/models/special_teams.py`.
