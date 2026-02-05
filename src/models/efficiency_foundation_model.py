@@ -85,11 +85,10 @@ def get_ridge_cache_stats() -> dict:
 
 
 def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
-    """Compute a fast hash of play data for cache key verification.
+    """Compute a robust hash of play data for cache key verification.
 
-    Uses a lightweight hash of key columns to detect if data has changed
-    for a given (season, week) combination. This guards against edge cases
-    where data might be filtered differently.
+    P0.3 Fix: Uses sampled team sequences and multiple metric statistics
+    to dramatically reduce collision probability vs the old first/last-only hash.
 
     Args:
         plays_df: Prepared plays DataFrame
@@ -98,8 +97,6 @@ def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
     Returns:
         Short hash string (first 12 chars of SHA256)
     """
-    # Hash key columns: team identifiers + metric values + weights
-    # Using pandas to_numpy for efficient serialization
     n_plays = len(plays_df)
     if n_plays == 0:
         return "empty"
@@ -111,13 +108,20 @@ def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
     else:
         sample = plays_df
 
-    # Create hash from offense/defense teams and metric values
-    hash_data = (
-        f"{n_plays}:"
-        f"{sample['offense'].iloc[0]}:{sample['offense'].iloc[-1]}:"
-        f"{sample['defense'].iloc[0]}:{sample['defense'].iloc[-1]}:"
-        f"{sample[metric_col].sum():.6f}"
-    )
+    # P0.3: Robust hash using team sequences + metric stats + weight stats
+    hash_parts = [
+        str(n_plays),
+        hashlib.md5(sample["offense"].str.cat(sep=",").encode()).hexdigest()[:8],
+        hashlib.md5(sample["defense"].str.cat(sep=",").encode()).hexdigest()[:8],
+        f"{sample[metric_col].sum():.8f}",
+        f"{sample[metric_col].mean():.8f}",
+    ]
+    if len(sample) > 1:
+        hash_parts.append(f"{sample[metric_col].std():.8f}")
+    if "weight" in sample.columns:
+        hash_parts.append(f"{sample['weight'].sum():.8f}")
+
+    hash_data = "|".join(hash_parts)
     return hashlib.sha256(hash_data.encode()).hexdigest()[:12]
 
 
@@ -843,6 +847,16 @@ class EfficiencyFoundationModel:
 
         if has_home_info:
             home_teams = plays_df["home_team"].values
+            # P0.2: Validate home_team coverage (handle both None and NaN)
+            home_valid = sum(1 for h in home_teams if pd.notna(h))
+            home_pct = home_valid / n_plays * 100
+            if home_pct < 90:
+                logger.warning(
+                    f"Home team coverage low: {home_valid}/{n_plays} ({home_pct:.1f}%). "
+                    "Neutral-field regression may be unreliable."
+                )
+            else:
+                logger.debug(f"Home team coverage: {home_valid}/{n_plays} ({home_pct:.1f}%)")
         else:
             home_teams = None
 
@@ -874,7 +888,8 @@ class EfficiencyFoundationModel:
             nnz += 1
 
             # Home field indicator: +1 if offense is home, -1 if away, 0 if neutral
-            if has_home_info and home_teams[i] is not None:
+            # P0.2: Use pd.notna() to catch both None and np.nan
+            if has_home_info and pd.notna(home_teams[i]):
                 home = home_teams[i]
                 if off == home:
                     row_indices[nnz] = i

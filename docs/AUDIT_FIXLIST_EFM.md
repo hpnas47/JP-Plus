@@ -32,7 +32,7 @@
 
 ---
 
-- [ ] **P0.2 `home_team` missingness check is not robust (`None` vs `NaN`)**
+- [x] **P0.2 `home_team` missingness check is not robust (`None` vs `NaN`)** -- FIXED 2026-02-05
   - **Issue:** Ridge build uses:
     - `if home_teams[i] is not None`
     In pandas, missing values are often `np.nan`, so this check can silently treat missingness incorrectly and cause home indicator to be 0 for many plays.
@@ -44,7 +44,7 @@
 
 ---
 
-- [ ] **P0.3 Ridge cache data hash is too weak (collision risk)**
+- [x] **P0.3 Ridge cache data hash is too weak (collision risk)** -- FIXED 2026-02-05
   - **Issue:** `_compute_data_hash()` uses only a few summary fields (first/last team strings, sum(metric), n_plays). Different datasets can collide.
   - **Acceptance criteria:**
     - Data hash incorporates enough information to avoid accidental collisions (e.g., sample-based stable hash of offense/defense/metric/weights).
@@ -144,7 +144,16 @@
 
 ---
 
-## Definition of “done”
+## Backtest Validation (2026-02-05, post P0.2/P0.3 fixes)
+
+Baseline confirmed after EFM P0 structural fixes:
+- **pd.notna()** now correctly handles home_team None/NaN in ridge regression
+- **Cache hash** strengthened with team sequence + metric stats
+- **Home_team coverage:** 100% after game join in backtest.py
+
+---
+
+## Definition of "done"
 
 - Neutral-field ridge regression actually uses home indicators (when present) and logs coverage.
 - Cached ridge results are safe against dataset collisions.

@@ -1,28 +1,51 @@
-# Claude Code Memory - CFB Power Ratings Model
+# 🏈 JP+ CFB Power Ratings: Model Governance
 
-## Power Ratings Display Preferences
+## 🛠️ Environment & Technical Context
+- **Python:** `python3` (v3.10+)
+- **Database:** SQLite located at `data/cfb_model.db`
+- **Execution:** All scripts MUST be run from the project root.
+- **Dependencies:** `Code Auditor` is authorized to `pip install` missing packages to resolve environment drift.
 
-When asked to produce JP+ power ratings:
-1. Show O/D/ST (Offense/Defense/Special Teams) component ratings
-2. Include each component's ranking in parentheses (e.g., if Indiana has the #1 offense, display as "16.3 (1)")
-3. Rankings should show 1 = best for all components
-4. Format columns: Rank, Team, Overall, Offense (rank), Defense (rank), Special Teams (rank)
+## 📁 Key File Map (Source of Truth)
+- **Priors Engine:** `src/models/preseason_priors.py` (Talent, Portal, Recruiting Offsets)
+- **Core EFM Logic:** `src/models/efficiency_foundation_model.py` (Ridge Regression, HFA, SOS)
+- **Sub-Models:** `src/models/finishing_drives.py`, `src/models/special_teams.py`
+- **Backtest Engine:** `scripts/backtest.py` (The Validator)
+- **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 
-## Backtest Display Preferences
+---
 
-When presenting backtest results:
-1. Always include 2025 in the year range (2022-2025)
-2. Always show BOTH vs Opening Line AND vs Closing Line performance
-3. Always show 3+ edge AND 5+ edge results
+## 📊 JP+ Power Ratings Display Protocol
+1. **Components:** Show O/D/ST (Offense/Defense/Special Teams) component ratings.
+2. **Rankings:** Include component rankings in parentheses (e.g., "16.3 (1)"). 1 = Best.
+3. **Table Columns:** `Rank | Team | Overall | Offense (rank) | Defense (rank) | Special Teams (rank)`
+
+## 📈 Backtest Reporting Protocol
+- **Range:** 2022–2025.
+- **Markets:** Performance vs. BOTH Opening Line and Closing Line.
+- **Thresholds:** Report results for 3+ point edge and 5+ point edge categories.
+
+---
 
 # 🤝 Agent Collaboration Protocol
 
 ## 🛡️ Code Auditor (The Safety)
-- **Invoke for:** Refactoring, fixing "P0/P1" audit issues, and data-integrity checks.
-- **Key Files:** `scripts/backtest.py`, `src/models/efficiency_foundation_model.py`.
-- **Constraint:** Ensure walk-forward chronology (training < prediction).
+- **Role:** Refactoring, fixing P0/P1 structural bugs, and enforcing data integrity.
+- **Constraints:** - Strictly enforce walk-forward chronology (`training_max_week < prediction_week`).
+    - Resolve postseason week-lumping issues.
+- **Gatekeeper:** Ensure all sub-model outputs (ST/Finishing Drives) are normalized to **PBTA Points Per Game**.
 
 ## 📊 Quant Auditor (The Analyst)
-- **Invoke for:** Tuning weights (HFA, SOS, Portal), validating offsets, and performance reviews.
-- **Constraint:** Must run `python backtest.py` before approving any logic change.
-- **Success Metric:** MAE must remain stable or improve; ATS win rate > 52.3%.
+- **Role:** Weight optimization and MAE/ATS performance validation.
+- **Success Metric:** MAE must stay stable (Tolerance: +0.05). ATS baseline: > 52.3%.
+- **Validation Slices (Mandatory):**
+    - **EFM/In-Season Tuning:** Run `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.
+    - **Priors/Portal/Talent Tuning:** Run `python backtest.py --start-week 1`. Use the Full Season to validate the "Blue Blood" Recruiting Offset and Portal Continuity Tax.
+- **Sanity Check:** Must specifically report rating stability for ALA, UGA, OSU, TEX, ORE, and ND.
+
+---
+
+## ⌨️ Custom Workflow Shortcuts
+- `/audit-logic`: Invoke `🛡️ Code Auditor` to scan for data leakage or P0 bugs.
+- `/audit-math`: Invoke `📊 Quant Auditor` to run the 3rd-year backtest sweep.
+- `/show-ratings`: Generate the JP+ ratings table for the current week.

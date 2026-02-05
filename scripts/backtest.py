@@ -27,7 +27,6 @@ from config.settings import get_settings
 from config.play_types import TURNOVER_PLAY_TYPES, POINTS_PER_TURNOVER, SCRIMMAGE_PLAY_TYPES
 from config.dtypes import optimize_dtypes
 from src.api.cfbd_client import CFBDClient
-from src.data.processors import DataProcessor, RecencyWeighter
 from src.models.efficiency_foundation_model import (
     EfficiencyFoundationModel,
     clear_ridge_cache,
@@ -41,8 +40,6 @@ from src.adjustments.altitude import AltitudeAdjuster
 from src.models.finishing_drives import FinishingDrivesModel
 from src.models.special_teams import SpecialTeamsModel
 from src.predictions.spread_generator import SpreadGenerator
-from src.predictions.vegas_comparison import VegasComparison
-
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -96,6 +93,74 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # TURNOVER_PLAY_TYPES and POINTS_PER_TURNOVER imported from config.play_types
+
+
+def _assign_postseason_pseudo_weeks(games: list[dict]) -> list[dict]:
+    """Assign sequential pseudo-weeks to postseason games based on start_date.
+
+    P0.1 Fix: Prevents walk-forward chronology violations by ensuring
+    postseason games played on different dates get different week numbers.
+    Games on the same date share a pseudo-week.
+
+    Args:
+        games: List of game dictionaries with 'week' and 'start_date' keys
+
+    Returns:
+        Same list with postseason game weeks remapped to 16, 17, 18, etc.
+    """
+    regular = [g for g in games if g["week"] <= 15]
+    postseason = [g for g in games if g["week"] >= 16]
+
+    if not postseason:
+        return games
+
+    # Sort by start_date for chronological ordering
+    # start_date may be datetime.datetime or string depending on API version
+    postseason.sort(key=lambda g: str(g.get("start_date") or "9999"))
+
+    # Assign pseudo-weeks: each unique date gets a new week number
+    current_pseudo_week = 16
+    prev_date = None
+    for game in postseason:
+        raw_date = game.get("start_date")
+        game_date = str(raw_date)[:10] if raw_date is not None else ""  # Extract YYYY-MM-DD
+        if prev_date is not None and game_date != prev_date:
+            current_pseudo_week += 1
+        game["week"] = current_pseudo_week
+        prev_date = game_date
+
+    max_pseudo = max(g["week"] for g in postseason)
+    logger.info(
+        f"P0.1: Mapped {len(postseason)} postseason games to pseudo-weeks 16-{max_pseudo}"
+    )
+
+    return regular + postseason
+
+
+def _remap_play_weeks(plays_df: pl.DataFrame, game_week_map: pl.DataFrame) -> pl.DataFrame:
+    """Remap play week assignments using game_id -> week mapping from games.
+
+    P0.1 Fix: Ensures play weeks match the pseudo-week assigned to their game,
+    so walk-forward data leakage guards work correctly for postseason.
+
+    Args:
+        plays_df: Play DataFrame with game_id and week columns
+        game_week_map: DataFrame with game_id and game_week columns
+
+    Returns:
+        DataFrame with week column remapped via game_id join
+    """
+    if len(plays_df) == 0 or "game_id" not in plays_df.columns:
+        return plays_df
+
+    remapped = plays_df.join(game_week_map, on="game_id", how="left")
+    remapped = remapped.with_columns(
+        pl.when(pl.col("game_week").is_not_null())
+        .then(pl.col("game_week"))
+        .otherwise(pl.col("week"))
+        .alias("week")
+    ).drop("game_week")
+    return remapped
 
 
 def fetch_season_data(
@@ -230,6 +295,9 @@ def fetch_season_data(
             logger.debug(f"Fetched {len([l for l in postseason_lines if l.lines])} postseason betting lines for {year}")
     except Exception as e:
         logger.warning(f"Error fetching betting lines: {e}")
+
+    # P0.1: Assign sequential pseudo-weeks to postseason games by date
+    games = _assign_postseason_pseudo_weeks(games)
 
     return pl.DataFrame(games), pl.DataFrame(betting)
 
@@ -752,9 +820,10 @@ def calculate_ats_results(
         suffixes=("", "_bet"),
     )
 
-    # Identify unmatched games (no betting line or missing spread)
+    # P0.4: Identify unmatched games from missing spread fields
+    # (game_id is always present after left join; unmatched = missing betting columns)
     vegas_spread = merged[spread_col]
-    unmatched_mask = merged["game_id"].isna() | vegas_spread.isna()
+    unmatched_mask = vegas_spread.isna()
     matched_mask = ~unmatched_mask
 
     # Log unmatched games (preserve per-game logging)
@@ -1384,6 +1453,42 @@ def fetch_all_season_data(
         logger.debug(f"Loaded {len(games_df)} games, {len(betting_df)} betting lines")
 
         plays_df, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
+
+        # P0.1: Remap postseason play weeks to match game pseudo-weeks
+        if len(games_df) > 0:
+            game_week_map = games_df.select([
+                pl.col("id").alias("game_id"),
+                pl.col("week").alias("game_week"),
+            ])
+            efficiency_plays_df = _remap_play_weeks(efficiency_plays_df, game_week_map)
+            turnover_plays_df = _remap_play_weeks(turnover_plays_df, game_week_map)
+            st_plays_df = _remap_play_weeks(st_plays_df, game_week_map)
+
+        # P0.3: Validate home_team in efficiency plays by joining to game records
+        # play.home may not be the home team string; game.home_team is reliable
+        if len(efficiency_plays_df) > 0 and len(games_df) > 0:
+            game_home = games_df.select([
+                pl.col("id").alias("game_id"),
+                pl.col("home_team").alias("validated_home_team"),
+            ])
+            efficiency_plays_df = efficiency_plays_df.join(
+                game_home, on="game_id", how="left"
+            )
+            efficiency_plays_df = efficiency_plays_df.with_columns(
+                pl.col("validated_home_team").alias("home_team")
+            ).drop("validated_home_team")
+
+            null_count = efficiency_plays_df["home_team"].null_count()
+            total = len(efficiency_plays_df)
+            if null_count > 0:
+                logger.warning(
+                    f"P0.3: home_team coverage {total - null_count}/{total} "
+                    f"({(total - null_count) / total * 100:.1f}%) after game join"
+                )
+            else:
+                logger.debug(
+                    f"P0.3: home_team validated via game join ({total} plays, 100% coverage)"
+                )
 
         turnover_df = build_game_turnovers(games_df, turnover_plays_df)
         logger.debug(f"Built turnover margins for {len(turnover_df)} games")

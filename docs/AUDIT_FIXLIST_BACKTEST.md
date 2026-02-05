@@ -17,7 +17,7 @@
 
 ## P0 — Must Fix (correctness; can materially change evaluation)
 
-- [ ] **P0.1 Fix postseason week mapping (don’t lump everything into week=16 if doing walk-forward)**
+- [x] **P0.1 Fix postseason week mapping (don't lump everything into week=16 if doing walk-forward)** -- FIXED 2026-02-05
   - **Issue:** All postseason games are assigned to week 16. This breaks chronology (training can include “future” bowls while predicting earlier bowls).
   - **Acceptance criteria:**
     - Postseason games are either:
@@ -39,7 +39,7 @@
 
 ---
 
-- [ ] **P0.3 Validate `home_team` field on play rows used for neutral-field ridge regression**
+- [x] **P0.3 Validate `home_team` field on play rows used for neutral-field ridge regression** -- FIXED 2026-02-05
   - **Issue:** `home_team` in play ingest is derived from `play.home`, which may not be the home team string. If wrong, EFM home-indicator regression silently fails.
   - **Acceptance criteria:**
     - Play rows contain a correct `home_team` string matching the game’s home_team.
@@ -50,7 +50,7 @@
 
 ---
 
-- [ ] **P0.4 Fix unmatched ATS mask logic (minor but misleading)**
+- [x] **P0.4 Fix unmatched ATS mask logic (minor but misleading)** -- FIXED 2026-02-05
   - **Issue:** `merged["game_id"].isna()` is not meaningful after merge because predictions always have game_id; unmatched should be determined by missing Vegas columns.
   - **Acceptance criteria:**
     - Unmatched games are correctly detected from missing spread fields after merge.
@@ -107,7 +107,7 @@
 
 ## P3 — Maintainability / cleanup
 
-- [ ] **P3.1 Remove unused imports to reduce cognitive load**
+- [x] **P3.1 Remove unused imports to reduce cognitive load** -- FIXED 2026-02-05
   - **Issue:** Some imports are unused (e.g., DataProcessor/RecencyWeighter, VegasComparison).
   - **Acceptance criteria:** Lint clean (or at least obvious unused imports removed).
   - **Claude nudge prompt:**
@@ -128,7 +128,19 @@
 
 ---
 
-## Definition of “done”
+## Backtest Validation (2026-02-05, post P0 structural fixes)
+
+Baseline metrics after P0.1/P0.3/P0.4/P3.1 fixes (no weight changes):
+- **MAE (vs actual):** 12.88 | **MAE (vs closing):** 4.89
+- **Overall ATS:** 1221-1193-45 (50.6%)
+- **Phase 2 (Core, wk 4-15) ATS:** 52.0% | **5+ edge:** 55.3%
+- **Postseason ATS:** 40.9% (needs investigation)
+- **Postseason pseudo-weeks:** 16-37 (correctly mapped by date)
+- **Home_team coverage:** 100% via game join
+
+---
+
+## Definition of "done"
 
 - Walk-forward chronology is correct for all included games (regular + postseason if enabled).
 - Postseason data ingestion is complete or explicitly excluded.
