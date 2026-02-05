@@ -14,7 +14,7 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 
 ## P0 — Must Fix (unit correctness; can materially change spreads)
 
-- [ ] **P0.1 Enforce consistent units across components (PBTA points per game)**
+- [x] **P0.1 Enforce consistent units across components (PBTA points per game)** -- FIXED 2026-02-05
   - **Issue:** Some methods mix incompatible units:
     - FG: points above expected (points)
     - Punt: net-yards-ish heuristic (yards + bonuses)
@@ -22,10 +22,9 @@ The model is directionally correct and has good structure (PBTA framing, leakage
     - Game-stats fallback mixes points and yards
   - **Acceptance criteria:**
     - FG, punt, kickoff components each represent **points per game** vs average.
-    - `overall_rating = fg + punt + kickoff` (all points/game) in all “official” pathways.
+    - `overall_rating = fg + punt + kickoff` (all points/game) in all "official" pathways.
     - No method returns a mixed-unit `overall_rating`.
-  - **Claude nudge prompt:**
-    > Audit SpecialTeamsModel for unit consistency. Ensure FG, punt, and kickoff components are all expressed as PBTA points per game and that `overall_rating` is the sum of those per-game point values. Deprecate or fix any methods that mix incompatible units (points vs yards vs heuristics).
+  - **Fix applied:** Punt/kickoff ratings now convert yards to points via YARDS_TO_POINTS (0.04). calculate_team_rating() normalizes per-event to per-game. calculate_from_game_stats() properly converts yards to points before summing.
 
 ---
 

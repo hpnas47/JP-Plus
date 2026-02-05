@@ -18,17 +18,16 @@
 
 ## P0 — Must Fix (correctness; can materially change ratings)
 
-- [ ] **P0.1 Ridge intercept / coefficient interpretation is not clean**
-  - **Issue:** Ridge extraction builds “adjusted levels” as:
+- [x] **P0.1 Ridge intercept / coefficient interpretation is not clean** -- FIXED 2026-02-05
+  - **Issue:** Ridge extraction builds "adjusted levels" as:
     - `off_adjusted = intercept + off_coef`
     - `def_adjusted = intercept - def_coef`
     This works operationally but can be hard to interpret and can embed intercept/baseline ambiguities into O/D decomposition.
   - **Acceptance criteria:**
-    - Offense and defense adjusted metrics have a clearly defined baseline interpretation (e.g., “predicted league-average level + deviation” OR “deviation-only with explicit intercept”).
+    - Offense and defense adjusted metrics have a clearly defined baseline interpretation (e.g., "predicted league-average level + deviation" OR "deviation-only with explicit intercept").
     - Add invariants/logging that confirm:
       - `mean(adj_off_sr)` and `mean(adj_def_sr)` behave as expected relative to intercept.
-  - **Claude nudge prompt:**
-    > Review ridge opponent adjustment coefficient extraction and intercept handling. Make offense/defense adjusted metrics stable and interpretable across weeks by addressing baseline/intercept ambiguity and adding invariants/logging that validate the relationship between intercept and team adjusted values.
+  - **Fix applied:** Added invariant validation after ridge extraction - logs mean_off/mean_def vs intercept and warns if drift exceeds 5% tolerance. Comments clarify interpretation: intercept = league average, coefficients = deviations.
 
 ---
 

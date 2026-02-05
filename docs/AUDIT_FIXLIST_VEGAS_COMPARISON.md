@@ -8,14 +8,13 @@
 
 ## P0 — Must fix (can change ATS/value-play correctness)
 
-- [ ] **P0.1 Use `game_id` in `compare_prediction()` (currently unused)**
+- [x] **P0.1 Use `game_id` in `compare_prediction()` (currently unused)** -- FIXED 2026-02-05
   - **Issue:** `compare_prediction()` calls `get_line(home_team, away_team)` and ignores the game_id-capable lookup path. This keeps the system vulnerable to rematches and naming mismatches.
   - **Acceptance criteria:**
     - If prediction has `game_id`, line matching uses `lines_by_id` (preferred) via `get_line(..., game_id=...)`.
     - Only fall back to `(home_team, away_team)` when `game_id` is missing.
     - Log (or expose) how often fallback matching is used.
-  - **Claude nudge prompt:**
-    > Update VegasComparison so model-vs-Vegas comparisons use `game_id` matching whenever possible. Ensure `compare_prediction()` prefers reliable identifiers and only falls back to team-name matching as a last resort. Add a small diagnostic that reports fallback usage frequency.
+  - **Fix applied:** compare_prediction() now checks prediction.game_id first, uses lines_by_id lookup if available. Falls back to team-name matching with warning log when game_id lookup fails. Added game_id field to PredictedSpread dataclass in spread_generator.py.
 
 ---
 

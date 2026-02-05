@@ -16,16 +16,15 @@ If this adjustment is applied to spreads, the current implementation can introdu
 
 ## P0 — Must Fix (correctness; can materially change model outputs)
 
-- [ ] **P0.1 Red zone trips must be computed at the drive/trip level (not by counting plays)**
+- [x] **P0.1 Red zone trips must be computed at the drive/trip level (not by counting plays)** -- FIXED 2026-02-05
   - **Issue:** `calculate_all_from_plays()` estimates `total_trips` as:
     - RZ TD plays + RZ FG plays + RZ turnovers + `max(1, failed_4th)`
-    - This is not equivalent to “red zone trips.”
+    - This is not equivalent to "red zone trips."
   - **Acceptance criteria:**
     - Red zone trips correspond to distinct offensive possessions/drive entries into the red zone.
     - One trip is counted once per drive, not once per play.
     - No fabricated minimum trips (no `max(1, ...)`).
-  - **Claude nudge prompt:**
-    > Audit `calculate_all_from_plays()` and redesign it so “red zone trips” are computed from drive/possession structure rather than from counting individual plays. Prefer true drive identifiers or CFBD drive-level data. Ensure each trip is counted once per drive entry and outcomes are attributed per trip.
+  - **Fix applied:** RZ trips now count distinct (game_id, drive_id) combinations. Outcomes determined by last play of each drive. Requires drive_id + game_id columns (warns and skips team if missing). Removed all max(1,...) hacks.
 
 ---
 
