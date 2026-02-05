@@ -251,140 +251,52 @@ The special teams model calculates marginal point contribution (PBTA - Points Be
 
 ---
 
+---
+
 ## Adjustments Layer
 
-EFM ratings feed into `SpreadGenerator` which applies additional adjustments:
+EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments. These are organized into four categories.
 
-| Adjustment | Typical Range | Description |
-|------------|---------------|-------------|
-| **Home Field Advantage** | 1.5-4.0 pts | Team-specific HFA based on stadium environment |
-| **Travel** | 0-2.5 pts | Distance and time zone penalties (see below) |
-| **Altitude** | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
-| **Situational** | -2 to +2 pts | Lookahead, letdown, rivalry, bye week |
-| **FCS Penalty** | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
-| **Special Teams** | -3 to +3 pts | Full ST differential (FG + Punt + Kickoff PBTA) |
-| **Pace Adjustment** | -10% to -15% | Spread compression for triple-option teams |
-| **QB Injury** | ±3-10 pts | Manual flag when starting QB is out (see below) |
+### Summary Table
 
-### Home Field Advantage Detail
+| Category | Adjustment | Range | Description |
+|----------|------------|-------|-------------|
+| **Game Context** | Home Field Advantage | 1.5-4.0 pts | Team-specific based on stadium environment |
+| | Travel | 0-2.5 pts | Distance and timezone penalties |
+| | Altitude | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
+| | Correlated Stack Smoothing | - | Prevents over-prediction when HFA+travel+altitude combine |
+| **Scheduling** | Rest Differential | ±1.5 pts | Based on actual days between games |
+| | Letdown Spot | -1.5 pts | Beat ranked team last week, facing unranked now |
+| | Lookahead Spot | -1.5 pts | Rival or top-10 opponent next week |
+| | Rivalry Boost | +1.0 pts | Underdog in rivalry game only |
+| **Opponent/Pace** | FCS Penalty | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
+| | Special Teams | -3 to +3 pts | Full ST differential (FG+Punt+Kickoff PBTA) |
+| | Pace (Triple-Option) | -10% to -15% | Spread compression for low-play-count games |
+| **Manual** | QB Injury | ±3-10 pts | Flag when starting QB is out |
+| **Totals Only** | Weather | varies | Wind, cold, precipitation penalties |
 
-JP+ uses team-specific HFA values based on stadium environment, crowd intensity, and historical factors:
+---
+
+### Game Context Adjustments
+
+#### Home Field Advantage
+
+JP+ uses team-specific HFA values based on stadium environment and crowd intensity:
 
 | Tier | HFA Range | Example Teams |
 |------|-----------|---------------|
 | Elite | 3.5 - 4.0 | LSU, Alabama, Ohio State, Penn State |
 | Strong | 3.0 - 3.25 | Nebraska, Wisconsin, Auburn, Boise State |
 | Above Average | 2.75 | Texas, Miami, Virginia Tech, James Madison |
-| Conference Default | 2.0 - 2.75 | Varies by conference (see below) |
+| Conference Default | 2.0 - 2.75 | Varies by conference |
 | Below Average | 2.0 - 2.25 | Maryland, Rutgers, Vanderbilt |
 | Weak | 1.5 - 1.75 | Kent State, Akron, Temple, UMass |
 
-**Conference Defaults** (for teams without specific values):
-- SEC / Big Ten: 2.75
-- Big 12 / ACC / Independents: 2.50
-- AAC / Mountain West / Sun Belt: 2.25
-- MAC / Conference USA: 2.00
+**Conference Defaults:** SEC/Big Ten: 2.75 | Big 12/ACC/Ind: 2.50 | AAC/MW/Sun Belt: 2.25 | MAC/CUSA: 2.00
 
-#### Trajectory Modifier
+**Trajectory Modifier:** HFA is adjusted ±0.5 pts for rising/declining programs. Calculated once at season start by comparing prior year win % to 3-year baseline. Rising programs (Vanderbilt, Indiana 2024) get boost; declining programs get penalty. Natural decay as success becomes the new baseline.
 
-HFA is adjusted for rising or declining programs. A team experiencing sustained improvement will have a more energized home environment, while a declining program may see diminished crowd intensity.
-
-**Timing:** Calculated ONCE at the start of each season using the prior completed year as "recent". Locked in for the whole season—not updated weekly. This reflects that stadium atmosphere builds over years, not weeks.
-
-**Calculation:**
-- Compare recent win % (prior 1 year) to baseline win % (3 years before that)
-- Scale the difference to a modifier in the range ±0.5 points
-- Only apply if the change is meaningful (≥0.1 point adjustment)
-
-| Win % Improvement | HFA Modifier |
-|-------------------|--------------|
-| +30% or more | +0.5 pts |
-| +15% | +0.25 pts |
-| 0% (stable) | 0 pts |
-| -15% | -0.25 pts |
-| -30% or more | -0.5 pts |
-
-**Examples:**
-- **Vanderbilt 2024**: Baseline ~25% win rate (2021-2023) → Recent ~58% (2024) = +0.5 modifier → HFA rises from 2.0 to 2.5
-- **Indiana 2024**: Similar trajectory, HFA boost for newfound competitive environment
-- Declining program: A team falling from 60% to 30% win rate would see HFA penalty
-
-**Natural decay:** No explicit decay is needed. As successful years roll into the 3-year baseline, the improvement gap shrinks automatically. Indiana's +0.5 modifier in 2024-25 will naturally decrease by 2027 as their success becomes the new baseline.
-
-**Conference parity:** Same formula applies to all conferences. Elite G5 programs (Boise State, James Madison) already have elevated base HFA (2.75-3.0), so no special trajectory treatment is needed.
-
-This ensures JP+ captures the reality that home field advantage is not static—it evolves with program trajectory.
-
-### FCS Opponent Penalty (Tiered)
-
-When an FBS team plays an FCS opponent, JP+ applies a tiered penalty based on FCS team quality:
-
-| FCS Tier | Penalty | Examples |
-|----------|---------|----------|
-| **Elite FCS** | +18 pts | North Dakota State, Montana State, South Dakota State, Sacramento State, Idaho |
-| **Standard FCS** | +32 pts | All other FCS teams |
-
-**Why tiered?**
-- Analysis of 359 FCS games (2022-2024) showed vastly different margins by FCS quality
-- Mean FBS margin vs standard FCS: ~30 points
-- Mean FBS margin vs elite FCS: only +2 to +15 points
-- Elite FCS teams are FCS playoff regulars or have proven track records vs FBS opponents
-
-**Elite FCS Classification (23 teams):**
-Top performers vs FBS (data-driven): Sacramento State, Idaho, Incarnate Word, North Dakota State, William & Mary, Southern Illinois, Holy Cross, Weber State, Fordham, Monmouth, South Dakota State, Montana State, Montana
-
-FCS playoff regulars: Villanova, UC Davis, Eastern Washington, Northern Iowa, Delaware, Richmond, Furman
-
-**Impact (vs flat 24pt penalty):**
-- 5+ edge ATS improved from 56.0% → 56.9% (+0.9%)
-- 3+ edge ATS improved from 52.4% → 52.5% (+0.1%)
-
-**Note:** This adjustment only affects the ~3% of games involving FCS opponents. FBS vs FBS games are unchanged.
-
-### QB Injury Adjustment
-
-QB injuries are the single biggest source of prediction error that JP+ otherwise ignores. The model provides a manual flagging system for known starter injuries:
-
-1. **Pre-computed depth charts:** For each team, identify the starter (most pass attempts) and backup using CFBD player PPA data
-2. **PPA differential:** Calculate the per-play efficiency drop when switching to the backup
-3. **Point adjustment:** `PPA_drop × 30 plays/game` (QBs typically involved in ~30 pass/scramble plays)
-
-| Team (2024) | Starter | PPA | Backup | PPA | Adjustment |
-|-------------|---------|-----|--------|-----|------------|
-| Georgia | Beck | 0.353 | Stockton | 0.125 | **-6.8 pts** |
-| Ohio State | Howard | 0.575 | Brown | 0.243 | **-10.0 pts** |
-| Texas | Ewers | 0.322 | A. Manning | 0.589 | **+8.0 pts** |
-| Alabama | Milroe | 0.321 | Simpson | 0.215 | **-3.2 pts** |
-
-**Usage:** `python scripts/run_weekly.py --qb-out Georgia Texas` applies the adjustment for those teams.
-
-**Note:** Texas is unusual—Arch Manning (backup) has better PPA than Ewers (starter), so the adjustment is positive. CFBD has no injury data; flagging requires manual input.
-
-### Correlated Stack Smoothing
-
-HFA, travel, and altitude adjustments are **correlated**—they all favor the home team in the same scenarios. When a sea-level team travels cross-country to a high-altitude venue, all three stack together. Analysis of 2024-2025 data revealed that high-stack games (>5 pts combined) systematically over-predicted home team margins by ~2.3 points.
-
-**The Fix:** JP+ applies smoothing to prevent over-stacking:
-
-1. **Altitude-Travel Interaction:** When travel > 1.5 pts AND altitude > 0, reduce altitude by 30%. These effects partially overlap (both penalize away team for game conditions).
-
-2. **Soft Cap:** When combined stack exceeds 5 pts:
-   - Excess above 5 pts is reduced by 50%
-   - Reduction distributed proportionally across all three components
-   - Example: Stack of 7 → 5 + (7-5)×0.5 = 6 effective
-
-**Results:**
-| Metric | Before | After |
-|--------|--------|-------|
-| Max stack | 6.41 pts | 5.71 pts |
-| Top 10% ME | +2.17 | +2.09 |
-| Error-per-stack-point | 0.94 | 0.88 |
-
-Smoothing is enabled by default. Disable with `smooth_stacks=False` in SpreadGenerator.
-
-### Travel Adjustment Detail
-
-Travel adjustments account for timezone crossings and distance:
+#### Travel
 
 | Component | Value | Condition |
 |-----------|-------|-----------|
@@ -395,107 +307,123 @@ Travel adjustments account for timezone crossings and distance:
 | **Distance** | 1.0 pts | 2000+ miles |
 | **Hawaii Special** | +2.0 pts | Mainland → Hawaii |
 
-**Distance-Based TZ Dampening:** Analysis showed short-distance games crossing timezone lines (due to DST quirks or CT/ET border) were over-penalized. The 500-800mi TZ category showed +3.83 mean error vs -0.87 for no-TZ games.
+**Distance-Based TZ Dampening:** Short-distance games crossing timezone lines (DST quirks, CT/ET border) were over-penalized. Fix: <400mi = no TZ penalty; 400-700mi = 50% TZ penalty; >700mi = full penalty.
 
-**Fix:** TZ penalty is reduced for regional games:
-- **<400 miles:** TZ penalty eliminated (e.g., Illinois @ Purdue)
-- **400-700 miles:** TZ penalty reduced by 50% (e.g., Arizona @ Colorado)
-- **>700 miles:** Full TZ penalty (true cross-country travel)
+#### Altitude
 
-| Matchup | Distance | Old TZ | New TZ |
-|---------|----------|--------|--------|
-| Illinois @ Purdue | 74 mi | 0.50 | **0.00** |
-| Arizona @ Colorado | 623 mi | 0.50 | **0.25** |
-| UCLA @ Rutgers | 2,421 mi | 1.50 | 1.50 |
+High-altitude venues (BYU 4,551ft, Air Force 6,621ft, Colorado 5,328ft) penalize visiting sea-level teams 0-3 pts based on elevation differential.
 
-### Pace Adjustment (Triple-Option)
+#### Correlated Stack Smoothing
 
-Triple-option teams (Army, Navy, Air Force, Kennesaw State) run ~55 plays/game vs ~70 for standard offenses. This creates more variance—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001).
+HFA + travel + altitude all favor home team—they're correlated. Games >5 pts combined stack over-predicted home margins by ~2.3 pts.
 
-JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
+**Fix:**
+1. **Altitude-Travel Interaction:** When travel >1.5 pts AND altitude >0, reduce altitude by 30%
+2. **Soft Cap:** Excess above 5 pts reduced by 50%, distributed proportionally
 
-### Situational Adjustment Detail
+Example: Raw stack 7 pts → 5 + (7-5)×0.5 = 6 effective pts
 
-Situational factors capture psychological and scheduling dynamics that affect team performance:
+---
+
+### Scheduling Adjustments
+
+#### Rest Day Calculation
+
+CFB scheduling creates meaningful rest differentials beyond simple bye weeks:
+
+| Scenario | Days Rest | Example |
+|----------|-----------|---------|
+| Bye Week | 14+ days | Didn't play previous week |
+| Mini-Bye | 9-10 days | Thursday → Saturday |
+| Normal | 6-7 days | Saturday → Saturday |
+| Short Week | 4-5 days | Saturday → Thursday |
+
+**Formula:** `rest_advantage = (home_rest - away_rest) × 0.5 pts/day` (capped at ±1.5 pts)
+
+**Example:** Oregon (9 days after Thursday game) vs Texas (7 days) = +1.0 pts Oregon
+
+#### Letdown, Lookahead, and Rivalry
 
 | Factor | Value | Condition |
 |--------|-------|-----------|
-| **Rest Differential** | ±0.5 pts/day | Based on actual days of rest between games |
-| **Letdown Spot** | -1.5 pts | Beat top-15 team last week, now facing unranked opponent |
+| **Letdown Spot** | -1.5 pts | Beat top-15 team last week, facing unranked opponent |
 | **Lookahead Spot** | -1.5 pts | Rival or top-10 opponent next week |
 | **Rivalry Boost** | +1.0 pts | Underdog in rivalry game only |
 
-#### Rest Day Calculation (Replaces Binary Bye Week)
+**Historical Rankings:** Letdown detection uses **ranking at time of game**, not current ranking. JP+ fetches AP poll week-by-week from CFBD `/rankings` endpoint. Example: If Oregon beat #2 Ohio State in Week 7 (who later dropped to #20), Week 8 still shows letdown spot.
 
-CFB is not just Saturdays—Tuesday/Wednesday MACtion and Thursday/Friday games create meaningful rest differentials:
+---
 
-| Scenario | Days of Rest | Example |
-|----------|-------------|---------|
-| **Bye Week** | 14+ days | Team didn't play previous week |
-| **Mini-Bye** | 9-10 days | Thursday → following Saturday |
-| **Normal** | 6-7 days | Saturday → Saturday |
-| **Short Week** | 4-5 days | Saturday → Thursday |
+### Opponent & Pace Adjustments
 
-JP+ calculates actual days of rest using game `start_date` and applies a differential adjustment:
-- **Formula:** `rest_advantage = (home_rest - away_rest) × 0.5 pts/day`
-- **Cap:** ±1.5 pts maximum (equivalent to full bye week advantage)
+#### FCS Opponent Penalty (Tiered)
 
-**Examples:**
-- Oregon (Thu game) vs Texas (Sat game) on Saturday: Oregon has +2 days rest = **+1.0 pts**
-- Toledo (Sat game) vs opponent (also Sat) on Thursday: Toledo has -2 days rest = **-1.0 pts**
+| FCS Tier | Penalty | Examples |
+|----------|---------|----------|
+| **Elite FCS** | +18 pts | NDSU, Montana State, South Dakota State, Sacramento State, Idaho |
+| **Standard FCS** | +32 pts | All other FCS teams |
 
-#### Historical Rankings for Letdown Detection
+Based on 359 FCS games (2022-2024): mean FBS margin vs standard FCS ~30 pts; vs elite FCS only +2 to +15 pts. Impact: 5+ edge ATS improved 56.0% → 56.9%.
 
-**Critical Implementation Detail:** CFB rankings are volatile. A team ranked #15 in Week 3 may be unranked by Week 8. When evaluating "did they beat a ranked team last week?", JP+ uses the **historical ranking at the time of the game**, not the current ranking.
+#### Pace Adjustment (Triple-Option)
 
-**Example:**
-- Week 7: Oregon beats #2 Ohio State
-- Week 8: Oregon plays unranked Purdue
-- **Correct:** Oregon is in letdown spot (used historical #2 ranking)
-- **Wrong:** If OSU dropped to #20 by backtest time, old approach would miss this
+Triple-option teams (Army, Navy, Air Force, Kennesaw State) run ~55 plays/game vs ~70 normal. Analysis shows 30% worse MAE (16.09 vs 12.36, p=0.001).
 
-JP+ fetches AP poll rankings week-by-week from the CFBD `/rankings` endpoint and stores them in a `HistoricalRankings` object that provides:
-- `get_rank(team, week)` - Look up team's rank for a specific week
-- `get_week_rankings(week)` - Get all rankings for a week
+JP+ compresses spreads 10% toward zero for triple-option games (15% if both teams). This reflects fundamental uncertainty in low-possession games.
 
-**Fallback:** If historical rankings unavailable, uses current rankings (less accurate but better than nothing).
+**Triple-Option Rating Boost (+6 pts):** Service academies are systematically underrated by efficiency metrics. JP+ applies rating boost and uses 100% prior (no talent blend) to correct this.
 
-### Weather Adjustment (Totals)
+---
 
-Weather significantly impacts game totals (over/under). JP+ fetches weather data from the CFBD API and applies adjustments based on three factors:
+### Manual Adjustments
 
-| Factor | Threshold | Adjustment | Rationale |
-|--------|-----------|------------|-----------|
-| **Wind** | >10 mph | -0.3 pts/mph | Reduces passing efficiency, FG accuracy |
-| **Temperature** | <40°F | -0.15 pts/degree | Ball handling, pace reduction |
-| **Precipitation** | >0.02 in | -3.0 pts flat | Ball security, passing impact |
-| **Heavy Precip** | >0.05 in | -5.0 pts flat | Severe weather penalty |
+#### QB Injury
 
-**Indoor games** (identified via `game_indoors` flag) receive no weather adjustment.
+The single biggest unmodeled source of prediction error. Manual flagging system:
 
-**Caps:** Wind adjustment capped at -6.0 pts, temperature at -4.0 pts to prevent extreme values.
+1. Pre-compute depth charts from CFBD player PPA data (starter = most pass attempts)
+2. Calculate PPA differential between starter and backup
+3. Adjustment = `PPA_drop × 30 plays/game`
 
-**Example extreme weather games (2024 Week 11-15):**
-- Nebraska @ Iowa: 16°F, 7 mph wind → Temp adj: -3.6 pts
-- FAU @ Temple: 23 mph wind → Wind adj: -3.9 pts
-- Miami (OH) @ Ball State: Heavy rain (0.047 in) → Precip adj: -3.0 pts
+| Team (2024) | Starter | PPA | Backup | PPA | Adjustment |
+|-------------|---------|-----|--------|-----|------------|
+| Georgia | Beck | 0.353 | Stockton | 0.125 | **-6.8 pts** |
+| Ohio State | Howard | 0.575 | Brown | 0.243 | **-10.0 pts** |
+| Texas | Ewers | 0.322 | A. Manning | 0.589 | **+8.0 pts** |
+| Alabama | Milroe | 0.321 | Simpson | 0.215 | **-3.2 pts** |
 
-**Data source:** CFBD API `get_weather` endpoint provides:
-- `temperature` (°F), `wind_speed` (mph), `wind_direction` (degrees)
-- `precipitation` (inches), `snowfall` (inches)
-- `humidity` (%), `weather_condition` (text description)
-- `game_indoors` (boolean for dome games)
+**Usage:** `python scripts/run_weekly.py --qb-out Georgia Texas`
 
-**Status:** Weather adjustment module implemented for future totals prediction. Parameters are conservative estimates based on NFL weather studies (Marek 2015, Kacsmar 2016) and should be validated against historical CFB totals results before use in production.
+---
 
-#### Key Files
-- `src/predictions/spread_generator.py` - Combines all components
-- `src/adjustments/home_field.py` - Team-specific and conference HFA values
-- `src/adjustments/travel.py` - Travel distance/timezone
-- `src/adjustments/altitude.py` - Altitude adjustment
-- `src/adjustments/situational.py` - Situational factors
-- `src/adjustments/qb_adjustment.py` - QB injury adjustment system
-- `src/adjustments/weather.py` - Weather adjustments for totals
+### Weather Adjustments (Totals Only)
+
+| Factor | Threshold | Adjustment | Cap |
+|--------|-----------|------------|-----|
+| **Wind** | >10 mph | -0.3 pts/mph | -6.0 |
+| **Temperature** | <40°F | -0.15 pts/degree | -4.0 |
+| **Precipitation** | >0.02 in | -3.0 pts flat | - |
+| **Heavy Precip** | >0.05 in | -5.0 pts flat | - |
+
+**Indoor games** (via `game_indoors` flag) receive no weather adjustment.
+
+**Data source:** CFBD API `get_weather` endpoint (temperature, wind, precipitation, humidity, weather condition, indoor flag).
+
+**Status:** Implemented for future totals prediction. Parameters based on NFL weather studies; validate against historical CFB totals before production use.
+
+---
+
+### Adjustments Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/predictions/spread_generator.py` | Combines all components |
+| `src/adjustments/home_field.py` | Team-specific HFA & trajectory |
+| `src/adjustments/travel.py` | Distance/timezone |
+| `src/adjustments/altitude.py` | Altitude adjustment |
+| `src/adjustments/situational.py` | Rest, letdown, lookahead, rivalry |
+| `src/adjustments/qb_adjustment.py` | QB injury system |
+| `src/adjustments/weather.py` | Weather for totals |
 
 ---
 

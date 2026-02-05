@@ -100,69 +100,68 @@ JP+ includes a complete special teams model that captures the marginal point con
 
 **FBS Distribution:** Mean ~0, Std ~1.0, 95% of teams fall within ±2 pts/game.
 
-### Adjustments Layer
+---
 
-After calculating base ratings, JP+ adjusts for:
-- **Home field advantage** (1.5 - 4.0 points, team-specific)
-- **Travel distance and timezone** (cross-country trips hurt, timezone crossings add fatigue)
-- **Altitude** (playing at BYU, Air Force, or Colorado is tough)
-- **Correlated stack smoothing** (prevents over-prediction when HFA + travel + altitude combine)
-- **Situational factors** (bye weeks, lookahead spots, letdown games)
-- **FCS opponent penalty** (tiered: +18 pts for elite FCS, +32 pts for standard FCS)
-- **Special teams differential** (full ST PBTA difference: FG + Punt + Kickoff)
-- **Pace adjustment** (spread compression for triple-option teams)
-- **Weather adjustment** (for totals: wind, cold, and precipitation penalties)
+## Adjustments Layer
 
-**Team-Specific HFA:** Not all home fields are equal. LSU at night (4.0 pts) is much tougher than playing at Kent State (1.75 pts). JP+ uses curated HFA values for ~50 teams based on stadium environment, with conference-based defaults for others.
+After calculating base efficiency ratings, JP+ applies game-specific adjustments. These fall into four categories:
 
-**Travel Adjustments:** Cross-country travel hurts teams. JP+ applies two components:
-- **Timezone penalty:** ~0.5 pts per timezone crossed (slightly less going west since you gain time)
-- **Distance penalty:** 0.25-1.0 pts based on distance (300mi to 2000+ mi thresholds)
+### Game Context Adjustments
 
-However, short-distance games that happen to cross timezone lines (due to DST quirks or CT/ET border) shouldn't get the full penalty—there's no real travel fatigue for a 75-mile trip. JP+ dampens the timezone penalty based on distance:
-- **<400 miles:** No TZ penalty (e.g., Illinois @ Purdue)
-- **400-700 miles:** 50% TZ penalty (e.g., Arizona @ Colorado)
-- **>700 miles:** Full TZ penalty (true cross-country travel)
+**Home Field Advantage (1.5 - 4.0 pts):** Not all home fields are equal. LSU at night (4.0 pts) is much tougher than Kent State (1.75 pts). JP+ uses curated HFA values for ~50 teams based on stadium environment, with conference-based defaults for others.
 
-**Correlated Stack Smoothing:** HFA, travel, and altitude adjustments all favor the home team—they're correlated. When a sea-level team travels cross-country to a high-altitude venue, all three stack together. Analysis showed high-stack games (>5 pts) over-predicted home team margins by ~2.3 pts. JP+ applies smoothing:
-1. When altitude and long travel combine, reduce altitude effect by 30% (they partially overlap)
-2. When combined stack exceeds 5 pts, reduce excess by 50%
+- **Trajectory Modifier:** HFA changes as programs rise or fall. Vanderbilt/Indiana in 2024 got +0.5 pt HFA boost for their newfound competitive environment.
 
-Example: If raw stack = 7 pts (3.5 HFA + 2.0 travel + 1.5 altitude), the smoothed stack = 6 pts.
+**Travel (0.25 - 2.5 pts):** Cross-country travel hurts teams:
+- **Timezone:** ~0.5 pts/zone (slightly less going west)
+- **Distance:** 0.25-1.0 pts (300mi to 2000+ mi thresholds)
+- **Dampening:** Short-distance games crossing timezone lines (<400mi) get no TZ penalty—no fatigue for a 75-mile trip
 
-**Trajectory Modifier:** HFA isn't static—it changes as programs rise or fall. A team that's dramatically improved (like Vanderbilt or Indiana in 2024) will have more energized crowds and a stronger home environment. JP+ compares the prior year's win rate to the historical baseline (3 years before) and adjusts HFA by up to ±0.5 points. This is calculated once at the start of each season and locked in. Rising programs get a boost; declining programs get a penalty.
+**Altitude (0 - 3 pts):** BYU (4,551 ft), Air Force (6,621 ft), and Colorado (5,328 ft) create oxygen debt for visiting sea-level teams.
 
-**FCS Penalty (Tiered):** When an FBS team plays an FCS opponent, JP+ applies a tiered penalty based on FCS team quality. **Elite FCS teams** (North Dakota State, Montana State, South Dakota State, Sacramento State, and other FCS playoff regulars) receive an 18-point penalty. **Standard FCS teams** receive a 32-point penalty. This tiered approach recognizes that elite FCS programs routinely compete with lower-tier FBS teams, while standard FCS opponents are dramatically weaker. The tiered system improved 5+ edge ATS from 56.0% to 56.9%.
+**Correlated Stack Smoothing:** When HFA + travel + altitude all favor home team, they stack. Games with >5 pts combined adjustment over-predicted home margins by ~2.3 pts. JP+ applies soft cap: excess above 5 pts reduced by 50%.
 
-**Pace Adjustment (Triple-Option):** Triple-option teams (Army, Navy, Air Force, Kennesaw State) run significantly fewer plays per game (~55 vs ~70 for standard offenses). This creates more variance in outcomes—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001). To account for this reduced game volume, JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
+### Scheduling Adjustments
 
-**Situational Factors:** JP+ adjusts for scheduling dynamics that affect team performance:
-- **Rest differential (±0.5 pts/day):** CFB isn't just Saturdays—Thursday MACtion and short weeks matter
-- **Letdown spot (-1.5 pts):** Team beat a top-15 opponent last week, now facing unranked opponent
-- **Lookahead spot (-1.5 pts):** Team has a rival or top-10 opponent next week
-- **Rivalry boost (+1.0 pts):** Underdog in rivalry game only
+**Rest Differential (±0.5 pts/day, capped at ±1.5 pts):** CFB isn't just Saturdays—MACtion and short weeks matter:
 
-**Rest Day Calculation:** JP+ calculates actual days of rest using game dates, not just "did they have a bye?" A team playing Thursday → Saturday has a mini-bye (9 days rest), while Saturday → Thursday is a short week (5 days). The adjustment is calculated as `(home_rest - away_rest) × 0.5 pts/day`, capped at ±1.5 pts. Example: Oregon coming off a Thursday game (+9 days) vs Texas from Saturday (+7 days) = Oregon gets +1.0 pts rest advantage.
+| Scenario | Days Rest | Example |
+|----------|-----------|---------|
+| Bye Week | 14+ days | Team didn't play previous week |
+| Mini-Bye | 9-10 days | Thursday → Saturday |
+| Normal | 6-7 days | Saturday → Saturday |
+| Short Week | 4-5 days | Saturday → Thursday |
 
-**Critical for letdown detection:** CFB rankings are volatile—a team ranked #15 in Week 3 may be unranked by Week 8. JP+ uses the **historical ranking at the time of the game**, not the current ranking. For example, if Oregon beats #2 Ohio State in Week 7 and then plays unranked Purdue in Week 8, JP+ correctly identifies the letdown spot using Ohio State's Week 7 ranking, even if they've since dropped in the polls.
+Formula: `(home_rest - away_rest) × 0.5 pts/day`. Example: Oregon (9 days after Thursday game) vs Texas (7 days after Saturday game) = +1.0 pts for Oregon.
 
-**Triple-Option Rating Boost:** Triple-option teams (especially service academies) are systematically underrated by efficiency metrics like SP+ because EPA calculations don't fully capture their scheme's value. Additionally, service academies have artificially low recruiting rankings due to unique constraints (service commitment, physical requirements) that don't reflect their actual competitiveness. JP+ applies a +6 point boost to raw SP+ ratings for these teams and uses 100% prior rating (no talent blend) to correct this systematic bias.
+**Letdown Spot (-1.5 pts):** Team beat a top-15 opponent last week, now facing unranked opponent. *Uses historical rankings at time of game, not current rankings.*
 
-**Weather Adjustment (Totals):** Weather significantly impacts game totals. JP+ fetches weather data from the CFBD API and applies adjustments for totals prediction:
+**Lookahead Spot (-1.5 pts):** Team has a rival or top-10 opponent next week.
+
+**Rivalry Boost (+1.0 pts):** Underdog in rivalry game only.
+
+### Opponent & Pace Adjustments
+
+**FCS Penalty (Tiered):** When FBS plays FCS:
+- **Elite FCS (+18 pts):** NDSU, Montana State, South Dakota State, Sacramento State, etc.
+- **Standard FCS (+32 pts):** All other FCS teams
+
+**Special Teams Differential:** Full ST PBTA difference (FG + Punt + Kickoff) applied to spread.
+
+**Pace Adjustment (Triple-Option):** Army, Navy, Air Force run ~55 plays/game vs ~70 normal. This creates variance (30% worse MAE). JP+ compresses spreads 10% toward zero for triple-option games.
+
+**Triple-Option Rating Boost (+6 pts):** Service academies are systematically underrated by efficiency metrics. JP+ boosts their raw ratings and uses 100% prior (no talent blend) to correct this.
+
+### Weather Adjustments (Totals Only)
 
 | Factor | Threshold | Adjustment |
 |--------|-----------|------------|
-| Wind | >10 mph | -0.3 pts per mph above threshold (cap: -6.0) |
-| Temperature | <40°F | -0.15 pts per degree below threshold (cap: -4.0) |
-| Precipitation | >0.02 inches | -3.0 pts flat penalty |
-| Heavy Precipitation | >0.05 inches | -5.0 pts flat penalty |
+| Wind | >10 mph | -0.3 pts/mph (cap: -6.0) |
+| Temperature | <40°F | -0.15 pts/degree (cap: -4.0) |
+| Precipitation | >0.02 in | -3.0 pts flat |
+| Heavy Precip | >0.05 in | -5.0 pts flat |
 
-Indoor (dome) games receive no weather adjustment. The precipitation penalty only applies when the weather condition indicates actual rain or snow—fog or humidity that registers small precipitation values is excluded.
-
-Example extreme weather adjustments (2024):
-- UNLV @ San Jose State (22 mph wind + heavy rain): **-8.5 pts**
-- Nebraska @ Iowa (16°F cold): **-3.6 pts**
-- Yale @ Harvard (17 mph wind + light rain): **-5.2 pts**
+Indoor games receive no weather adjustment.
 
 ### Preseason Priors
 
