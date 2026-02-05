@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 4, 2026 (Transfer Portal Refactor)
+**Last Updated:** February 4, 2026 (Situational Adjustments Refinement)
 
 ## Overview
 
@@ -334,10 +334,13 @@ CFB scheduling creates meaningful rest differentials beyond simple bye weeks:
 
 | Scenario | Days Rest | Example |
 |----------|-----------|---------|
+| Season Opener | 14 days | Team hasn't played yet this season |
 | Bye Week | 14+ days | Didn't play previous week |
 | Mini-Bye | 9-10 days | Thursday → Saturday |
 | Normal | 6-7 days | Saturday → Saturday |
 | Short Week | 4-5 days | Saturday → Thursday |
+
+**Season Opener Advantage:** A team playing their Week 1 opener gets 14 days rest (maximum), giving them a rest advantage over a team that played in Week 0. This correctly models that a fresh team faces a team with normal wear.
 
 **Formula:** `rest_advantage = (home_rest - away_rest) × 0.5 pts/day` (capped at ±1.5 pts)
 
@@ -356,6 +359,10 @@ CFB scheduling creates meaningful rest differentials beyond simple bye weeks:
 **Letdown "Big Win" Criteria (either triggers):**
 1. Beat a top-15 ranked team (using historical ranking at time of game)
 2. Beat an arch-rival (regardless of rival's ranking) — "Rivalry Hangover"
+
+**Bye Week Persistence:** If a team has a bye week after a big win, the letdown effect persists. Sitting on a big win for two weeks maintains the "rust" and "hangover" effect. The model finds the team's *last played game* regardless of which week it occurred.
+
+**Staleness Threshold (3 weeks):** If the big win was more than 3 weeks ago (e.g., start of season, multiple byes), the emotional effect has faded and letdown doesn't trigger.
 
 **Sleepy Road Game Multiplier:** Analysis of 89 letdown games (2022-2024) showed clear venue effect:
 - Home letdown: 52.4% ATS, +0.1 pts vs spread (crowd keeps team engaged)

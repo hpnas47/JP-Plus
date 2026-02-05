@@ -127,17 +127,22 @@ After calculating base efficiency ratings, JP+ applies game-specific adjustments
 
 | Scenario | Days Rest | Example |
 |----------|-----------|---------|
+| Season Opener | 14 days | Team hasn't played yet this season |
 | Bye Week | 14+ days | Team didn't play previous week |
 | Mini-Bye | 9-10 days | Thursday → Saturday |
 | Normal | 6-7 days | Saturday → Saturday |
 | Short Week | 4-5 days | Saturday → Thursday |
 
+**Season Opener:** Teams playing their first game of the season get maximum rest (14 days), giving them an advantage over Week 0 teams.
+
 Formula: `(home_rest - away_rest) × 0.5 pts/day`. Example: Oregon (9 days after Thursday game) vs Texas (7 days after Saturday game) = +1.0 pts for Oregon.
 
-**Letdown Spot (-2.0 to -2.5 pts):** Team had a "big win" last week, now facing unranked opponent. Big win = beat top-15 team OR beat arch-rival (rivalry hangover). *Uses historical rankings at time of game, not current rankings.*
+**Letdown Spot (-2.0 to -2.5 pts):** Team had a "big win" recently, now facing unranked opponent. Big win = beat top-15 team OR beat arch-rival (rivalry hangover). *Uses historical rankings at time of game, not current rankings.*
 
 - **Home letdown:** -2.0 pts (crowd keeps team engaged)
 - **Away letdown:** -2.5 pts (sleepy road game multiplier)
+- **Bye week persistence:** If a team has a bye after a big win, the letdown persists—the "hangover" doesn't disappear just because they had a week off
+- **Staleness threshold:** Effect fades after 3+ weeks since the big win
 
 **Lookahead Spot (-1.5 pts):** Team has a rival or top-10 opponent next week.
 
