@@ -110,7 +110,8 @@ class SituationalFactors:
     """Container for situational adjustment factors."""
 
     team: str
-    bye_week_advantage: float = 0.0
+    rest_advantage: float = 0.0  # Days of rest differential (replaces binary bye_week)
+    rest_days: int = 7  # Actual days of rest for this team
     letdown_penalty: float = 0.0
     lookahead_penalty: float = 0.0
     rivalry_boost: float = 0.0
@@ -118,11 +119,16 @@ class SituationalFactors:
 
     def __post_init__(self):
         self.total_adjustment = (
-            self.bye_week_advantage
+            self.rest_advantage
             + self.letdown_penalty
             + self.lookahead_penalty
             + self.rivalry_boost
         )
+
+    # Backward compatibility alias
+    @property
+    def bye_week_advantage(self) -> float:
+        return self.rest_advantage
 
 
 class SituationalAdjuster:
@@ -130,15 +136,28 @@ class SituationalAdjuster:
     Calculate situational adjustments for matchups.
 
     Factors:
-    - Bye week advantage: Team coming off bye week gets boost
+    - Rest advantage: Days of rest differential (bye week, short week, mini-bye)
     - Letdown spot: Team coming off big win vs top-15 now facing unranked
     - Look-ahead spot: Team with rival/top-10 opponent next week
     - Rivalry: Underdog gets small boost in rivalry games
+
+    Rest Day Categories:
+    - Bye week: 14+ days (team didn't play previous week)
+    - Mini-bye: 9-13 days (Thursday game → following Saturday)
+    - Normal: 6-8 days (Saturday → Saturday)
+    - Short week: 4-5 days (Saturday → Thursday)
     """
+
+    # Rest day thresholds
+    NORMAL_REST = 7  # Saturday → Saturday baseline
+    SHORT_WEEK_THRESHOLD = 5  # Saturday → Thursday
+    MINI_BYE_THRESHOLD = 9  # Thursday → Saturday
+    BYE_WEEK_THRESHOLD = 14  # Full week off
 
     def __init__(
         self,
         bye_advantage: Optional[float] = None,
+        short_week_penalty: Optional[float] = None,
         letdown_penalty: Optional[float] = None,
         lookahead_penalty: Optional[float] = None,
         rivalry_boost: Optional[float] = None,
@@ -146,16 +165,21 @@ class SituationalAdjuster:
         """Initialize situational adjuster.
 
         Args:
-            bye_advantage: Points for bye week advantage
+            bye_advantage: Points for full bye week (14+ days rest)
+            short_week_penalty: Points penalty per day below normal rest
             letdown_penalty: Points penalty for letdown spot
             lookahead_penalty: Points penalty for look-ahead spot
             rivalry_boost: Points boost for underdog in rivalry
         """
         settings = get_settings()
 
+        # Rest advantages/penalties
         self.bye_advantage = (
             bye_advantage if bye_advantage is not None else settings.bye_week_advantage
         )
+        # Default: ~0.5 pts per day of rest differential
+        self.rest_points_per_day = 0.5
+
         self.letdown_penalty = (
             letdown_penalty
             if letdown_penalty is not None
@@ -172,13 +196,76 @@ class SituationalAdjuster:
             else settings.rivalry_underdog_boost
         )
 
+    def calculate_rest_days(
+        self,
+        team: str,
+        game_date: datetime,
+        schedule_df: pd.DataFrame,
+    ) -> int:
+        """Calculate days of rest since team's last game.
+
+        CFB Context:
+        - Normal rest: 7 days (Saturday → Saturday)
+        - Mini-bye: 9+ days (Thursday → following Saturday)
+        - Short week: 5 days (Saturday → Thursday)
+        - Bye week: 14+ days (didn't play previous week)
+
+        Args:
+            team: Team name
+            game_date: Date of current game (datetime)
+            schedule_df: DataFrame with schedule (must have start_date, home_team, away_team)
+
+        Returns:
+            Days since last game (default 7 if no previous game found)
+        """
+        # Find team's previous games
+        team_games = schedule_df[
+            (schedule_df["home_team"] == team) | (schedule_df["away_team"] == team)
+        ].copy()
+
+        if team_games.empty:
+            return self.NORMAL_REST
+
+        # Parse dates if needed
+        if "start_date" not in team_games.columns:
+            return self.NORMAL_REST
+
+        # Convert game_date to pandas Timestamp for comparison
+        if isinstance(game_date, str):
+            game_date = pd.to_datetime(game_date)
+        elif not isinstance(game_date, pd.Timestamp):
+            game_date = pd.Timestamp(game_date)
+
+        # Make game_date timezone-naive for comparison
+        if game_date.tzinfo is not None:
+            game_date = game_date.tz_localize(None)
+
+        # Convert start_date column to datetime
+        team_games["game_datetime"] = pd.to_datetime(team_games["start_date"], utc=True)
+        # Make timezone-naive
+        team_games["game_datetime"] = team_games["game_datetime"].dt.tz_localize(None)
+
+        # Find most recent game BEFORE current game
+        previous_games = team_games[team_games["game_datetime"] < game_date]
+
+        if previous_games.empty:
+            return self.NORMAL_REST
+
+        last_game_date = previous_games["game_datetime"].max()
+        days_rest = (game_date - last_game_date).days
+
+        return max(1, days_rest)  # Minimum 1 day
+
     def check_bye_week(
         self,
         team: str,
         current_week: int,
         schedule_df: pd.DataFrame,
     ) -> bool:
-        """Check if team is coming off a bye week.
+        """Check if team is coming off a bye week (DEPRECATED - use calculate_rest_days).
+
+        Maintained for backward compatibility. Use calculate_rest_days for more
+        accurate rest differential calculations.
 
         Args:
             team: Team name
@@ -199,6 +286,40 @@ class SituationalAdjuster:
         ).any()
 
         return not team_played
+
+    def calculate_rest_advantage(
+        self,
+        home_rest_days: int,
+        away_rest_days: int,
+    ) -> float:
+        """Calculate rest advantage adjustment.
+
+        Args:
+            home_rest_days: Days of rest for home team
+            away_rest_days: Days of rest for away team
+
+        Returns:
+            Points adjustment (positive = home team advantage)
+        """
+        rest_diff = home_rest_days - away_rest_days
+
+        # Categories of advantage:
+        # - Bye vs Normal (7 days diff): ~1.5 pts (full bye advantage)
+        # - Mini-bye vs Normal (2-3 days diff): ~1.0 pts
+        # - Normal vs Short week (2 days diff): ~1.0 pts
+        # - Short week vs Normal (-2 days): ~-1.0 pts
+
+        if rest_diff == 0:
+            return 0.0
+
+        # Scale: ~0.5 pts per day of rest differential, capped
+        adjustment = rest_diff * self.rest_points_per_day
+
+        # Cap at bye week advantage (typically 1.5 pts)
+        max_advantage = abs(self.bye_advantage)
+        adjustment = max(-max_advantage, min(max_advantage, adjustment))
+
+        return adjustment
 
     def check_letdown_spot(
         self,
@@ -379,6 +500,7 @@ class SituationalAdjuster:
         rankings: Optional[dict[str, int]] = None,
         team_is_favorite: bool = True,
         historical_rankings: Optional[HistoricalRankings] = None,
+        game_date: Optional[datetime] = None,
     ) -> SituationalFactors:
         """Calculate all situational factors for a team in a matchup.
 
@@ -390,16 +512,24 @@ class SituationalAdjuster:
             rankings: Dict of team -> ranking (current week snapshot)
             team_is_favorite: Whether team is favored (for rivalry boost)
             historical_rankings: HistoricalRankings for week-by-week lookup
+            game_date: Date of current game (for rest calculation)
 
         Returns:
             SituationalFactors for the team
         """
         factors = SituationalFactors(team=team)
 
-        # Bye week advantage
-        if self.check_bye_week(team, current_week, schedule_df):
-            factors.bye_week_advantage = self.bye_advantage
-            logger.debug(f"{team} coming off bye: +{self.bye_advantage}")
+        # Calculate rest days (new approach - replaces binary bye week)
+        if game_date is not None and "start_date" in schedule_df.columns:
+            factors.rest_days = self.calculate_rest_days(team, game_date, schedule_df)
+            logger.debug(f"{team} rest days: {factors.rest_days}")
+        else:
+            # Fallback to binary bye week check if no date available
+            if self.check_bye_week(team, current_week, schedule_df):
+                factors.rest_days = 14  # Assume full bye
+                logger.debug(f"{team} coming off bye (fallback): rest_days=14")
+            else:
+                factors.rest_days = 7  # Assume normal week
 
         # Letdown spot (uses historical rankings for previous opponent)
         if self.check_letdown_spot(
@@ -420,9 +550,10 @@ class SituationalAdjuster:
             factors.rivalry_boost = self.rivalry_boost
             logger.debug(f"{team} rivalry underdog boost: +{self.rivalry_boost}")
 
-        # Recalculate total
+        # Note: rest_advantage is calculated in get_matchup_adjustment based on differential
+        # Total will be recalculated there
         factors.total_adjustment = (
-            factors.bye_week_advantage
+            factors.rest_advantage  # Will be 0 here, set in get_matchup_adjustment
             + factors.letdown_penalty
             + factors.lookahead_penalty
             + factors.rivalry_boost
@@ -439,6 +570,7 @@ class SituationalAdjuster:
         rankings: Optional[dict[str, int]] = None,
         home_is_favorite: bool = True,
         historical_rankings: Optional[HistoricalRankings] = None,
+        game_date: Optional[datetime] = None,
     ) -> tuple[float, dict]:
         """Get net situational adjustment for a matchup.
 
@@ -450,6 +582,7 @@ class SituationalAdjuster:
             rankings: Team rankings (current week snapshot)
             home_is_favorite: Whether home team is favored
             historical_rankings: HistoricalRankings for week-by-week lookup
+            game_date: Date of current game (for rest day calculation)
 
         Returns:
             Tuple of (net adjustment favoring home, breakdown dict)
@@ -462,6 +595,7 @@ class SituationalAdjuster:
             rankings=rankings,
             team_is_favorite=home_is_favorite,
             historical_rankings=historical_rankings,
+            game_date=game_date,
         )
 
         away_factors = self.calculate_factors(
@@ -472,13 +606,43 @@ class SituationalAdjuster:
             rankings=rankings,
             team_is_favorite=not home_is_favorite,
             historical_rankings=historical_rankings,
+            game_date=game_date,
+        )
+
+        # Calculate rest differential (replaces binary bye week)
+        rest_advantage = self.calculate_rest_advantage(
+            home_rest_days=home_factors.rest_days,
+            away_rest_days=away_factors.rest_days,
+        )
+
+        # Update factors with rest advantage (assigned to home team by convention)
+        home_factors.rest_advantage = rest_advantage
+
+        # Recalculate totals with rest advantage included
+        home_factors.total_adjustment = (
+            home_factors.rest_advantage
+            + home_factors.letdown_penalty
+            + home_factors.lookahead_penalty
+            + home_factors.rivalry_boost
+        )
+        away_factors.total_adjustment = (
+            away_factors.rest_advantage  # 0 - rest differential is on home side
+            + away_factors.letdown_penalty
+            + away_factors.lookahead_penalty
+            + away_factors.rivalry_boost
         )
 
         net_adjustment = home_factors.total_adjustment - away_factors.total_adjustment
 
         breakdown = {
-            "home_bye": home_factors.bye_week_advantage,
-            "away_bye": away_factors.bye_week_advantage,
+            # Rest days and differential (replaces bye week)
+            "home_rest_days": home_factors.rest_days,
+            "away_rest_days": away_factors.rest_days,
+            "rest_advantage": rest_advantage,
+            # Legacy fields for backward compatibility
+            "home_bye": home_factors.bye_week_advantage,  # Now reflects rest_advantage
+            "away_bye": away_factors.bye_week_advantage,  # Always 0 (differential on home)
+            # Other factors
             "home_letdown": home_factors.letdown_penalty,
             "away_letdown": away_factors.letdown_penalty,
             "home_lookahead": home_factors.lookahead_penalty,

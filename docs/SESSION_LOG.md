@@ -360,6 +360,27 @@
     - `scripts/run_weekly.py`: Load historical rankings before predictions
   - **Backward compatibility:** Falls back to current rankings if historical not available
 
+- **Replaced Binary Bye Week with Rest Day Differential Calculation**
+  - **Problem:** `check_bye_week()` was binary (played last week or not)
+  - **CFB Context:** College football isn't just Saturdays. MACtion Tuesday/Wednesday and Thursday/Friday games create meaningful rest differentials:
+    - **Mini-bye:** Thursday game → following Saturday = 9 days rest (advantage)
+    - **Short week:** Saturday game → Thursday = 5 days rest (disadvantage)
+    - **Normal:** Saturday → Saturday = 7 days rest (baseline)
+  - **Solution:**
+    1. Added `calculate_rest_days()` method using actual game `start_date`
+    2. Added `calculate_rest_advantage()` method: `(home_rest - away_rest) × 0.5 pts/day`
+    3. Capped at ±1.5 pts (equivalent to full bye week advantage)
+    4. Updated `SituationalFactors` dataclass to include `rest_days` and `rest_advantage`
+    5. Updated `get_matchup_adjustment()` to compute rest differential
+  - **Examples:**
+    - Oregon (Thu game, 9 days) vs Texas (Sat game, 7 days): Oregon +1.0 pts rest advantage
+    - Toledo short week (Sat → Thu, 5 days) vs normal opponent: Toledo -1.0 pts penalty
+  - **Files modified:**
+    - `src/adjustments/situational.py`: New rest day calculation methods
+    - `src/predictions/spread_generator.py`: Pass `game_date` through pipeline
+    - `scripts/backtest.py`: Pass `start_date` to predict_spread
+  - **Backward compatibility:** Falls back to binary bye week check if dates unavailable
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints

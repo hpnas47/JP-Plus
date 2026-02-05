@@ -137,10 +137,12 @@ Example: If raw stack = 7 pts (3.5 HFA + 2.0 travel + 1.5 altitude), the smoothe
 **Pace Adjustment (Triple-Option):** Triple-option teams (Army, Navy, Air Force, Kennesaw State) run significantly fewer plays per game (~55 vs ~70 for standard offenses). This creates more variance in outcomes—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001). To account for this reduced game volume, JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
 
 **Situational Factors:** JP+ adjusts for scheduling dynamics that affect team performance:
-- **Bye week advantage (+1.5 pts):** Teams coming off bye week are better rested and prepared
+- **Rest differential (±0.5 pts/day):** CFB isn't just Saturdays—Thursday MACtion and short weeks matter
 - **Letdown spot (-1.5 pts):** Team beat a top-15 opponent last week, now facing unranked opponent
 - **Lookahead spot (-1.5 pts):** Team has a rival or top-10 opponent next week
 - **Rivalry boost (+1.0 pts):** Underdog in rivalry game only
+
+**Rest Day Calculation:** JP+ calculates actual days of rest using game dates, not just "did they have a bye?" A team playing Thursday → Saturday has a mini-bye (9 days rest), while Saturday → Thursday is a short week (5 days). The adjustment is calculated as `(home_rest - away_rest) × 0.5 pts/day`, capped at ±1.5 pts. Example: Oregon coming off a Thursday game (+9 days) vs Texas from Saturday (+7 days) = Oregon gets +1.0 pts rest advantage.
 
 **Critical for letdown detection:** CFB rankings are volatile—a team ranked #15 in Week 3 may be unranked by Week 8. JP+ uses the **historical ranking at the time of the game**, not the current ranking. For example, if Oregon beats #2 Ohio State in Week 7 and then plays unranked Purdue in Week 8, JP+ correctly identifies the letdown spot using Ohio State's Week 7 ranking, even if they've since dropped in the polls.
 

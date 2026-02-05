@@ -3,6 +3,7 @@
 import logging
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 import pandas as pd
@@ -465,6 +466,7 @@ class SpreadGenerator:
         rankings: Optional[dict[str, int]] = None,
         neutral_site: bool = False,
         historical_rankings: Optional[HistoricalRankings] = None,
+        game_date: Optional[datetime] = None,
     ) -> PredictedSpread:
         """Generate predicted spread for a matchup.
 
@@ -476,6 +478,7 @@ class SpreadGenerator:
             rankings: Team rankings (current week snapshot, for situational adjustments)
             neutral_site: Whether game is at neutral site
             historical_rankings: Week-by-week historical rankings (for letdown spot detection)
+            game_date: Date of current game (for rest day calculation)
 
         Returns:
             PredictedSpread with full component breakdown
@@ -526,6 +529,7 @@ class SpreadGenerator:
                 rankings=rankings,
                 home_is_favorite=home_is_favorite,
                 historical_rankings=historical_rankings,
+                game_date=game_date,
             )
             components.situational = adj
 
@@ -608,9 +612,9 @@ class SpreadGenerator:
         """Generate predictions for a full week of games.
 
         Args:
-            games: List of game dicts with 'home_team', 'away_team', 'neutral_site'
+            games: List of game dicts with 'home_team', 'away_team', 'neutral_site', 'start_date'
             week: Week number
-            schedule_df: Full season schedule
+            schedule_df: Full season schedule (must have start_date for rest calculation)
             rankings: Team rankings (current week snapshot)
             historical_rankings: Week-by-week historical rankings (for letdown spot)
 
@@ -620,6 +624,9 @@ class SpreadGenerator:
         predictions = []
 
         for game in games:
+            # Extract game date for rest day calculation
+            game_date = game.get("start_date")
+
             pred = self.predict_spread(
                 home_team=game["home_team"],
                 away_team=game["away_team"],
@@ -628,6 +635,7 @@ class SpreadGenerator:
                 rankings=rankings,
                 neutral_site=game.get("neutral_site", False),
                 historical_rankings=historical_rankings,
+                game_date=game_date,
             )
             predictions.append(pred)
 

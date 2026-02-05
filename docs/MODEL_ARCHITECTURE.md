@@ -420,10 +420,29 @@ Situational factors capture psychological and scheduling dynamics that affect te
 
 | Factor | Value | Condition |
 |--------|-------|-----------|
-| **Bye Week** | +1.5 pts | Team coming off bye week |
+| **Rest Differential** | ±0.5 pts/day | Based on actual days of rest between games |
 | **Letdown Spot** | -1.5 pts | Beat top-15 team last week, now facing unranked opponent |
 | **Lookahead Spot** | -1.5 pts | Rival or top-10 opponent next week |
 | **Rivalry Boost** | +1.0 pts | Underdog in rivalry game only |
+
+#### Rest Day Calculation (Replaces Binary Bye Week)
+
+CFB is not just Saturdays—Tuesday/Wednesday MACtion and Thursday/Friday games create meaningful rest differentials:
+
+| Scenario | Days of Rest | Example |
+|----------|-------------|---------|
+| **Bye Week** | 14+ days | Team didn't play previous week |
+| **Mini-Bye** | 9-10 days | Thursday → following Saturday |
+| **Normal** | 6-7 days | Saturday → Saturday |
+| **Short Week** | 4-5 days | Saturday → Thursday |
+
+JP+ calculates actual days of rest using game `start_date` and applies a differential adjustment:
+- **Formula:** `rest_advantage = (home_rest - away_rest) × 0.5 pts/day`
+- **Cap:** ±1.5 pts maximum (equivalent to full bye week advantage)
+
+**Examples:**
+- Oregon (Thu game) vs Texas (Sat game) on Saturday: Oregon has +2 days rest = **+1.0 pts**
+- Toledo (Sat game) vs opponent (also Sat) on Thursday: Toledo has -2 days rest = **-1.0 pts**
 
 #### Historical Rankings for Letdown Detection
 

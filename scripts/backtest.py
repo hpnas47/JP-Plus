@@ -687,6 +687,7 @@ def walk_forward_predict(
                     schedule_df=games_df_pd,
                     rankings=rankings,
                     historical_rankings=historical_rankings,
+                    game_date=game.get("start_date"),  # For rest day calculation
                 )
 
                 actual_margin = game["home_points"] - game["away_points"]
