@@ -107,7 +107,26 @@ class HistoricalRankings:
 
 @dataclass
 class SituationalFactors:
-    """Container for situational adjustment factors."""
+    """Container for situational adjustment factors with correlated stack smoothing.
+
+    Implements a three-bucket smoothing algorithm to prevent double-counting
+    between correlated adjustment factors:
+
+    Bucket A (Physical/Fatigue): rest_advantage (if negative), consecutive_road_penalty,
+        travel_penalty, altitude_penalty. These are highly correlated - a team traveling
+        cross-country for a consecutive road game is fatigued, but not 2x fatigued.
+        Damping: Largest factor at 100%, remaining at 25%.
+
+    Bucket B (Mental/Focus): letdown_penalty, lookahead_penalty, sandwich_penalty.
+        Moderately correlated - a team looking ahead while in letdown is distracted,
+        but the distractions don't fully stack.
+        Damping: Largest at 100%, second at 50%, others at 25%.
+
+    Bucket C (Boosts): rivalry_boost, rest_advantage (if positive).
+        Rare positive factors that stack linearly (no damping).
+
+    Global Cap: ±7.0 points to prevent unrealistic adjustments.
+    """
 
     team: str
     rest_advantage: float = 0.0  # Days of rest differential (replaces binary bye_week)
@@ -117,22 +136,132 @@ class SituationalFactors:
     sandwich_penalty: float = 0.0  # Extra penalty when BOTH letdown AND lookahead apply
     rivalry_boost: float = 0.0
     consecutive_road_penalty: float = 0.0  # Penalty for 2nd consecutive road game
+
+    # External physical factors (passed in from other adjusters)
+    travel_penalty: float = 0.0  # From TravelAdjuster (negative value)
+    altitude_penalty: float = 0.0  # From AltitudeAdjuster (negative value)
+
+    # Computed fields
     total_adjustment: float = 0.0
+    smoothed_physical: float = 0.0  # For diagnostics
+    smoothed_mental: float = 0.0  # For diagnostics
+    total_boosts: float = 0.0  # For diagnostics
+
+    # Constants for smoothing
+    GLOBAL_CAP: float = 7.0
+    TRAVEL_CONSECUTIVE_THRESHOLD: float = 1.5  # Travel penalty above this reduces consecutive road
+    PHYSICAL_SECONDARY_WEIGHT: float = 0.25  # Weight for non-largest physical factors
+    MENTAL_SECOND_WEIGHT: float = 0.50  # Weight for second-largest mental factor
+    MENTAL_OTHER_WEIGHT: float = 0.25  # Weight for remaining mental factors
 
     def __post_init__(self):
-        self.total_adjustment = (
-            self.rest_advantage
-            + self.letdown_penalty
-            + self.lookahead_penalty
-            + self.sandwich_penalty
-            + self.rivalry_boost
-            + self.consecutive_road_penalty
-        )
+        """Calculate total_adjustment using three-bucket correlated stack smoothing."""
+        # =====================================================================
+        # BUCKET A: Physical/Fatigue (High Correlation)
+        # Components: negative rest, consecutive_road, travel, altitude
+        # =====================================================================
+        physical_factors = []
+
+        # Rest advantage only counts as physical if negative (short week fatigue)
+        if self.rest_advantage < 0:
+            physical_factors.append(abs(self.rest_advantage))
+
+        # Consecutive road penalty - but reduce if travel is significant
+        # (travel itself accounts for much of the consecutive road difficulty)
+        consecutive_adjusted = abs(self.consecutive_road_penalty)
+        if abs(self.travel_penalty) > self.TRAVEL_CONSECUTIVE_THRESHOLD and consecutive_adjusted > 0:
+            consecutive_adjusted *= 0.5  # 50% reduction when travel is significant
+
+        if consecutive_adjusted > 0:
+            physical_factors.append(consecutive_adjusted)
+
+        # Travel and altitude (already negative, take absolute value)
+        if self.travel_penalty != 0:
+            physical_factors.append(abs(self.travel_penalty))
+        if self.altitude_penalty != 0:
+            physical_factors.append(abs(self.altitude_penalty))
+
+        # Physical damping: largest at 100%, all others at 25%
+        # Rationale: Physical fatigue hits a wall - you can only be so tired
+        if physical_factors:
+            physical_factors.sort(reverse=True)
+            self.smoothed_physical = physical_factors[0]  # Largest at 100%
+            for factor in physical_factors[1:]:
+                self.smoothed_physical += factor * self.PHYSICAL_SECONDARY_WEIGHT
+        else:
+            self.smoothed_physical = 0.0
+
+        # =====================================================================
+        # BUCKET B: Mental/Focus (Moderate Correlation)
+        # Components: letdown, lookahead, sandwich
+        # =====================================================================
+        mental_factors = []
+
+        if self.letdown_penalty != 0:
+            mental_factors.append(abs(self.letdown_penalty))
+        if self.lookahead_penalty != 0:
+            mental_factors.append(abs(self.lookahead_penalty))
+        if self.sandwich_penalty != 0:
+            mental_factors.append(abs(self.sandwich_penalty))
+
+        # Mental damping: largest at 100%, second at 50%, others at 25%
+        # Rationale: Mental distractions compound but with diminishing returns
+        if mental_factors:
+            mental_factors.sort(reverse=True)
+            self.smoothed_mental = mental_factors[0]  # Largest at 100%
+            if len(mental_factors) > 1:
+                self.smoothed_mental += mental_factors[1] * self.MENTAL_SECOND_WEIGHT
+            for factor in mental_factors[2:]:
+                self.smoothed_mental += factor * self.MENTAL_OTHER_WEIGHT
+        else:
+            self.smoothed_mental = 0.0
+
+        # =====================================================================
+        # BUCKET C: Boosts (Positive factors - stack linearly)
+        # Components: rivalry_boost, positive rest_advantage (bye week)
+        # =====================================================================
+        self.total_boosts = 0.0
+
+        # Rivalry boost (always positive)
+        if self.rivalry_boost > 0:
+            self.total_boosts += self.rivalry_boost
+
+        # Rest advantage only counts as boost if positive (bye week advantage)
+        if self.rest_advantage > 0:
+            self.total_boosts += self.rest_advantage
+
+        # =====================================================================
+        # FINAL CALCULATION
+        # total = boosts - smoothed_physical - smoothed_mental
+        # =====================================================================
+        raw_total = self.total_boosts - self.smoothed_physical - self.smoothed_mental
+
+        # Apply global cap (±7.0 points)
+        self.total_adjustment = max(-self.GLOBAL_CAP, min(self.GLOBAL_CAP, raw_total))
 
     # Backward compatibility alias
     @property
     def bye_week_advantage(self) -> float:
         return self.rest_advantage
+
+    def get_smoothing_breakdown(self) -> dict:
+        """Return breakdown of smoothing calculation for diagnostics."""
+        return {
+            "physical_bucket": -self.smoothed_physical,
+            "mental_bucket": -self.smoothed_mental,
+            "boosts_bucket": self.total_boosts,
+            "raw_total": self.total_boosts - self.smoothed_physical - self.smoothed_mental,
+            "capped_total": self.total_adjustment,
+            "was_capped": abs(self.total_boosts - self.smoothed_physical - self.smoothed_mental) > self.GLOBAL_CAP,
+        }
+
+    def recalculate(self) -> None:
+        """Recalculate total_adjustment after fields have been modified.
+
+        Call this after updating any factor fields (e.g., rest_advantage,
+        travel_penalty) to recompute the smoothed total_adjustment.
+        """
+        self.__post_init__()
 
 
 class SituationalAdjuster:
@@ -750,16 +879,10 @@ class SituationalAdjuster:
                 f"penalty: {self.consecutive_road_penalty}"
             )
 
-        # Note: rest_advantage is calculated in get_matchup_adjustment based on differential
-        # Total will be recalculated there
-        factors.total_adjustment = (
-            factors.rest_advantage  # Will be 0 here, set in get_matchup_adjustment
-            + factors.letdown_penalty
-            + factors.lookahead_penalty
-            + factors.sandwich_penalty
-            + factors.rivalry_boost
-            + factors.consecutive_road_penalty
-        )
+        # Note: rest_advantage and travel/altitude are set in get_matchup_adjustment
+        # Recalculate will be called there after all factors are set
+        # For now, do a preliminary recalculate with what we have
+        factors.recalculate()
 
         return factors
 
@@ -822,23 +945,11 @@ class SituationalAdjuster:
         # Update factors with rest advantage (assigned to home team by convention)
         home_factors.rest_advantage = rest_advantage
 
-        # Recalculate totals with rest advantage included
-        home_factors.total_adjustment = (
-            home_factors.rest_advantage
-            + home_factors.letdown_penalty
-            + home_factors.lookahead_penalty
-            + home_factors.sandwich_penalty
-            + home_factors.rivalry_boost
-            + home_factors.consecutive_road_penalty
-        )
-        away_factors.total_adjustment = (
-            away_factors.rest_advantage  # 0 - rest differential is on home side
-            + away_factors.letdown_penalty
-            + away_factors.lookahead_penalty
-            + away_factors.sandwich_penalty
-            + away_factors.rivalry_boost
-            + away_factors.consecutive_road_penalty
-        )
+        # Recalculate totals using correlated stack smoothing
+        # Note: travel_penalty and altitude_penalty can be set externally before
+        # calling get_matchup_adjustment, or passed through the factors
+        home_factors.recalculate()
+        away_factors.recalculate()
 
         net_adjustment = home_factors.total_adjustment - away_factors.total_adjustment
 
@@ -861,6 +972,18 @@ class SituationalAdjuster:
             "away_consecutive_road": away_factors.consecutive_road_penalty,
             "home_rivalry": home_factors.rivalry_boost,
             "away_rivalry": away_factors.rivalry_boost,
+            # External physical factors
+            "home_travel": home_factors.travel_penalty,
+            "away_travel": away_factors.travel_penalty,
+            "home_altitude": home_factors.altitude_penalty,
+            "away_altitude": away_factors.altitude_penalty,
+            # Smoothing diagnostics
+            "home_smoothed_physical": -home_factors.smoothed_physical,
+            "away_smoothed_physical": -away_factors.smoothed_physical,
+            "home_smoothed_mental": -home_factors.smoothed_mental,
+            "away_smoothed_mental": -away_factors.smoothed_mental,
+            "home_total_boosts": home_factors.total_boosts,
+            "away_total_boosts": away_factors.total_boosts,
             "net": net_adjustment,
         }
 
