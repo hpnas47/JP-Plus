@@ -1,4 +1,4 @@
-```md
+
 # AUDIT_FIXLIST_FINISHING_DRIVES.md
 
 **Target:** `src/models/finishing_drives.py`  
@@ -119,4 +119,5 @@ If this adjustment is applied to spreads, the current implementation can introdu
 - No fabricated minimums.
 - Output `overall_rating` distribution is stable (no unexplained extreme values).
 - The adjustment improves or at least does not degrade backtest MAE/ATS when enabled.
+
 ```
