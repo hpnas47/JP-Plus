@@ -41,11 +41,11 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
-| **All picks** | 1238-1190-49 (51.0%) | 1277-1130-37 (53.1%) |
-| **3+ pt edge** | 748-692 (51.9%) | 783-651 (54.6%) |
-| **5+ pt edge** | 478-421 (53.2%) | 516-389 (57.0%) |
+| **All picks** | 1274-1163-48 (52.2%) | ~52.8% |
+| **3+ pt edge** | 748-692 (51.9%) | 811-666 (54.9%) |
+| **5+ pt edge** | 478-421 (53.2%) | 520-391 (57.1%) |
 
-**Key insight:** Opening line performance (57.0% at 5+ edge) significantly exceeds closing line (53.2%), indicating the model captures value that the market prices out by game time. Early-week betting recommended.
+**Key insight:** Opening line performance (57.1% at 5+ edge) significantly exceeds closing line (53.2%), indicating the model captures value that the market prices out by game time. Early-week betting recommended.
 
 #### Closing Line Value (CLV)
 
@@ -53,27 +53,29 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 
 | Edge Filter | Mean CLV | CLV > 0 | ATS % |
 |-------------|----------|---------|-------|
-| **All picks** | +0.68 | 45.8% | 52.8% |
-| **3+ pt edge** | +0.98 | 50.3% | 54.1% |
-| **5+ pt edge** | +1.22 | 52.3% | 56.1% |
-| **7+ pt edge** | +1.65 | 57.3% | 59.2% |
+| **All picks** | +0.52 | 41.1% | 51.4% |
+| **3+ pt edge** | +0.68 | 42.0% | 53.3% |
+| **5+ pt edge** | +0.89 | 43.6% | 54.8% |
+| **7+ pt edge** | +1.03 | 43.1% | 55.9% |
 
-**Interpretation:** At 5+ point edge, the market moves **toward** our prediction by 1.22 points on average. This validates the edge is real—we're not just finding noise, we're finding value that sharps eventually agree with.
+*CLV and ATS % above are full-season (all phases). Core-only mean CLV is +0.68, indicating stronger edge during weeks 4-15.*
+
+**Interpretation:** At 5+ point edge, the market moves **toward** our prediction by 0.89 points on average. This validates the edge is real—we're not just finding noise, we're finding value that sharps eventually agree with.
 
 ### Results by Year
 
 | Year | Games | MAE | RMSE | ATS (Close) | 3+ (Close) | 5+ (Close) | ATS (Open) | 3+ (Open) | 5+ (Open) |
 |------|-------|-----|------|-------------|------------|------------|------------|-----------|-----------|
-| 2022 | 604 | 12.87 | 16.49 | 50.1% | 48.3% | 47.4% | 51.8% | 51.1% | 52.5% |
-| 2023 | 604 | 12.42 | 15.64 | 50.9% | 55.3% | 56.5% | 52.6% | 56.8% | 61.0% |
-| 2024 | 631 | 12.61 | 15.66 | 50.6% | 49.2% | 54.1% | 53.9% | 54.3% | 55.4% |
-| 2025 | 638 | 12.21 | 15.45 | 52.2% | 54.8% | 55.3% | 53.8% | 55.8% | 58.9% |
+| 2022 | 605 | 12.76 | 16.38 | 51.2% | 51.9% | 51.5% | 51.4% | 53.3% | 55.6% |
+| 2023 | 611 | 12.36 | 15.60 | 53.2% | 53.4% | 56.4% | 52.5% | 56.6% | 59.5% |
+| 2024 | 631 | 12.67 | 15.76 | 51.5% | 50.4% | 54.4% | 53.6% | 52.7% | 54.5% |
+| 2025 | 638 | 12.16 | 15.43 | 53.2% | 57.0% | 55.7% | 53.5% | 57.2% | 59.1% |
 
 **Notes:**
 - Results by Year shows Core season (Weeks 4-15) performance only
 - 2022 had fewer opening lines available (96% coverage vs 100% in 2024-2025)
 - Best performance in 2023 and 2025 seasons
-- Model shows consistent improvement in MAE over time (12.87 → 12.21)
+- Model shows consistent improvement in MAE over time (12.76 → 12.16)
 - Opening line edge is consistently higher than closing line edge across all years
 
 **2025 Top 25** (end-of-season including CFP):

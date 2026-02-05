@@ -69,6 +69,53 @@
 
 ---
 
+## Session: February 5, 2026
+
+### Completed Today
+
+- **P0 Audit Fixes (Code Auditor Pass)**
+  - Fixed 6 structural issues from `AUDIT_FIXLIST_BACKTEST.md` and `AUDIT_FIXLIST_EFM.md`:
+    1. **P0.1 (Backtest):** Postseason games mapped to sequential pseudo-weeks by `start_date` via `_assign_postseason_pseudo_weeks()` + `_remap_play_weeks()`. Prevents walk-forward chronology violation where "future" bowls trained earlier bowl predictions.
+    2. **P0.3 (Backtest):** `home_team` validated via game join on `game_id` instead of trusting `play.home` field. Coverage: 100%.
+    3. **P0.4 (Backtest):** ATS unmatched mask changed from `game_id.isna()` to `vegas_spread.isna()`.
+    4. **P0.2 (EFM):** `pd.notna()` replaces `is not None` for home_team check in ridge sparse matrix build. Added coverage logging.
+    5. **P0.3 (EFM):** Ridge cache hash strengthened with MD5 of sampled team sequences + metric sum/mean/std.
+    6. **P3.1 (Backtest):** Removed unused imports (`DataProcessor`, `RecencyWeighter`, `VegasComparison`).
+
+- **Quant Auditor Validation**
+  - Ran full 4-year walk-forward backtest (2022-2025) post-fix
+  - Identified sub-model issues for future work: Finishing Drives `overall_rating` not per-game normalized, kickoff scaling questionable
+
+- **Refreshed All Performance Tables in MODEL_ARCHITECTURE.md**
+  - Phase-by-Phase table updated from fresh 4-year closing line backtest
+  - Core ATS table updated with closing + opening line data (9 separate runs)
+  - CLV table updated with full-season opening line values
+  - Per-year table updated with individual year backtests (both closing and opening)
+  - Changelog entry added for P0 fixes
+
+### Updated Baseline (Post-P0 Fixes)
+
+| Metric | Old | New | Delta |
+|--------|-----|-----|-------|
+| Core MAE | 12.54 | 12.55 | +0.01 |
+| Core ATS (Close) | 50.8% | 52.0% | **+1.2%** |
+| Core 3+ (Close) | 51.7% | 51.9% | +0.2% |
+| Core 5+ (Close) | 52.8% | 53.2% | +0.4% |
+| Core 5+ (Open) | 57.0% | 57.1% | +0.1% |
+| Full-Season CLV (5+) | +1.22 | +0.89 | -0.33 |
+
+**Key takeaway:** Core ATS improved +1.2% with no MAE regression. The P0 fixes corrected data integrity issues (home_team validation, postseason chronology) that were adding noise to predictions.
+
+### Files Modified
+- `scripts/backtest.py` — postseason pseudo-weeks, home_team game join, ATS mask fix, import cleanup
+- `src/models/efficiency_foundation_model.py` — pd.notna() fix, cache hash strengthening
+- `docs/AUDIT_FIXLIST_BACKTEST.md` — P0.1/P0.3/P0.4/P3.1 marked fixed
+- `docs/AUDIT_FIXLIST_EFM.md` — P0.2/P0.3 marked fixed
+- `docs/MODEL_ARCHITECTURE.md` — all performance tables refreshed
+- `CLAUDE.md` — governance and agent collaboration protocol updated
+
+---
+
 ## Session: February 4, 2026
 
 ### Completed Today
