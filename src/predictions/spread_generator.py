@@ -10,7 +10,7 @@ import pandas as pd
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
 from src.adjustments.home_field import HomeFieldAdvantage
-from src.adjustments.situational import SituationalAdjuster
+from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
@@ -464,6 +464,7 @@ class SpreadGenerator:
         schedule_df: Optional[pd.DataFrame] = None,
         rankings: Optional[dict[str, int]] = None,
         neutral_site: bool = False,
+        historical_rankings: Optional[HistoricalRankings] = None,
     ) -> PredictedSpread:
         """Generate predicted spread for a matchup.
 
@@ -472,8 +473,9 @@ class SpreadGenerator:
             away_team: Away team name
             week: Current week number (for situational adjustments)
             schedule_df: Schedule DataFrame (for situational adjustments)
-            rankings: Team rankings (for situational adjustments)
+            rankings: Team rankings (current week snapshot, for situational adjustments)
             neutral_site: Whether game is at neutral site
+            historical_rankings: Week-by-week historical rankings (for letdown spot detection)
 
         Returns:
             PredictedSpread with full component breakdown
@@ -523,6 +525,7 @@ class SpreadGenerator:
                 schedule_df=schedule_df,
                 rankings=rankings,
                 home_is_favorite=home_is_favorite,
+                historical_rankings=historical_rankings,
             )
             components.situational = adj
 
@@ -600,6 +603,7 @@ class SpreadGenerator:
         week: int,
         schedule_df: Optional[pd.DataFrame] = None,
         rankings: Optional[dict[str, int]] = None,
+        historical_rankings: Optional[HistoricalRankings] = None,
     ) -> list[PredictedSpread]:
         """Generate predictions for a full week of games.
 
@@ -607,7 +611,8 @@ class SpreadGenerator:
             games: List of game dicts with 'home_team', 'away_team', 'neutral_site'
             week: Week number
             schedule_df: Full season schedule
-            rankings: Team rankings
+            rankings: Team rankings (current week snapshot)
+            historical_rankings: Week-by-week historical rankings (for letdown spot)
 
         Returns:
             List of PredictedSpread objects
@@ -622,6 +627,7 @@ class SpreadGenerator:
                 schedule_df=schedule_df,
                 rankings=rankings,
                 neutral_site=game.get("neutral_site", False),
+                historical_rankings=historical_rankings,
             )
             predictions.append(pred)
 

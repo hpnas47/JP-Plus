@@ -339,6 +339,27 @@
   - **Benchmark script:** `scripts/benchmark.py` (created)
   - **Report:** `data/outputs/benchmark_report_20260204_193446.txt`
 
+- **Fixed Historical Rankings for Letdown Spot Detection (Critical Model Fix)**
+  - **Problem:** `check_letdown_spot()` used current rankings to evaluate previous opponents
+  - **CFB Context:** Rankings are volatile in college football. A team ranked #15 in Week 3 may be unranked by Week 8, or vice versa. When evaluating "did they beat a ranked team last week?", we must use the rank AT THE TIME of the game, not today's ranking.
+  - **Example of bug:**
+    - Week 7: Oregon beats #2 Ohio State
+    - Week 8: Oregon plays unranked Purdue
+    - **Old behavior:** If Ohio State dropped to #20 by Week 10 when we run backtest, no letdown detected (wrong)
+    - **New behavior:** Uses Week 7 historical ranking (#2), correctly detects letdown spot
+  - **Solution:**
+    1. Added `HistoricalRankings` class to store week-by-week AP poll data
+    2. Added `get_rankings(year, week)` method to CFBDClient
+    3. Modified `check_letdown_spot()` to accept `historical_rankings` parameter
+    4. Updated `SituationalAdjuster`, `SpreadGenerator`, and backtest to load and pass historical rankings
+  - **Files modified:**
+    - `src/api/cfbd_client.py`: Added `rankings_api` property and `get_rankings()` method
+    - `src/adjustments/situational.py`: Added `HistoricalRankings` class, updated all spot-checking methods
+    - `src/predictions/spread_generator.py`: Added `historical_rankings` to `predict_spread()` and `predict_week()`
+    - `scripts/backtest.py`: Load historical rankings in `fetch_all_season_data()`, pass through pipeline
+    - `scripts/run_weekly.py`: Load historical rankings before predictions
+  - **Backward compatibility:** Falls back to current rankings if historical not available
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints

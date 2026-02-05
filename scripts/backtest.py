@@ -35,7 +35,7 @@ from src.models.efficiency_foundation_model import (
 )
 from src.models.preseason_priors import PreseasonPriors
 from src.adjustments.home_field import HomeFieldAdvantage
-from src.adjustments.situational import SituationalAdjuster
+from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.models.finishing_drives import FinishingDrivesModel
@@ -476,6 +476,7 @@ def walk_forward_predict(
     fcs_penalty_elite: float = 18.0,
     fcs_penalty_standard: float = 32.0,
     st_plays_df: Optional[pl.DataFrame] = None,
+    historical_rankings: Optional[HistoricalRankings] = None,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -505,6 +506,7 @@ def walk_forward_predict(
         fcs_penalty_elite: Points for elite FCS teams (default 18.0)
         fcs_penalty_standard: Points for standard FCS teams (default 32.0)
         st_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
+        historical_rankings: Week-by-week AP poll rankings for letdown spot detection
 
     Returns:
         List of prediction result dictionaries
@@ -684,6 +686,7 @@ def walk_forward_predict(
                     week=pred_week,
                     schedule_df=games_df_pd,
                     rankings=rankings,
+                    historical_rankings=historical_rankings,
                 )
 
                 actual_margin = game["home_points"] - game["away_points"]
@@ -1275,7 +1278,13 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
     warnings = []
 
     for year in years:
-        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
+        # Unpack season data (historical_rankings added for letdown spot detection)
+        season_tuple = season_data[year]
+        if len(season_tuple) == 9:
+            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
+        else:
+            # Backward compatibility for old 8-tuple format
+            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
 
         n_games = len(games_df)
         n_betting = len(betting_df)
@@ -1351,7 +1360,7 @@ def fetch_all_season_data(
     use_portal: bool = True,
     portal_scale: float = 0.15,
 ) -> dict:
-    """Fetch and cache all season data (games, betting, plays, turnovers, priors, fbs_teams).
+    """Fetch and cache all season data (games, betting, plays, turnovers, priors, fbs_teams, historical_rankings).
 
     Args:
         years: List of years to fetch
@@ -1360,7 +1369,8 @@ def fetch_all_season_data(
         portal_scale: How much to weight portal impact (default 0.15)
 
     Returns:
-        Dict mapping year to (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df)
+        Dict mapping year to (games_df, betting_df, plays_df, turnover_df, priors,
+                              efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings)
     """
     client = CFBDClient()
     season_data = {}
@@ -1398,6 +1408,13 @@ def fetch_all_season_data(
         fbs_teams = {t.school for t in fbs_teams_list}
         logger.debug(f"Loaded {len(fbs_teams)} FBS teams")
 
+        # Load historical AP rankings (for letdown spot detection)
+        historical_rankings = HistoricalRankings("AP Top 25")
+        try:
+            historical_rankings.load_from_api(client, year)
+        except Exception as e:
+            logger.warning(f"Could not load historical rankings for {year}: {e}")
+
         priors = None
         if use_priors:
             try:
@@ -1414,7 +1431,7 @@ def fetch_all_season_data(
                 logger.warning(f"Could not load preseason priors for {year}: {e}")
                 priors = None
 
-        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df)
+        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings)
 
     return season_data
 
@@ -1494,7 +1511,14 @@ def run_backtest(
         # P3.9: Per-year progress at debug level for quiet runs
         logger.debug(f"Backtesting {year} season...")
 
-        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
+        # Unpack season data (historical_rankings added for letdown spot detection)
+        season_tuple = season_data[year]
+        if len(season_tuple) == 9:
+            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
+        else:
+            # Backward compatibility for old 8-tuple format
+            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
+            historical_rankings = None
 
         # Walk-forward predictions using EFM
         predictions = walk_forward_predict(
@@ -1517,6 +1541,7 @@ def run_backtest(
             fcs_penalty_elite=fcs_penalty_elite,
             fcs_penalty_standard=fcs_penalty_standard,
             st_plays_df=st_plays_df,
+            historical_rankings=historical_rankings,
         )
         all_predictions.extend(predictions)
 

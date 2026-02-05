@@ -30,7 +30,7 @@ from src.models.finishing_drives import FinishingDrivesModel
 from src.models.efficiency_foundation_model import EfficiencyFoundationModel
 from src.models.preseason_priors import PreseasonPriors
 from src.adjustments.home_field import HomeFieldAdvantage
-from src.adjustments.situational import SituationalAdjuster
+from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
@@ -435,13 +435,22 @@ def run_predictions(
         # Build schedule for situational analysis
         schedule_df = build_schedule_df(client, year)
 
+        # Load historical AP rankings for letdown spot detection
+        historical_rankings = HistoricalRankings("AP Top 25")
+        try:
+            historical_rankings.load_from_api(client, year)
+        except Exception as e:
+            logger.warning(f"Could not load historical rankings: {e}")
+            historical_rankings = None
+
         # Generate predictions
         logger.info(f"Generating predictions for {len(upcoming_games)} games...")
         predictions = spread_gen.predict_week(
             games=upcoming_games,
             week=week,
             schedule_df=schedule_df,
-            rankings=None,  # Could fetch AP/CFP rankings if desired
+            rankings=None,  # Current rankings (could also fetch AP/CFP here)
+            historical_rankings=historical_rankings,
         )
 
         predictions_df = spread_gen.predictions_to_dataframe(predictions)

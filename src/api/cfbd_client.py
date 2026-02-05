@@ -52,6 +52,7 @@ class CFBDClient:
         self._teams_api: Optional[cfbd.TeamsApi] = None
         self._stats_api: Optional[cfbd.StatsApi] = None
         self._ratings_api: Optional[cfbd.RatingsApi] = None
+        self._rankings_api: Optional[cfbd.RankingsApi] = None
 
         # Retry settings
         self.max_retries = settings.max_retries
@@ -98,6 +99,12 @@ class CFBDClient:
         if self._ratings_api is None:
             self._ratings_api = cfbd.RatingsApi(cfbd.ApiClient(self.configuration))
         return self._ratings_api
+
+    @property
+    def rankings_api(self) -> cfbd.RankingsApi:
+        if self._rankings_api is None:
+            self._rankings_api = cfbd.RankingsApi(cfbd.ApiClient(self.configuration))
+        return self._rankings_api
 
     def _call_with_retry(self, func: callable, *args, **kwargs) -> Any:
         """Execute API call with exponential backoff retry on rate limits."""
@@ -422,6 +429,27 @@ class CFBDClient:
     def get_fpi_ratings(self, year: int) -> list:
         """Get ESPN FPI ratings for teams."""
         return self._call_with_retry(self.ratings_api.get_fpi, year=year)
+
+    def get_rankings(
+        self,
+        year: int,
+        week: Optional[int] = None,
+        season_type: str = "regular",
+    ) -> list:
+        """Get poll rankings (AP, Coaches, CFP, etc.) for a season/week.
+
+        Args:
+            year: Season year
+            week: Week number (if None, returns all weeks)
+            season_type: Season type ("regular", "postseason", "both")
+
+        Returns:
+            List of poll week objects containing poll rankings
+        """
+        kwargs = {"year": year, "season_type": season_type}
+        if week is not None:
+            kwargs["week"] = week
+        return self._call_with_retry(self.rankings_api.get_rankings, **kwargs)
 
     def get_team_talent(self, year: int) -> list:
         """Get team talent composite rankings."""
