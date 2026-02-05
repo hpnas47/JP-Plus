@@ -188,7 +188,7 @@ class SituationalAdjuster:
 
         Args:
             bye_advantage: Points for full bye week (14+ days rest)
-            short_week_penalty: Points penalty per day below normal rest
+            short_week_penalty: Hardcoded penalty when team is on short week vs normal/rested opponent
             letdown_penalty: Points penalty for letdown spot
             letdown_away_multiplier: Multiplier for letdown when team is away (sleepy road game)
             lookahead_penalty: Points penalty for look-ahead spot
@@ -202,7 +202,12 @@ class SituationalAdjuster:
         self.bye_advantage = (
             bye_advantage if bye_advantage is not None else settings.bye_week_advantage
         )
-        # Default: ~0.5 pts per day of rest differential
+        self.short_week_penalty = (
+            short_week_penalty
+            if short_week_penalty is not None
+            else settings.short_week_penalty
+        )
+        # Default: ~0.5 pts per day of rest differential (for non-short-week scenarios)
         self.rest_points_per_day = 0.5
 
         self.letdown_penalty = (
@@ -336,7 +341,11 @@ class SituationalAdjuster:
         home_rest_days: int,
         away_rest_days: int,
     ) -> float:
-        """Calculate rest advantage adjustment.
+        """Calculate rest advantage adjustment with non-linear short week handling.
+
+        Short weeks (<=5 days rest) are significantly worse than the linear model
+        suggests. A team on 5 days rest playing against a team on 7+ days is at
+        a major disadvantage that doesn't scale linearly with the 2-day difference.
 
         Args:
             home_rest_days: Days of rest for home team
@@ -345,13 +354,33 @@ class SituationalAdjuster:
         Returns:
             Points adjustment (positive = home team advantage)
         """
-        rest_diff = home_rest_days - away_rest_days
+        # Detect short week situations (<=5 days is short, >6 is normal/rested)
+        home_short = home_rest_days <= self.SHORT_WEEK_THRESHOLD
+        away_short = away_rest_days <= self.SHORT_WEEK_THRESHOLD
+        home_normal_or_rested = home_rest_days > 6
+        away_normal_or_rested = away_rest_days > 6
 
-        # Categories of advantage:
-        # - Bye vs Normal (7 days diff): ~1.5 pts (full bye advantage)
-        # - Mini-bye vs Normal (2-3 days diff): ~1.0 pts
-        # - Normal vs Short week (2 days diff): ~1.0 pts
-        # - Short week vs Normal (-2 days): ~-1.0 pts
+        # Non-linear short week handling:
+        # Short week vs Normal/Rested is significantly worse than linear model suggests
+        if home_short and away_normal_or_rested:
+            # Home team on short week, away team normal/rested = big home disadvantage
+            logger.debug(
+                f"SHORT WEEK: Home ({home_rest_days} days) vs Away ({away_rest_days} days) "
+                f"- hardcoded penalty: {self.short_week_penalty}"
+            )
+            return self.short_week_penalty  # e.g., -2.5
+
+        if away_short and home_normal_or_rested:
+            # Away team on short week, home team normal/rested = big home advantage
+            logger.debug(
+                f"SHORT WEEK: Away ({away_rest_days} days) vs Home ({home_rest_days} days) "
+                f"- hardcoded advantage: {-self.short_week_penalty}"
+            )
+            return -self.short_week_penalty  # e.g., +2.5
+
+        # Default: Linear calculation for non-short-week scenarios
+        # (both short, both normal, mini-bye vs normal, bye vs normal, etc.)
+        rest_diff = home_rest_days - away_rest_days
 
         if rest_diff == 0:
             return 0.0
