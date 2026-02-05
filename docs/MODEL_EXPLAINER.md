@@ -123,7 +123,7 @@ After calculating base efficiency ratings, JP+ applies game-specific adjustments
 
 ### Scheduling Adjustments
 
-**Rest Differential (±0.5 pts/day, capped at ±1.5 pts):** CFB isn't just Saturdays—MACtion and short weeks matter:
+**Rest Differential:** CFB isn't just Saturdays—MACtion and short weeks matter:
 
 | Scenario | Days Rest | Example |
 |----------|-----------|---------|
@@ -135,20 +135,33 @@ After calculating base efficiency ratings, JP+ applies game-specific adjustments
 
 **Season Opener:** Teams playing their first game of the season get maximum rest (14 days), giving them an advantage over Week 0 teams.
 
-Formula: `(home_rest - away_rest) × 0.5 pts/day`. Example: Oregon (9 days after Thursday game) vs Texas (7 days after Saturday game) = +1.0 pts for Oregon.
+**Non-Linear Short Week Penalty (-2.5 pts):** When one team is on short week (≤5 days) and the opponent is on normal/rested schedule (>6 days), a hardcoded -2.5 pt penalty applies. This isn't a linear calculation—short-week disadvantage is severe.
+
+**Linear Rest (Other Cases):** `(home_rest - away_rest) × 0.5 pts/day` (capped at ±1.5 pts). Example: Oregon (9 days after Thursday game) vs Texas (7 days after Saturday game) = +1.0 pts for Oregon.
+
+**Consecutive Road Games (-1.5 pts):** Teams playing their second straight road game receive a -1.5 pt penalty. Travel fatigue compounds—back-to-back away games exceed the sum of individual road trips.
 
 **Letdown Spot (-2.0 to -2.5 pts):** Team had a "big win" recently, now facing unranked opponent. Big win = beat top-15 team OR beat arch-rival (rivalry hangover). *Uses historical rankings at time of game, not current rankings.*
 
 - **Home letdown:** -2.0 pts (crowd keeps team engaged)
 - **Away letdown:** -2.5 pts (sleepy road game multiplier)
-- **Bye week persistence:** If a team has a bye after a big win, the letdown persists—the "hangover" doesn't disappear just because they had a week off
-- **Staleness threshold:** Effect fades after 3+ weeks since the big win
+- **Bye week persistence:** If a team has a bye after a big win, the letdown persists—the model finds the team's *last played game* regardless of week. The "hangover" doesn't disappear just because they had a week off.
+- **Staleness threshold:** After 3+ weeks since the big win, the emotional effect has faded and letdown doesn't trigger.
 
 **Lookahead Spot (-1.5 pts):** Team has a rival or top-10 opponent next week.
 
 **Sandwich Spot (extra -1.0 pts):** The most dangerous scheduling spot in CFB—when BOTH letdown AND lookahead apply. Team just had a big win and has a big game on deck next week. The unranked team in the middle is the "meat" of the sandwich. Total penalty: -4.5 to -5.0 pts.
 
 **Rivalry Boost (+1.0 pts):** Underdog in rivalry game only.
+
+**Correlated Stack Smoothing:** When multiple situational factors stack on the same team, they're correlated—a team with letdown AND lookahead is already mentally compromised. JP+ uses a three-bucket algorithm to prevent over-counting:
+
+- **Physical factors** (negative rest, consecutive road, travel, altitude): Largest at 100%, others at 25%
+- **Mental factors** (letdown, lookahead, sandwich): Largest at 100%, second at 50%, others at 25%
+- **Boosts** (rivalry, positive rest): Linear sum (no dampening)
+- **Global cap:** ±7.0 points maximum situational adjustment
+
+This prevents over-prediction when scheduling penalties compound while preserving directional signal.
 
 ### Opponent & Pace Adjustments
 

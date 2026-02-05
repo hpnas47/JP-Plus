@@ -266,6 +266,8 @@ EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments.
 | | Altitude | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
 | | Correlated Stack Smoothing | - | Prevents over-prediction when HFA+travel+altitude combine |
 | **Scheduling** | Rest Differential | ±1.5 pts | Based on actual days between games |
+| | Short Week Penalty | -2.5 pts | One team on short week (≤5 days) vs normal/rested opponent |
+| | Consecutive Road | -1.5 pts | Second straight road game (travel fatigue compounds) |
 | | Letdown Spot | -2.0/-2.5 pts | Big win last week (ranked or rival), facing unranked |
 | | Lookahead Spot | -1.5 pts | Rival or top-10 opponent next week |
 | | Sandwich Spot | -1.0 pts extra | BOTH letdown AND lookahead (compounding) |
@@ -342,9 +344,19 @@ CFB scheduling creates meaningful rest differentials beyond simple bye weeks:
 
 **Season Opener Advantage:** A team playing their Week 1 opener gets 14 days rest (maximum), giving them a rest advantage over a team that played in Week 0. This correctly models that a fresh team faces a team with normal wear.
 
-**Formula:** `rest_advantage = (home_rest - away_rest) × 0.5 pts/day` (capped at ±1.5 pts)
+**Non-Linear Short Week Penalty:** When one team is on a short week (≤5 days rest) and the other is on normal/rested schedule (>6 days), a hardcoded -2.5 pt penalty applies (not a linear calculation). This reflects that short-week disadvantage is severe and non-linear—it's not just "2 fewer rest days."
+
+**Linear Rest (Other Cases):** `rest_advantage = (home_rest - away_rest) × 0.5 pts/day` (capped at ±1.5 pts)
 
 **Example:** Oregon (9 days after Thursday game) vs Texas (7 days) = +1.0 pts Oregon
+
+#### Consecutive Road Games Penalty
+
+Teams playing their second consecutive road game receive a -1.5 pt penalty. Travel fatigue compounds—the physical and mental toll of back-to-back away games exceeds the sum of individual road trips.
+
+**Implementation:** Check if the team's *last played game* (not necessarily last week due to byes) was also an away game. If so, apply the penalty.
+
+**Travel Correlation:** When travel penalty exceeds 1.5 pts (indicating significant distance), the consecutive road penalty is reduced by 50% to prevent double-counting the fatigue component.
 
 #### Letdown, Lookahead, Sandwich, and Rivalry
 
@@ -373,6 +385,30 @@ The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
 **Sandwich Spot:** The most dangerous scheduling spot in CFB. When a team is coming off a massive emotional win (letdown) AND has a massive game on deck next week (lookahead), the unranked team in the middle is the "meat" of the sandwich. Analysis showed sandwich teams cover only **36.4% ATS** (4/11 games). Total penalty: -4.5 to -5.0 pts.
 
 **Historical Rankings:** Letdown detection uses **ranking at time of game**, not current ranking. JP+ fetches AP poll week-by-week from CFBD `/rankings` endpoint. Example: If Oregon beat #2 Ohio State in Week 7 (who later dropped to #20), Week 8 still shows letdown spot.
+
+#### Correlated Stack Smoothing (Situational Adjustments)
+
+Multiple situational factors often stack on the same team, but they're correlated—a team dealing with letdown AND lookahead is already mentally compromised, so adding sandwich penalty at 100% would over-count. JP+ uses a three-bucket smoothing algorithm:
+
+**Bucket A (Physical/Fatigue):** negative rest advantage, consecutive road penalty, travel penalty, altitude penalty
+- Largest factor at 100%, all others at 25%
+- Travel-consecutive correlation: When travel > 1.5 pts, consecutive road reduced by 50%
+
+**Bucket B (Mental/Focus):** letdown penalty, lookahead penalty, sandwich penalty
+- Largest factor at 100%, second at 50%, others at 25%
+- Captures that mental factors are highly correlated
+
+**Bucket C (Boosts):** rivalry boost, positive rest advantage
+- Linear sum (no dampening for positive factors)
+
+**Global Cap:** Total situational adjustment capped at ±7.0 points
+
+**Example:** A team with letdown (-2.0), lookahead (-1.5), sandwich (-1.0), and consecutive road (-1.5):
+- Mental bucket: -2.0 (100%) + -1.5 (50%) + -1.0 (25%) = -3.0 pts (vs raw -4.5)
+- Physical bucket: -1.5 (100%) = -1.5 pts
+- Total: -4.5 pts (vs raw -6.0), within ±7.0 cap
+
+This prevents over-prediction when multiple situational factors compound while still capturing the directional disadvantage.
 
 ---
 
@@ -891,6 +927,11 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
+- **Implemented Situational Correlated Stack Smoothing** - Added three-bucket smoothing algorithm to prevent double-counting when multiple situational factors affect the same team. Bucket A (Physical/Fatigue): negative rest, consecutive road, travel, altitude—largest at 100%, others at 25%. Bucket B (Mental/Focus): letdown, lookahead, sandwich—largest at 100%, second at 50%, others at 25%. Bucket C (Boosts): rivalry boost, positive rest—linear sum. Travel-consecutive correlation: when travel > 1.5 pts, consecutive road reduced by 50%. Global cap at ±7.0 points. This prevents over-prediction when scheduling penalties compound while preserving directional signal.
+- **Added Consecutive Road Games Penalty** - Teams playing their second consecutive road game receive -1.5 pt penalty. Travel fatigue compounds—back-to-back away games exceed the sum of individual road trips. Implementation checks team's last played game (not necessarily previous week due to byes). When travel penalty exceeds 1.5 pts (significant distance), consecutive road penalty is reduced by 50% to prevent double-counting fatigue component.
+- **Refactored Short Week to Non-Linear Penalty** - When one team is on short week (≤5 days) and opponent is on normal/rested schedule (>6 days), a hardcoded -2.5 pt penalty applies instead of linear calculation. Short week disadvantage is severe and non-linear—not just "2 fewer rest days." Linear rest calculation still applies for other scenarios (bye vs bye, mini-bye vs normal, etc.).
+- **Added Letdown Persistence Through Bye Weeks** - Letdown spot now persists through bye weeks by finding the team's *last played game* regardless of which week it occurred. If a team has a big win followed by a bye, they still get letdown penalty in their next game. Added 3-week staleness threshold—after 3+ weeks since the big win, the emotional effect has faded and letdown doesn't trigger.
+- **Season Opener Gets Maximum Rest** - Teams playing their first game of the season now get 14 days rest (maximum) instead of 7 days. This correctly models that a fresh team facing a Week 0 opponent has a rest advantage.
 - **Integrated The Odds API for Betting Lines** - Added dual-source approach for betting line data: CFBD API for historical data (2022-2025, 91% FBS opening line coverage), The Odds API for future seasons (2026+). Created `src/api/odds_api_client.py` for API access, `src/api/betting_lines.py` for unified data merging, `scripts/capture_odds.py` for backfill/one-time captures, and `scripts/weekly_odds_capture.py` for scheduled weekly captures (opening lines Sunday, closing lines Saturday). Data stored in SQLite at `data/odds_api_lines.db`. Cost: 2 credits/week for ongoing captures. Note: Historical backfill requires paid Odds API plan; free tier (500 credits/month) supports current odds only.
 - **Added 2022-2025 Backtest Performance Section** - Comprehensive walk-forward backtest results across 4 seasons (2,477 games). Key findings: MAE 12.52, RMSE 15.80, ATS 51.0% vs closing lines, 53.1% vs opening lines. At 5+ point edge: 53.2% vs closing, 57.0% vs opening. Opening line performance significantly exceeds closing line, indicating model captures value that the market prices out by game time. Results broken down by year show consistent improvement in MAE (12.87→12.21) and stable ATS performance. Added P3.4 sanity report infrastructure for data and prediction validation.
 - **Implemented Correlated Stack Smoothing** - Fixed systematic over-prediction in high-stack games (HFA + travel + altitude combined). Analysis of 2024-2025 data revealed games with >5 pts combined adjustment over-predicted home team margins by ~2.3 pts. The fix applies two mechanisms: (1) **Altitude-travel interaction**: When travel > 1.5 pts AND altitude > 0, reduce altitude by 30% to account for partial overlap between effects; (2) **Soft cap**: When combined stack exceeds 5 pts, reduce excess by 50% and distribute reduction proportionally across all three components. Example: stack of 7 → 5 + (7-5)×0.5 = 6 effective. Results: max stack reduced from 6.41 to 5.71 pts, error-per-stack-point reduced from 0.94 to 0.88. Added `smooth_correlated_stack()` function to `spread_generator.py` with parameters `smooth_stacks`, `stack_cap_start`, `stack_cap_factor`, `altitude_travel_interaction`. Enabled by default.
