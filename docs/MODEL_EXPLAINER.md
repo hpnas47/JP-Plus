@@ -136,6 +136,14 @@ Example: If raw stack = 7 pts (3.5 HFA + 2.0 travel + 1.5 altitude), the smoothe
 
 **Pace Adjustment (Triple-Option):** Triple-option teams (Army, Navy, Air Force, Kennesaw State) run significantly fewer plays per game (~55 vs ~70 for standard offenses). This creates more variance in outcomes—analysis shows 30% worse MAE for triple-option games (16.09 vs 12.36, p=0.001). To account for this reduced game volume, JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
 
+**Situational Factors:** JP+ adjusts for scheduling dynamics that affect team performance:
+- **Bye week advantage (+1.5 pts):** Teams coming off bye week are better rested and prepared
+- **Letdown spot (-1.5 pts):** Team beat a top-15 opponent last week, now facing unranked opponent
+- **Lookahead spot (-1.5 pts):** Team has a rival or top-10 opponent next week
+- **Rivalry boost (+1.0 pts):** Underdog in rivalry game only
+
+**Critical for letdown detection:** CFB rankings are volatile—a team ranked #15 in Week 3 may be unranked by Week 8. JP+ uses the **historical ranking at the time of the game**, not the current ranking. For example, if Oregon beats #2 Ohio State in Week 7 and then plays unranked Purdue in Week 8, JP+ correctly identifies the letdown spot using Ohio State's Week 7 ranking, even if they've since dropped in the polls.
+
 **Triple-Option Rating Boost:** Triple-option teams (especially service academies) are systematically underrated by efficiency metrics like SP+ because EPA calculations don't fully capture their scheme's value. Additionally, service academies have artificially low recruiting rankings due to unique constraints (service commitment, physical requirements) that don't reflect their actual competitiveness. JP+ applies a +6 point boost to raw SP+ ratings for these teams and uses 100% prior rating (no talent blend) to correct this systematic bias.
 
 **Weather Adjustment (Totals):** Weather significantly impacts game totals. JP+ fetches weather data from the CFBD API and applies adjustments for totals prediction:

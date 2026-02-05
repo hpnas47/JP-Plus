@@ -414,6 +414,33 @@ Triple-option teams (Army, Navy, Air Force, Kennesaw State) run ~55 plays/game v
 
 JP+ compresses spreads by 10% toward zero when a triple-option team is involved (15% if both teams run triple-option). This reflects the fundamental uncertainty in games with fewer possessions.
 
+### Situational Adjustment Detail
+
+Situational factors capture psychological and scheduling dynamics that affect team performance:
+
+| Factor | Value | Condition |
+|--------|-------|-----------|
+| **Bye Week** | +1.5 pts | Team coming off bye week |
+| **Letdown Spot** | -1.5 pts | Beat top-15 team last week, now facing unranked opponent |
+| **Lookahead Spot** | -1.5 pts | Rival or top-10 opponent next week |
+| **Rivalry Boost** | +1.0 pts | Underdog in rivalry game only |
+
+#### Historical Rankings for Letdown Detection
+
+**Critical Implementation Detail:** CFB rankings are volatile. A team ranked #15 in Week 3 may be unranked by Week 8. When evaluating "did they beat a ranked team last week?", JP+ uses the **historical ranking at the time of the game**, not the current ranking.
+
+**Example:**
+- Week 7: Oregon beats #2 Ohio State
+- Week 8: Oregon plays unranked Purdue
+- **Correct:** Oregon is in letdown spot (used historical #2 ranking)
+- **Wrong:** If OSU dropped to #20 by backtest time, old approach would miss this
+
+JP+ fetches AP poll rankings week-by-week from the CFBD `/rankings` endpoint and stores them in a `HistoricalRankings` object that provides:
+- `get_rank(team, week)` - Look up team's rank for a specific week
+- `get_week_rankings(week)` - Get all rankings for a week
+
+**Fallback:** If historical rankings unavailable, uses current rankings (less accurate but better than nothing).
+
 ### Weather Adjustment (Totals)
 
 Weather significantly impacts game totals (over/under). JP+ fetches weather data from the CFBD API and applies adjustments based on three factors:
