@@ -349,7 +349,15 @@ class SituationalAdjuster:
     ) -> bool:
         """Check if team is in a letdown spot.
 
-        Letdown: Coming off a win vs top-15 team, now facing unranked.
+        Letdown: Coming off a "big win" now facing unranked opponent.
+
+        Big Win criteria (either triggers letdown):
+        1. Beat a top-15 ranked team, OR
+        2. Beat an arch-rival (regardless of rival's ranking)
+
+        Rivalry Hangover: Beating your arch-rival is an emotional peak even if
+        they're unranked. Auburn beating Alabama, Ohio State beating Michigan,
+        etc. creates the same letdown risk as beating a top-15 team.
 
         CRITICAL: Uses historical rankings (rank at time of game) to evaluate
         whether the previous opponent was ranked. CFB rankings are volatile -
@@ -367,10 +375,6 @@ class SituationalAdjuster:
             True if team is in letdown spot
         """
         if current_week <= 1:
-            return False
-
-        # Need either historical rankings or current rankings
-        if historical_rankings is None and rankings is None:
             return False
 
         # Check last week's game
@@ -396,20 +400,32 @@ class SituationalAdjuster:
         if not won:
             return False
 
-        # Check if last opponent was top-15 AT THE TIME OF THE GAME
-        # Use historical rankings if available, fall back to current
-        if historical_rankings is not None and historical_rankings.has_week(last_week_num):
-            last_opp_rank = historical_rankings.get_rank(last_opponent, last_week_num)
-        elif rankings is not None:
-            # Fallback: use current rankings (less accurate but better than nothing)
-            last_opp_rank = rankings.get(last_opponent)
-            logger.debug(
-                f"No historical rankings for week {last_week_num}, using current rankings"
-            )
-        else:
-            return False
+        # Check for "Big Win" - either ranked opponent OR rivalry win
+        was_big_win = False
+        big_win_reason = None
 
-        if last_opp_rank is None or last_opp_rank > 15:
+        # Criterion 1: Beat a rival (emotional peak regardless of ranking)
+        if is_rivalry_game(team, last_opponent):
+            was_big_win = True
+            big_win_reason = f"rivalry win vs {last_opponent}"
+
+        # Criterion 2: Beat a top-15 team (use historical rankings)
+        if not was_big_win:
+            if historical_rankings is not None and historical_rankings.has_week(last_week_num):
+                last_opp_rank = historical_rankings.get_rank(last_opponent, last_week_num)
+            elif rankings is not None:
+                last_opp_rank = rankings.get(last_opponent)
+                logger.debug(
+                    f"No historical rankings for week {last_week_num}, using current rankings"
+                )
+            else:
+                last_opp_rank = None
+
+            if last_opp_rank is not None and last_opp_rank <= 15:
+                was_big_win = True
+                big_win_reason = f"beat #{last_opp_rank} {last_opponent}"
+
+        if not was_big_win:
             return False
 
         # Check if current opponent is unranked (use current week rankings)
@@ -423,7 +439,7 @@ class SituationalAdjuster:
         is_letdown = current_opp_rank is None
         if is_letdown:
             logger.debug(
-                f"Letdown spot detected: {team} beat #{last_opp_rank} {last_opponent} "
+                f"Letdown spot detected: {team} {big_win_reason} "
                 f"last week, now facing unranked {opponent}"
             )
         return is_letdown
