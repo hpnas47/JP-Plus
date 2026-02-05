@@ -233,6 +233,7 @@ class SituationalAdjuster:
         - Mini-bye: 9+ days (Thursday → following Saturday)
         - Short week: 5 days (Saturday → Thursday)
         - Bye week: 14+ days (didn't play previous week)
+        - Season opener: 14 days (maximum rest - hasn't played yet)
 
         Args:
             team: Team name
@@ -240,7 +241,7 @@ class SituationalAdjuster:
             schedule_df: DataFrame with schedule (must have start_date, home_team, away_team)
 
         Returns:
-            Days since last game (default 7 if no previous game found)
+            Days since last game (14 if season opener, i.e., no previous games)
         """
         # Find team's previous games
         team_games = schedule_df[
@@ -273,7 +274,10 @@ class SituationalAdjuster:
         previous_games = team_games[team_games["game_datetime"] < game_date]
 
         if previous_games.empty:
-            return self.NORMAL_REST
+            # Season opener: team hasn't played yet this season
+            # Treat as maximum rest (equivalent to bye week)
+            # This gives rest advantage over teams that played Week 0
+            return self.BYE_WEEK_THRESHOLD
 
         last_game_date = previous_games["game_datetime"].max()
         days_rest = (game_date - last_game_date).days
@@ -345,6 +349,9 @@ class SituationalAdjuster:
 
         return adjustment
 
+    # Staleness threshold: letdown effect fades after this many weeks
+    LETDOWN_STALENESS_WEEKS = 3
+
     def check_letdown_spot(
         self,
         team: str,
@@ -366,6 +373,11 @@ class SituationalAdjuster:
         they're unranked. Auburn beating Alabama, Ohio State beating Michigan,
         etc. creates the same letdown risk as beating a top-15 team.
 
+        Bye Week Persistence: If a team has a bye week after a big win, the
+        letdown effect persists. Sitting on a big win for two weeks maintains
+        the "rust" and "hangover" effect. However, if too much time passes
+        (3+ weeks since the big win), the effect is considered "stale".
+
         CRITICAL: Uses historical rankings (rank at time of game) to evaluate
         whether the previous opponent was ranked. CFB rankings are volatile -
         a team ranked #15 in Week 3 may be unranked by Week 8.
@@ -384,17 +396,29 @@ class SituationalAdjuster:
         if current_week <= 1:
             return False
 
-        # Check last week's game
-        last_week_num = current_week - 1
-        last_week = schedule_df[schedule_df["week"] == last_week_num]
-        team_games = last_week[
-            (last_week["home_team"] == team) | (last_week["away_team"] == team)
+        # Find the team's LAST PLAYED GAME (regardless of which week)
+        # This handles bye weeks - the letdown effect persists through a bye
+        team_games = schedule_df[
+            ((schedule_df["home_team"] == team) | (schedule_df["away_team"] == team))
+            & (schedule_df["week"] < current_week)
         ]
 
         if team_games.empty:
-            return False  # Had bye week
+            return False  # No previous games (start of season)
 
-        last_game = team_games.iloc[0]
+        # Get the most recent game by week number
+        last_game = team_games.loc[team_games["week"].idxmax()]
+        last_week_num = last_game["week"]
+
+        # Staleness check: If last game was more than LETDOWN_STALENESS_WEEKS ago,
+        # the emotional effect has faded (e.g., start of season, multiple byes)
+        weeks_since_last_game = current_week - last_week_num
+        if weeks_since_last_game > self.LETDOWN_STALENESS_WEEKS:
+            logger.debug(
+                f"{team} last played in week {last_week_num} ({weeks_since_last_game} weeks ago) - "
+                f"too stale for letdown effect"
+            )
+            return False
 
         # Determine if they won
         if last_game["home_team"] == team:
@@ -445,10 +469,18 @@ class SituationalAdjuster:
 
         is_letdown = current_opp_rank is None
         if is_letdown:
-            logger.debug(
-                f"Letdown spot detected: {team} {big_win_reason} "
-                f"last week, now facing unranked {opponent}"
-            )
+            # Include weeks_since info for transparency
+            if weeks_since_last_game > 1:
+                logger.debug(
+                    f"Letdown spot detected: {team} {big_win_reason} "
+                    f"in week {last_week_num} ({weeks_since_last_game} weeks ago, persisted through bye), "
+                    f"now facing unranked {opponent}"
+                )
+            else:
+                logger.debug(
+                    f"Letdown spot detected: {team} {big_win_reason} "
+                    f"last week, now facing unranked {opponent}"
+                )
         return is_letdown
 
     def check_lookahead_spot(
