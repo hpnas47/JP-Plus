@@ -169,6 +169,7 @@ class SituationalAdjuster:
         bye_advantage: Optional[float] = None,
         short_week_penalty: Optional[float] = None,
         letdown_penalty: Optional[float] = None,
+        letdown_away_multiplier: Optional[float] = None,
         lookahead_penalty: Optional[float] = None,
         sandwich_extra_penalty: Optional[float] = None,
         rivalry_boost: Optional[float] = None,
@@ -179,6 +180,7 @@ class SituationalAdjuster:
             bye_advantage: Points for full bye week (14+ days rest)
             short_week_penalty: Points penalty per day below normal rest
             letdown_penalty: Points penalty for letdown spot
+            letdown_away_multiplier: Multiplier for letdown when team is away (sleepy road game)
             lookahead_penalty: Points penalty for look-ahead spot
             sandwich_extra_penalty: Extra penalty when BOTH letdown AND lookahead apply
             rivalry_boost: Points boost for underdog in rivalry
@@ -196,6 +198,11 @@ class SituationalAdjuster:
             letdown_penalty
             if letdown_penalty is not None
             else settings.letdown_penalty
+        )
+        self.letdown_away_multiplier = (
+            letdown_away_multiplier
+            if letdown_away_multiplier is not None
+            else settings.letdown_away_multiplier
         )
         self.lookahead_penalty = (
             lookahead_penalty
@@ -532,6 +539,7 @@ class SituationalAdjuster:
         schedule_df: pd.DataFrame,
         rankings: Optional[dict[str, int]] = None,
         team_is_favorite: bool = True,
+        team_is_home: bool = True,
         historical_rankings: Optional[HistoricalRankings] = None,
         game_date: Optional[datetime] = None,
     ) -> SituationalFactors:
@@ -544,6 +552,7 @@ class SituationalAdjuster:
             schedule_df: DataFrame with schedule and results
             rankings: Dict of team -> ranking (current week snapshot)
             team_is_favorite: Whether team is favored (for rivalry boost)
+            team_is_home: Whether team is playing at home (affects letdown severity)
             historical_rankings: HistoricalRankings for week-by-week lookup
             game_date: Date of current game (for rest calculation)
 
@@ -569,8 +578,17 @@ class SituationalAdjuster:
             team, current_week, opponent, schedule_df, rankings, historical_rankings
         )
         if in_letdown:
-            factors.letdown_penalty = self.letdown_penalty
-            logger.debug(f"{team} in letdown spot: {self.letdown_penalty}")
+            # "Sleepy road game" - letdown is worse when traveling
+            # Playing at home keeps the team engaged; noon kickoff on the road = danger
+            if team_is_home:
+                factors.letdown_penalty = self.letdown_penalty
+                logger.debug(f"{team} in letdown spot (home): {self.letdown_penalty}")
+            else:
+                factors.letdown_penalty = self.letdown_penalty * self.letdown_away_multiplier
+                logger.debug(
+                    f"{team} in letdown spot (AWAY - sleepy road game): "
+                    f"{factors.letdown_penalty:.1f} ({self.letdown_penalty} × {self.letdown_away_multiplier})"
+                )
 
         # Look-ahead spot (uses current rankings - perception matters)
         in_lookahead = self.check_lookahead_spot(
@@ -640,6 +658,7 @@ class SituationalAdjuster:
             schedule_df=schedule_df,
             rankings=rankings,
             team_is_favorite=home_is_favorite,
+            team_is_home=True,
             historical_rankings=historical_rankings,
             game_date=game_date,
         )
@@ -651,6 +670,7 @@ class SituationalAdjuster:
             schedule_df=schedule_df,
             rankings=rankings,
             team_is_favorite=not home_is_favorite,
+            team_is_home=False,  # Away team - sleepy road game multiplier applies
             historical_rankings=historical_rankings,
             game_date=game_date,
         )

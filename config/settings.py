@@ -47,6 +47,7 @@ class Settings:
     # Situational Adjustments (points)
     bye_week_advantage: float = 1.5
     letdown_penalty: float = -2.0
+    letdown_away_multiplier: float = 1.25  # Letdown worse on the road (sleepy noon kickoff)
     lookahead_penalty: float = -1.5
     sandwich_extra_penalty: float = -1.0  # Extra penalty when BOTH letdown AND lookahead
     rivalry_underdog_boost: float = 1.0
