@@ -15,6 +15,7 @@ from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
+from src.adjustments.aggregator import AdjustmentAggregator, TravelBreakdown
 from src.adjustments.diagnostics import (
     AdjustmentStackDiagnostics,
     extract_stack_from_prediction,
@@ -31,15 +32,11 @@ def smooth_correlated_stack(
     cap_factor: float = 0.5,
     altitude_travel_interaction: float = 0.7,
 ) -> tuple[float, float, float]:
-    """Apply smoothing to correlated adjustment stack.
+    """DEPRECATED: Use AdjustmentAggregator for consolidated smoothing.
 
-    Addresses systematic over-prediction when HFA + travel + altitude combine.
-    Analysis shows high-stack games (>5 pts) over-predict home margin by ~2.3 pts.
-
-    Two mechanisms:
-    1. Interaction penalty: When both altitude and long travel apply, reduce altitude
-       (likely partial double-counting since both affect away team performance)
-    2. Soft cap: When total stack exceeds cap_start, reduce excess by cap_factor
+    This function is kept for backward compatibility only. New code should use
+    the AdjustmentAggregator class which consolidates all adjustment smoothing
+    into a single four-bucket algorithm.
 
     Args:
         hfa: Home field advantage adjustment (points)
@@ -52,9 +49,14 @@ def smooth_correlated_stack(
     Returns:
         Tuple of (smoothed_hfa, smoothed_travel, smoothed_altitude)
     """
+    import warnings
+    warnings.warn(
+        "smooth_correlated_stack is deprecated. Use AdjustmentAggregator instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     # Step 1: Apply altitude-travel interaction
-    # When long travel combines with altitude, reduce altitude effect
-    # (analysis shows double-counting: both penalize away team for same game conditions)
     adj_altitude = altitude
     if travel > 1.5 and altitude > 0:
         adj_altitude = altitude * altitude_travel_interaction
@@ -66,12 +68,9 @@ def smooth_correlated_stack(
     if raw_stack <= cap_start:
         return hfa, travel, adj_altitude
 
-    # Calculate reduction needed
     excess = raw_stack - cap_start
     reduction = excess * (1 - cap_factor)
 
-    # Distribute reduction proportionally across all three components
-    # (preserves relative contribution of each factor)
     if raw_stack > 0:
         hfa_share = hfa / raw_stack
         travel_share = travel / raw_stack
@@ -268,11 +267,9 @@ class SpreadGenerator:
         fcs_penalty_standard: Optional[float] = None,
         elite_fcs_teams: Optional[set[str]] = None,
         qb_adjuster: Optional[QBInjuryAdjuster] = None,
+        aggregator: Optional[AdjustmentAggregator] = None,
         track_diagnostics: bool = False,
-        smooth_stacks: bool = True,
-        stack_cap_start: float = 5.0,
-        stack_cap_factor: float = 0.5,
-        altitude_travel_interaction: float = 0.7,
+        global_cap: float = 7.0,
     ):
         """Initialize spread generator with EFM ratings and adjustment layers.
 
@@ -289,11 +286,9 @@ class SpreadGenerator:
             fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
             elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS)
             qb_adjuster: QB injury adjuster (optional, for QB-out adjustments)
+            aggregator: AdjustmentAggregator for consolidated smoothing (default: creates new)
             track_diagnostics: If True, track adjustment stacks for P2.11 analysis
-            smooth_stacks: If True, apply smoothing to correlated adjustments (default: True)
-            stack_cap_start: Point value where soft cap begins (default: 5.0)
-            stack_cap_factor: Factor to multiply excess by (default: 0.5)
-            altitude_travel_interaction: Reduce altitude by this when travel > 1.5 (default: 0.7)
+            global_cap: Maximum total adjustment (default: 7.0)
         """
         self.ratings = ratings or {}
         self.special_teams = special_teams or SpecialTeamsModel()
@@ -312,15 +307,12 @@ class SpreadGenerator:
         # QB injury adjuster (optional)
         self.qb_adjuster = qb_adjuster
 
+        # Consolidated adjustment aggregator (four-bucket smoothing)
+        self.aggregator = aggregator or AdjustmentAggregator(global_cap=global_cap)
+
         # P2.11: Adjustment stack diagnostics
         self.track_diagnostics = track_diagnostics
         self.diagnostics = AdjustmentStackDiagnostics() if track_diagnostics else None
-
-        # Stack smoothing parameters (reduces high-stack over-prediction)
-        self.smooth_stacks = smooth_stacks
-        self.stack_cap_start = stack_cap_start
-        self.stack_cap_factor = stack_cap_factor
-        self.altitude_travel_interaction = altitude_travel_interaction
 
     def _get_base_margin(self, home_team: str, away_team: str) -> float:
         """Get base margin from EFM ratings differential.
@@ -470,6 +462,12 @@ class SpreadGenerator:
     ) -> PredictedSpread:
         """Generate predicted spread for a matchup.
 
+        Uses consolidated four-bucket smoothing via AdjustmentAggregator:
+        - Bucket A (Venue): HFA - no smoothing
+        - Bucket B (Physical): travel + altitude + consecutive_road + short_week
+        - Bucket C (Mental): letdown + lookahead + sandwich
+        - Bucket D (Boosts): rivalry + bye_week_rest
+
         Args:
             home_team: Home team name
             away_team: Away team name
@@ -488,40 +486,32 @@ class SpreadGenerator:
         # Base margin from EFM ratings (neutral field)
         components.base_margin = self._get_base_margin(home_team, away_team)
 
+        # =====================================================================
+        # Gather raw adjustments (no smoothing yet)
+        # =====================================================================
+
         # Home field advantage (raw)
         if not neutral_site:
             raw_hfa = self.home_field.get_hfa_value(home_team)
         else:
             raw_hfa = 0.0
 
-        # Travel adjustment (raw)
+        # Travel and altitude (raw)
         raw_travel, _ = self.travel.get_total_travel_adjustment(home_team, away_team)
-
-        # Altitude adjustment (raw)
         raw_altitude, _ = self.altitude.get_detailed_adjustment(home_team, away_team)
 
-        # Apply stack smoothing to correlated adjustments (P2.11 fix)
-        if self.smooth_stacks:
-            components.home_field, components.travel, components.altitude = smooth_correlated_stack(
-                hfa=raw_hfa,
-                travel=raw_travel,
-                altitude=raw_altitude,
-                cap_start=self.stack_cap_start,
-                cap_factor=self.stack_cap_factor,
-                altitude_travel_interaction=self.altitude_travel_interaction,
-            )
-        else:
-            components.home_field = raw_hfa
-            components.travel = raw_travel
-            components.altitude = raw_altitude
+        travel_breakdown = TravelBreakdown(
+            travel_penalty=raw_travel,
+            altitude_penalty=raw_altitude,
+        )
 
-        # Situational adjustments
+        # Situational factors (raw)
         if week is not None and schedule_df is not None:
             # Determine who's favored for rivalry boost
-            prelim_spread = components.base_margin + components.home_field
+            prelim_spread = components.base_margin + raw_hfa
             home_is_favorite = prelim_spread > 0
 
-            adj, _ = self.situational.get_matchup_adjustment(
+            home_factors, away_factors = self.situational.get_matchup_factors(
                 home_team=home_team,
                 away_team=away_team,
                 current_week=week,
@@ -531,7 +521,51 @@ class SpreadGenerator:
                 historical_rankings=historical_rankings,
                 game_date=game_date,
             )
-            components.situational = adj
+        else:
+            # No schedule data - use empty factors
+            from src.adjustments.situational import SituationalFactors
+            home_factors = SituationalFactors(team=home_team)
+            away_factors = SituationalFactors(team=away_team)
+
+        # =====================================================================
+        # Aggregate with four-bucket smoothing
+        # =====================================================================
+        aggregated = self.aggregator.aggregate(
+            raw_hfa=raw_hfa,
+            travel_breakdown=travel_breakdown,
+            home_factors=home_factors,
+            away_factors=away_factors,
+        )
+
+        # Store components (for backward compatibility with SpreadComponents)
+        components.home_field = aggregated.smoothed_hfa
+        components.travel = aggregated.smoothed_travel
+        components.altitude = aggregated.smoothed_altitude
+        # Situational now includes rest, letdown, lookahead, sandwich, rivalry, consecutive_road
+        # after four-bucket smoothing (minus venue which is in HFA)
+        components.situational = (
+            aggregated.physical_bucket
+            - aggregated.smoothed_hfa  # Don't double count HFA (it's not in physical bucket anyway)
+            + aggregated.mental_bucket
+            + aggregated.boosts_bucket
+        )
+        # Simpler: situational = aggregated.net_adjustment - aggregated.venue_bucket
+        # But let's be explicit about what's included
+
+        # Actually, let me recalculate: aggregated.net_adjustment includes venue+physical+mental+boosts
+        # We want:
+        #   components.home_field = HFA
+        #   components.travel = travel portion of physical
+        #   components.altitude = altitude portion of physical
+        #   components.situational = everything else (rest, consecutive_road, mental, boosts)
+        # The issue is physical_bucket includes travel+altitude+consecutive_road+short_week
+        # Let's do it correctly:
+        components.situational = (
+            aggregated.net_adjustment
+            - aggregated.venue_bucket  # HFA is separate
+            - aggregated.smoothed_travel  # Travel is separate
+            - aggregated.smoothed_altitude  # Altitude is separate
+        )
 
         # Special teams differential (P2.7: applied as adjustment layer)
         components.special_teams = self.special_teams.get_matchup_differential(
@@ -547,12 +581,11 @@ class SpreadGenerator:
         components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
 
         # Calculate total spread (positive = home favored)
+        # Note: aggregated.net_adjustment already includes HFA+travel+altitude+situational
+        # So we add the non-aggregated components
         spread = (
             components.base_margin
-            + components.home_field
-            + components.situational
-            + components.travel
-            + components.altitude
+            + aggregated.net_adjustment  # All game-context adjustments (smoothed)
             + components.special_teams
             + components.finishing_drives
             + components.fcs_adjustment

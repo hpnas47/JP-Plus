@@ -316,15 +316,35 @@ JP+ uses team-specific HFA values based on stadium environment and crowd intensi
 
 High-altitude venues (BYU 4,551ft, Air Force 6,621ft, Colorado 5,328ft) penalize visiting sea-level teams 0-3 pts based on elevation differential.
 
-#### Correlated Stack Smoothing
+#### Consolidated Adjustment Smoothing (AdjustmentAggregator)
 
-HFA + travel + altitude all favor home team—they're correlated. Games >5 pts combined stack over-predicted home margins by ~2.3 pts.
+All game adjustments pass through a single aggregator that applies four-bucket smoothing to prevent double-counting correlated factors. This replaces the previous separate smoothing for HFA+travel+altitude and situational factors.
 
-**Fix:**
-1. **Altitude-Travel Interaction:** When travel >1.5 pts AND altitude >0, reduce altitude by 30%
-2. **Soft Cap:** Excess above 5 pts reduced by 50%, distributed proportionally
+**Four-Bucket Architecture:**
 
-Example: Raw stack 7 pts → 5 + (7-5)×0.5 = 6 effective pts
+| Bucket | Factors | Smoothing | Rationale |
+|--------|---------|-----------|-----------|
+| **A: Venue** | HFA | None (100%) | Baseline home advantage stands alone |
+| **B: Physical** | travel, altitude, consecutive_road, short_week | Aggressive (100%/25%) | Physical fatigue factors are highly correlated |
+| **C: Mental** | letdown, lookahead, sandwich | Standard (100%/50%/25%) | Mental factors compound with diminishing returns |
+| **D: Boosts** | rivalry, bye_week_rest | Linear sum | Positive factors are rare, stack fully |
+
+**Physical Bucket Details:**
+- Largest factor at 100%, all others at 25%
+- Travel-consecutive correlation: When travel > 1.5 pts, consecutive_road reduced by 50%
+- Rationale: A team flying cross-country for a 2nd straight road game is tired, but not 2x tired
+
+**Mental Bucket Details:**
+- Largest at 100%, second at 50%, remaining at 25%
+- Rationale: A team in letdown AND lookahead is distracted, but distractions don't fully stack
+
+**Global Cap:** ±7.0 points maximum total adjustment
+
+**Example:** Ohio State at Michigan with travel=1.5, altitude=1.0, letdown=-2.0, lookahead=-1.5, sandwich=-1.0, rest=+1.0:
+- Physical: 1.5 + 1.0×0.25 = 1.75 (not 2.5 raw)
+- Mental: 2.0 + 1.5×0.5 + 1.0×0.25 = 3.0 (not 4.5 raw)
+- Boosts: 1.0
+- With HFA=3.0: Total = 3.0 + 1.75 + 3.0 + 1.0 = 8.75 → capped at 7.0
 
 ---
 
@@ -386,29 +406,7 @@ The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
 
 **Historical Rankings:** Letdown detection uses **ranking at time of game**, not current ranking. JP+ fetches AP poll week-by-week from CFBD `/rankings` endpoint. Example: If Oregon beat #2 Ohio State in Week 7 (who later dropped to #20), Week 8 still shows letdown spot.
 
-#### Correlated Stack Smoothing (Situational Adjustments)
-
-Multiple situational factors often stack on the same team, but they're correlated—a team dealing with letdown AND lookahead is already mentally compromised, so adding sandwich penalty at 100% would over-count. JP+ uses a three-bucket smoothing algorithm:
-
-**Bucket A (Physical/Fatigue):** negative rest advantage, consecutive road penalty, travel penalty, altitude penalty
-- Largest factor at 100%, all others at 25%
-- Travel-consecutive correlation: When travel > 1.5 pts, consecutive road reduced by 50%
-
-**Bucket B (Mental/Focus):** letdown penalty, lookahead penalty, sandwich penalty
-- Largest factor at 100%, second at 50%, others at 25%
-- Captures that mental factors are highly correlated
-
-**Bucket C (Boosts):** rivalry boost, positive rest advantage
-- Linear sum (no dampening for positive factors)
-
-**Global Cap:** Total situational adjustment capped at ±7.0 points
-
-**Example:** A team with letdown (-2.0), lookahead (-1.5), sandwich (-1.0), and consecutive road (-1.5):
-- Mental bucket: -2.0 (100%) + -1.5 (50%) + -1.0 (25%) = -3.0 pts (vs raw -4.5)
-- Physical bucket: -1.5 (100%) = -1.5 pts
-- Total: -4.5 pts (vs raw -6.0), within ±7.0 cap
-
-This prevents over-prediction when multiple situational factors compound while still capturing the directional disadvantage.
+*Note: All situational factors feed into the consolidated AdjustmentAggregator (see Game Context section) for four-bucket smoothing.*
 
 ---
 
@@ -476,10 +474,11 @@ The single biggest unmodeled source of prediction error. Manual flagging system:
 | File | Purpose |
 |------|---------|
 | `src/predictions/spread_generator.py` | Combines all components |
+| `src/adjustments/aggregator.py` | Four-bucket smoothing for all adjustments |
 | `src/adjustments/home_field.py` | Team-specific HFA & trajectory |
 | `src/adjustments/travel.py` | Distance/timezone |
 | `src/adjustments/altitude.py` | Altitude adjustment |
-| `src/adjustments/situational.py` | Rest, letdown, lookahead, rivalry |
+| `src/adjustments/situational.py` | Rest, letdown, lookahead, rivalry (raw values) |
 | `src/adjustments/qb_adjustment.py` | QB injury system |
 | `src/adjustments/weather.py` | Weather for totals |
 
@@ -927,8 +926,9 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
-- **Implemented Situational Correlated Stack Smoothing** - Added three-bucket smoothing algorithm to prevent double-counting when multiple situational factors affect the same team. Bucket A (Physical/Fatigue): negative rest, consecutive road, travel, altitude—largest at 100%, others at 25%. Bucket B (Mental/Focus): letdown, lookahead, sandwich—largest at 100%, second at 50%, others at 25%. Bucket C (Boosts): rivalry boost, positive rest—linear sum. Travel-consecutive correlation: when travel > 1.5 pts, consecutive road reduced by 50%. Global cap at ±7.0 points. This prevents over-prediction when scheduling penalties compound while preserving directional signal.
-- **Added Consecutive Road Games Penalty** - Teams playing their second consecutive road game receive -1.5 pt penalty. Travel fatigue compounds—back-to-back away games exceed the sum of individual road trips. Implementation checks team's last played game (not necessarily previous week due to byes). When travel penalty exceeds 1.5 pts (significant distance), consecutive road penalty is reduced by 50% to prevent double-counting fatigue component.
+- **Consolidated All Adjustment Smoothing into AdjustmentAggregator** - Major architectural refactor to eliminate double-smoothing. All game adjustments (HFA, travel, altitude, rest, letdown, lookahead, sandwich, consecutive road, rivalry) now flow through a single four-bucket aggregator. Bucket A (Venue): HFA with no smoothing. Bucket B (Physical): travel, altitude, consecutive_road, short_week with aggressive smoothing (100%/25%). Bucket C (Mental): letdown, lookahead, sandwich with standard smoothing (100%/50%/25%). Bucket D (Boosts): rivalry, bye_rest with linear sum. Global cap at ±7.0 points. This replaces the previous separate smoothing in `smooth_correlated_stack()` and `SituationalFactors.__post_init__()`. New file: `src/adjustments/aggregator.py`.
+- **Simplified SituationalFactors to Raw Container** - Removed all smoothing logic from SituationalFactors dataclass. It now stores raw adjustment values only. Added `get_matchup_factors()` method that returns raw factors for the aggregator. Legacy `get_matchup_adjustment()` retained for backward compatibility.
+- **Added Consecutive Road Games Penalty** - Teams playing their second consecutive road game receive -1.5 pt penalty. Travel fatigue compounds—back-to-back away games exceed the sum of individual road trips. Implementation checks team's last played game (not necessarily previous week due to byes). Travel-consecutive correlation in aggregator reduces consecutive_road by 50% when travel > 1.5 pts.
 - **Refactored Short Week to Non-Linear Penalty** - When one team is on short week (≤5 days) and opponent is on normal/rested schedule (>6 days), a hardcoded -2.5 pt penalty applies instead of linear calculation. Short week disadvantage is severe and non-linear—not just "2 fewer rest days." Linear rest calculation still applies for other scenarios (bye vs bye, mini-bye vs normal, etc.).
 - **Added Letdown Persistence Through Bye Weeks** - Letdown spot now persists through bye weeks by finding the team's *last played game* regardless of which week it occurred. If a team has a big win followed by a bye, they still get letdown penalty in their next game. Added 3-week staleness threshold—after 3+ weeks since the big win, the emotional effect has faded and letdown doesn't trigger.
 - **Season Opener Gets Maximum Rest** - Teams playing their first game of the season now get 14 days rest (maximum) instead of 7 days. This correctly models that a fresh team facing a Week 0 opponent has a rest advantage.

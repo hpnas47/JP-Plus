@@ -154,14 +154,20 @@ After calculating base efficiency ratings, JP+ applies game-specific adjustments
 
 **Rivalry Boost (+1.0 pts):** Underdog in rivalry game only.
 
-**Correlated Stack Smoothing:** When multiple situational factors stack on the same team, they're correlated—a team with letdown AND lookahead is already mentally compromised. JP+ uses a three-bucket algorithm to prevent over-counting:
+### Consolidated Adjustment Smoothing
 
-- **Physical factors** (negative rest, consecutive road, travel, altitude): Largest at 100%, others at 25%
-- **Mental factors** (letdown, lookahead, sandwich): Largest at 100%, second at 50%, others at 25%
-- **Boosts** (rivalry, positive rest): Linear sum (no dampening)
-- **Global cap:** ±7.0 points maximum situational adjustment
+All game adjustments flow through a single aggregator that applies four-bucket smoothing to prevent double-counting correlated factors:
 
-This prevents over-prediction when scheduling penalties compound while preserving directional signal.
+| Bucket | Factors | Smoothing |
+|--------|---------|-----------|
+| **Venue** | HFA | None (100%) |
+| **Physical** | travel, altitude, consecutive road, short week | Aggressive (100%/25%) |
+| **Mental** | letdown, lookahead, sandwich | Standard (100%/50%/25%) |
+| **Boosts** | rivalry, bye week rest | Linear sum |
+
+**Why this matters:** A team flying cross-country for a 2nd straight road game while in a letdown spot after a big win is disadvantaged—but not 3x disadvantaged. The smoothing captures the directional effect while preventing over-prediction.
+
+**Global cap:** ±7.0 points maximum total adjustment.
 
 ### Opponent & Pace Adjustments
 
