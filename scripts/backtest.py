@@ -716,8 +716,8 @@ def calculate_ats_results(
 ) -> pd.DataFrame:
     """Calculate against-the-spread results.
 
+    P3.8: Vectorized implementation using pandas merge + numpy operations.
     Uses game_id for reliable matching between predictions and betting lines.
-    This avoids issues with team name drift, rematches, and neutral site swaps.
 
     Args:
         predictions: List of prediction dictionaries (must include game_id)
@@ -727,105 +727,84 @@ def calculate_ats_results(
     Returns:
         Pandas DataFrame with ATS results
     """
-    results = []
-    unmatched_games = []
+    if not predictions:
+        return pd.DataFrame()
+
     spread_col = "spread_open" if use_opening_line else "spread_close"
 
-    # Build lookup dict from betting_df for O(1) matching by game_id
-    betting_lookup = {}
-    for row in betting_df.iter_rows(named=True):
-        betting_lookup[row["game_id"]] = row
+    # P3.8: Convert to DataFrames for vectorized operations
+    pred_df = pd.DataFrame(predictions)
+    betting_pd = betting_df.to_pandas()
 
-    for pred in predictions:
-        game_id = pred.get("game_id")
+    # Merge predictions with betting data on game_id (left join to identify unmatched)
+    merged = pred_df.merge(
+        betting_pd[["game_id", "spread_open", "spread_close"]],
+        on="game_id",
+        how="left",
+        suffixes=("", "_bet"),
+    )
 
-        # Match by game_id (reliable) rather than (home_team, away_team) (fragile)
-        if game_id is None or game_id not in betting_lookup:
-            # Track unmatched for sanity report
-            unmatched_games.append({
-                "game_id": game_id,
-                "home_team": pred.get("home_team"),
-                "away_team": pred.get("away_team"),
-                "week": pred.get("week"),
-                "year": pred.get("year"),
-            })
-            continue
+    # Identify unmatched games (no betting line or missing spread)
+    vegas_spread = merged[spread_col]
+    unmatched_mask = merged["game_id"].isna() | vegas_spread.isna()
+    matched_mask = ~unmatched_mask
 
-        line_data = betting_lookup[game_id]
-        vegas_spread = line_data[spread_col]
+    # Log unmatched games (preserve per-game logging)
+    unmatched_df = merged[unmatched_mask]
+    if len(unmatched_df) > 0:
+        unmatched_games = unmatched_df[["game_id", "home_team", "away_team", "week", "year"]].to_dict("records")
+    else:
+        unmatched_games = []
 
-        if vegas_spread is None:
-            unmatched_games.append({
-                "game_id": game_id,
-                "home_team": pred.get("home_team"),
-                "away_team": pred.get("away_team"),
-                "week": pred.get("week"),
-                "year": pred.get("year"),
-                "reason": f"missing {spread_col}",
-            })
-            continue
+    # Filter to matched games for vectorized ATS calculation
+    df = merged[matched_mask].copy()
 
-        actual_margin = pred["actual_margin"]  # Positive = home won
-        model_spread = pred["predicted_spread"]  # Our model: positive = home favored
+    if len(df) == 0:
+        logger.warning("No predictions matched with betting lines")
+        return pd.DataFrame()
 
-        # Convert our spread to Vegas convention for comparison
-        # Our model: +10 means home favored by 10
-        # Vegas: -10 means home favored by 10
-        model_spread_vegas = -model_spread
+    # P3.8: Vectorized ATS calculations
+    actual_margin = df["actual_margin"].values
+    model_spread = df["predicted_spread"].values
+    vegas_spread_vals = df[spread_col].values
 
-        # Calculate edge (how much we differ from Vegas)
-        edge = model_spread_vegas - vegas_spread
-        # If edge < 0, our spread is more negative (we like home MORE than Vegas)
-        # If edge > 0, our spread is less negative (we like home LESS than Vegas)
-        model_pick_home = edge < 0  # Model likes home more than Vegas
+    # Convert our spread to Vegas convention for comparison
+    model_spread_vegas = -model_spread
 
-        # Determine ATS result
-        # home_cover > 0 means home beat the spread
-        # Vegas spread is negative when home is favored (e.g., -7)
-        # actual_margin + vegas_spread: e.g., home wins by 10, spread -7 => 10 + (-7) = 3 > 0 (covers)
-        home_cover = actual_margin + vegas_spread
-        if model_pick_home:
-            ats_win = home_cover > 0
-            ats_push = home_cover == 0
-        else:
-            ats_win = home_cover < 0
-            ats_push = home_cover == 0
+    # Calculate edge (how much we differ from Vegas)
+    edge = model_spread_vegas - vegas_spread_vals
+    model_pick_home = edge < 0  # Model likes home more than Vegas
 
-        # Get both open and close spreads for P3.4 sanity report
-        spread_open = line_data.get("spread_open", vegas_spread)
-        spread_close = line_data.get("spread_close", vegas_spread)
+    # Determine ATS result (vectorized)
+    home_cover = actual_margin + vegas_spread_vals
+    # ats_win: if picking home, home must cover (home_cover > 0)
+    #          if picking away, home must NOT cover (home_cover < 0)
+    ats_win = np.where(model_pick_home, home_cover > 0, home_cover < 0)
+    ats_push = home_cover == 0
 
-        # Calculate CLV (Closing Line Value)
-        # CLV = how many points better we got vs closing line
-        # If betting home: we want line to move toward home (closing more negative)
-        # If betting away: we want line to move toward away (closing less negative)
-        if spread_open is not None and spread_close is not None:
-            if model_pick_home:
-                # We bet home at spread_open, it closed at spread_close
-                # CLV = spread_open - spread_close (positive if line moved toward home)
-                clv = spread_open - spread_close
-            else:
-                # We bet away at spread_open, it closed at spread_close
-                # CLV = spread_close - spread_open (positive if line moved toward away)
-                clv = spread_close - spread_open
-        else:
-            clv = None
+    # Get both open and close spreads
+    spread_open = df["spread_open"].values
+    spread_close = df["spread_close"].values
 
-        results.append({
-            **pred,
-            "vegas_spread": vegas_spread,
-            "spread_open": spread_open,
-            "spread_close": spread_close,
-            "edge": abs(edge),
-            "pick": "HOME" if model_pick_home else "AWAY",
-            "ats_win": ats_win,
-            "ats_push": ats_push,
-            "clv": clv,
-        })
+    # Calculate CLV (Closing Line Value) - vectorized
+    # If betting home: CLV = spread_open - spread_close (positive if line moved toward home)
+    # If betting away: CLV = spread_close - spread_open (positive if line moved toward away)
+    clv = np.where(model_pick_home, spread_open - spread_close, spread_close - spread_open)
+    # Handle cases where open/close are missing
+    clv_mask = pd.isna(spread_open) | pd.isna(spread_close)
+    clv = np.where(clv_mask, np.nan, clv)
+
+    # Build result DataFrame with vectorized column assignment
+    df["vegas_spread"] = vegas_spread_vals
+    df["edge"] = np.abs(edge)
+    df["pick"] = np.where(model_pick_home, "HOME", "AWAY")
+    df["ats_win"] = ats_win
+    df["ats_push"] = ats_push
+    df["clv"] = clv
 
     # Sanity report: log match rate and unmatched games
     total_predictions = len(predictions)
-    matched = len(results)
+    matched = len(df)
     unmatched = len(unmatched_games)
     match_rate = matched / total_predictions if total_predictions > 0 else 0
 
@@ -850,7 +829,7 @@ def calculate_ats_results(
             "Check game_id alignment between games and betting data."
         )
 
-    return pd.DataFrame(results)
+    return df
 
 
 def calculate_metrics(

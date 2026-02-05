@@ -257,6 +257,38 @@
     ```
   - **Sanity report always runs:** `print_prediction_sanity_report()` is lightweight validation, not skipped
 
+- **P3.8: Vectorized ATS Calculation (Batch Computation)**
+  - **Problem:** `calculate_ats_results()` looped over 500+ predictions per backtest, building dicts one-by-one
+  - **Solution:** Replaced per-game loop with pandas merge + numpy vectorized operations
+  - **Changes:**
+    1. Convert predictions list to DataFrame upfront
+    2. Merge with betting data on `game_id` (left join)
+    3. Vectorize all calculations: edge, home_cover, ats_win, ats_push, clv
+    4. Use `np.where()` for conditional logic instead of if/else
+  - **Code pattern:**
+    ```python
+    # Before: O(n) loop with dict construction
+    for pred in predictions:
+        edge = model_spread_vegas - vegas_spread
+        if model_pick_home:
+            ats_win = home_cover > 0
+        ...
+        results.append({...})
+
+    # After: O(1) vectorized operations
+    edge = model_spread_vegas - vegas_spread_vals  # numpy array
+    ats_win = np.where(model_pick_home, home_cover > 0, home_cover < 0)
+    ```
+  - **Preserved functionality:**
+    - Unmatched game tracking via merge + mask
+    - Per-game logging for unmatched games (preserved)
+    - All output columns identical
+  - **Audit findings for future work:**
+    - Main prediction loop requires per-game iteration (SpreadGenerator interface)
+    - Batch prediction would require deep refactoring of all adjustment modules
+    - HFA, travel, altitude lookups would need vectorized versions
+  - **Verification:** Backtest 2024 weeks 5-7: identical results (MAE 12.60, ATS 74-75-7)
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints
