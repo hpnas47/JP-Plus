@@ -312,6 +312,33 @@
   - **Verbose behavior:** `--verbose` shows per-week MAE, per-year data details
   - **Debug behavior:** Full logging restored with `--debug` flag (sets DEBUG level)
 
+- **P3 Optimization Benchmark Results (SAFE OPTIMIZATION)**
+  - **Purpose:** Comprehensive audit comparing pre-P3 vs post-P3 refactored code
+  - **Methodology:**
+    - Baseline: Simulated pre-P3 behavior (dense matrices, row-wise apply operations)
+    - Current: P3-optimized code (sparse matrices, vectorized numpy)
+    - N=3 iterations for statistical stability
+    - Tested on 2024 season (872 games, 201,045 plays, 134 teams)
+  - **Results:**
+    | Metric | Baseline | Current | Improvement |
+    |--------|----------|---------|-------------|
+    | Mean Runtime | 13,148 ms | 6,595 ms | **+49.8%** |
+    | Peak Memory | 628.9 MB | 38.8 MB | **+93.8%** |
+    | Max Rating Diff | - | 0.0000 | ✓ (threshold: ≤0.01) |
+    | Spearman ρ | - | 1.000000 | ✓ (threshold: ≥0.999) |
+  - **Isolated Optimization Measurements:**
+    | Optimization | Before | After | Improvement |
+    |--------------|--------|-------|-------------|
+    | P3.1 Sparse Matrix | 918.8 MB | 5.4 MB | **99.4% memory** |
+    | P3.1 Sparse Build | 334.9 ms | 242.3 ms | 1.4x faster |
+    | P3.3 Row-wise → Vectorized | 745.5 ms | 1.9 ms | **390x faster** |
+  - **Final Verdict:** ✓ **SAFE OPTIMIZATION**
+    - Runtime improvement ≥25%: ✓ PASS (+49.8%)
+    - Memory reduction ≥20%: ✓ PASS (+93.8%)
+    - Algorithmic integrity: ✓ PASS (identical ratings)
+  - **Benchmark script:** `scripts/benchmark.py` (created)
+  - **Report:** `data/outputs/benchmark_report_20260204_193446.txt`
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints
