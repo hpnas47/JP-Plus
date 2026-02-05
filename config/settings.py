@@ -51,6 +51,7 @@ class Settings:
     lookahead_penalty: float = -1.5
     sandwich_extra_penalty: float = -1.0  # Extra penalty when BOTH letdown AND lookahead
     rivalry_underdog_boost: float = 1.0
+    consecutive_road_penalty: float = -1.5  # Penalty for 2nd consecutive road game
 
     # Travel Adjustment
     timezone_adjustment: float = 0.5  # points per timezone crossed

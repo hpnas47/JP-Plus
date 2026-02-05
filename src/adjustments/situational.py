@@ -116,6 +116,7 @@ class SituationalFactors:
     lookahead_penalty: float = 0.0
     sandwich_penalty: float = 0.0  # Extra penalty when BOTH letdown AND lookahead apply
     rivalry_boost: float = 0.0
+    consecutive_road_penalty: float = 0.0  # Penalty for 2nd consecutive road game
     total_adjustment: float = 0.0
 
     def __post_init__(self):
@@ -125,6 +126,7 @@ class SituationalFactors:
             + self.lookahead_penalty
             + self.sandwich_penalty
             + self.rivalry_boost
+            + self.consecutive_road_penalty
         )
 
     # Backward compatibility alias
@@ -143,6 +145,7 @@ class SituationalAdjuster:
     - Look-ahead spot: Team with rival/top-10 opponent next week
     - Sandwich spot: BOTH letdown AND lookahead (compounding penalty)
     - Rivalry: Underdog gets small boost in rivalry games
+    - Consecutive road: Team playing 2nd straight road game
 
     Sandwich Spot:
     The most dangerous scheduling spot in CFB is the "sandwich" - when a team
@@ -150,6 +153,12 @@ class SituationalAdjuster:
     on deck next week (lookahead). The unranked team in the middle is the
     "meat" of the sandwich. When both flags trigger, an extra compounding
     penalty is applied beyond the sum of individual penalties.
+
+    Consecutive Road Games:
+    Playing back-to-back road games is a statistically significant disadvantage.
+    Travel fatigue, hostile environments, and disrupted routines compound when
+    teams don't get a home game to recover. The penalty applies only when the
+    team is AWAY and their immediately preceding game was also AWAY.
 
     Rest Day Categories:
     - Bye week: 14+ days (team didn't play previous week)
@@ -173,6 +182,7 @@ class SituationalAdjuster:
         lookahead_penalty: Optional[float] = None,
         sandwich_extra_penalty: Optional[float] = None,
         rivalry_boost: Optional[float] = None,
+        consecutive_road_penalty: Optional[float] = None,
     ):
         """Initialize situational adjuster.
 
@@ -184,6 +194,7 @@ class SituationalAdjuster:
             lookahead_penalty: Points penalty for look-ahead spot
             sandwich_extra_penalty: Extra penalty when BOTH letdown AND lookahead apply
             rivalry_boost: Points boost for underdog in rivalry
+            consecutive_road_penalty: Points penalty for 2nd consecutive road game
         """
         settings = get_settings()
 
@@ -218,6 +229,11 @@ class SituationalAdjuster:
             rivalry_boost
             if rivalry_boost is not None
             else settings.rivalry_underdog_boost
+        )
+        self.consecutive_road_penalty = (
+            consecutive_road_penalty
+            if consecutive_road_penalty is not None
+            else settings.consecutive_road_penalty
         )
 
     def calculate_rest_days(
@@ -563,6 +579,58 @@ class SituationalAdjuster:
         """
         return is_rivalry_game(team_a, team_b)
 
+    def check_consecutive_road(
+        self,
+        team: str,
+        current_week: int,
+        schedule_df: pd.DataFrame,
+        is_home: bool,
+    ) -> bool:
+        """Check if team is playing their 2nd consecutive road game.
+
+        Consecutive road games create compounding fatigue - travel, hostile
+        environments, and disrupted routines add up when teams don't get
+        a home game to recover.
+
+        Args:
+            team: Team name
+            current_week: Current week number
+            schedule_df: DataFrame with schedule (must have week, home_team, away_team)
+            is_home: Whether the team is playing at home in the current game
+
+        Returns:
+            True if team is AWAY and their last played game was also AWAY
+        """
+        # Only applies when team is currently away
+        if is_home:
+            return False
+
+        if current_week <= 1:
+            return False
+
+        # Find the team's last played game (regardless of which week)
+        team_games = schedule_df[
+            ((schedule_df["home_team"] == team) | (schedule_df["away_team"] == team))
+            & (schedule_df["week"] < current_week)
+        ]
+
+        if team_games.empty:
+            return False  # No previous games (season opener)
+
+        # Get the most recent game by week number
+        last_game = team_games.loc[team_games["week"].idxmax()]
+
+        # Check if team was away in their last game
+        was_away_last_game = last_game["away_team"] == team
+
+        if was_away_last_game:
+            logger.debug(
+                f"CONSECUTIVE ROAD: {team} is away for 2nd straight game "
+                f"(last away @ {last_game['home_team']} in week {last_game['week']})"
+            )
+
+        return was_away_last_game
+
     def calculate_factors(
         self,
         team: str,
@@ -645,6 +713,14 @@ class SituationalAdjuster:
             factors.rivalry_boost = self.rivalry_boost
             logger.debug(f"{team} rivalry underdog boost: +{self.rivalry_boost}")
 
+        # Consecutive road games (separate from letdown - pure travel fatigue)
+        if self.check_consecutive_road(team, current_week, schedule_df, team_is_home):
+            factors.consecutive_road_penalty = self.consecutive_road_penalty
+            logger.info(
+                f"CONSECUTIVE ROAD: {team} playing 2nd straight road game - "
+                f"penalty: {self.consecutive_road_penalty}"
+            )
+
         # Note: rest_advantage is calculated in get_matchup_adjustment based on differential
         # Total will be recalculated there
         factors.total_adjustment = (
@@ -653,6 +729,7 @@ class SituationalAdjuster:
             + factors.lookahead_penalty
             + factors.sandwich_penalty
             + factors.rivalry_boost
+            + factors.consecutive_road_penalty
         )
 
         return factors
@@ -723,6 +800,7 @@ class SituationalAdjuster:
             + home_factors.lookahead_penalty
             + home_factors.sandwich_penalty
             + home_factors.rivalry_boost
+            + home_factors.consecutive_road_penalty
         )
         away_factors.total_adjustment = (
             away_factors.rest_advantage  # 0 - rest differential is on home side
@@ -730,6 +808,7 @@ class SituationalAdjuster:
             + away_factors.lookahead_penalty
             + away_factors.sandwich_penalty
             + away_factors.rivalry_boost
+            + away_factors.consecutive_road_penalty
         )
 
         net_adjustment = home_factors.total_adjustment - away_factors.total_adjustment
@@ -749,6 +828,8 @@ class SituationalAdjuster:
             "away_lookahead": away_factors.lookahead_penalty,
             "home_sandwich": home_factors.sandwich_penalty,
             "away_sandwich": away_factors.sandwich_penalty,
+            "home_consecutive_road": home_factors.consecutive_road_penalty,
+            "away_consecutive_road": away_factors.consecutive_road_penalty,
             "home_rivalry": home_factors.rivalry_boost,
             "away_rivalry": away_factors.rivalry_boost,
             "net": net_adjustment,
