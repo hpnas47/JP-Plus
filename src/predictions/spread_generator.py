@@ -538,33 +538,18 @@ class SpreadGenerator:
         )
 
         # Store components (for backward compatibility with SpreadComponents)
-        components.home_field = aggregated.smoothed_hfa
-        components.travel = aggregated.smoothed_travel
-        components.altitude = aggregated.smoothed_altitude
-        # Situational now includes rest, letdown, lookahead, sandwich, rivalry, consecutive_road
-        # after four-bucket smoothing (minus venue which is in HFA)
-        components.situational = (
-            aggregated.physical_bucket
-            - aggregated.smoothed_hfa  # Don't double count HFA (it's not in physical bucket anyway)
-            + aggregated.mental_bucket
-            + aggregated.boosts_bucket
-        )
-        # Simpler: situational = aggregated.net_adjustment - aggregated.venue_bucket
-        # But let's be explicit about what's included
-
-        # Actually, let me recalculate: aggregated.net_adjustment includes venue+physical+mental+boosts
-        # We want:
-        #   components.home_field = HFA
-        #   components.travel = travel portion of physical
-        #   components.altitude = altitude portion of physical
-        #   components.situational = everything else (rest, consecutive_road, mental, boosts)
-        # The issue is physical_bucket includes travel+altitude+consecutive_road+short_week
-        # Let's do it correctly:
+        # The aggregator uses unified env stack, so we extract raw values for display
+        components.home_field = aggregated.raw_hfa
+        components.travel = aggregated.raw_travel
+        components.altitude = aggregated.raw_altitude
+        # Situational = everything in net_adjustment except HFA, travel, altitude
+        # This includes: rest, consecutive_road, mental factors, and boosts
+        # Plus any soft cap reduction applied to the env stack
         components.situational = (
             aggregated.net_adjustment
-            - aggregated.venue_bucket  # HFA is separate
-            - aggregated.smoothed_travel  # Travel is separate
-            - aggregated.smoothed_altitude  # Altitude is separate
+            - aggregated.raw_hfa
+            - aggregated.raw_travel
+            - aggregated.raw_altitude
         )
 
         # Special teams differential (P2.7: applied as adjustment layer)
