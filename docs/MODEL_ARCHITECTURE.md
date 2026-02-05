@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 4, 2026 (Situational Adjustments Refinement)
+**Last Updated:** February 5, 2026 (Unified Environmental Stack)
 
 ## Overview
 
@@ -318,21 +318,22 @@ High-altitude venues (BYU 4,551ft, Air Force 6,621ft, Colorado 5,328ft) penalize
 
 #### Consolidated Adjustment Smoothing (AdjustmentAggregator)
 
-All game adjustments pass through a single aggregator that applies four-bucket smoothing to prevent double-counting correlated factors. This replaces the previous separate smoothing for HFA+travel+altitude and situational factors.
+All game adjustments pass through a single aggregator that applies unified environmental stack smoothing to prevent double-counting correlated factors.
 
-**Four-Bucket Architecture:**
+**Three-Bucket Architecture:**
 
 | Bucket | Factors | Smoothing | Rationale |
 |--------|---------|-----------|-----------|
-| **A: Venue** | HFA | None (100%) | Baseline home advantage stands alone |
-| **B: Physical** | travel, altitude, consecutive_road, short_week | Aggressive (100%/25%) | Physical fatigue factors are highly correlated |
-| **C: Mental** | letdown, lookahead, sandwich | Standard (100%/50%/25%) | Mental factors compound with diminishing returns |
-| **D: Boosts** | rivalry, bye_week_rest | Linear sum | Positive factors are rare, stack fully |
+| **Environmental Stack** | HFA, travel, altitude, rest, consecutive_road | Single-layer soft cap | All physical/venue factors sum linearly, then soft cap for extreme stacks only |
+| **Mental** | letdown, lookahead, sandwich | Standard (100%/50%/25%) | Mental factors compound with diminishing returns |
+| **Boosts** | rivalry | Linear sum | Positive factors are rare, stack fully |
 
-**Physical Bucket Details:**
-- Largest factor at 100%, all others at 25%
-- Travel-consecutive correlation: When travel > 1.5 pts, consecutive_road reduced by 50%
-- Rationale: A team flying cross-country for a 2nd straight road game is tired, but not 2x tired
+**Environmental Stack Details:**
+- All environmental factors (HFA + travel + altitude + rest + consecutive_road) sum linearly first
+- **Soft cap applied only to extreme stacks:** Threshold = 5.0 pts, excess weight = 60%
+- If |stack| ≤ 5.0: no dampening (standard games use linear sum)
+- If |stack| > 5.0: `env_score = 5.0 + (excess × 0.60)` with appropriate sign
+- This single-layer approach avoids the "double damping" bug where separate bucket smoothing + soft cap created two layers of penalty
 
 **Mental Bucket Details:**
 - Largest at 100%, second at 50%, remaining at 25%
@@ -340,11 +341,10 @@ All game adjustments pass through a single aggregator that applies four-bucket s
 
 **Global Cap:** ±7.0 points maximum total adjustment
 
-**Example:** Ohio State at Michigan with travel=1.5, altitude=1.0, letdown=-2.0, lookahead=-1.5, sandwich=-1.0, rest=+1.0:
-- Physical: 1.5 + 1.0×0.25 = 1.75 (not 2.5 raw)
-- Mental: 2.0 + 1.5×0.5 + 1.0×0.25 = 3.0 (not 4.5 raw)
-- Boosts: 1.0
-- With HFA=3.0: Total = 3.0 + 1.75 + 3.0 + 1.0 = 8.75 → capped at 7.0
+**Example:** Away team at high-altitude venue with HFA=3.0, travel=1.5, altitude=1.0, rest=0.5:
+- Raw env stack: 3.0 + 1.5 + 1.0 + 0.5 = 6.0 pts
+- Exceeds threshold (5.0), so: 5.0 + (1.0 × 0.60) = 5.6 pts (not 6.0 raw)
+- Standard game with stack ≤5.0 gets no dampening at all
 
 ---
 
@@ -926,7 +926,8 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
-- **Consolidated All Adjustment Smoothing into AdjustmentAggregator** - Major architectural refactor to eliminate double-smoothing. All game adjustments (HFA, travel, altitude, rest, letdown, lookahead, sandwich, consecutive road, rivalry) now flow through a single four-bucket aggregator. Bucket A (Venue): HFA with no smoothing. Bucket B (Physical): travel, altitude, consecutive_road, short_week with aggressive smoothing (100%/25%). Bucket C (Mental): letdown, lookahead, sandwich with standard smoothing (100%/50%/25%). Bucket D (Boosts): rivalry, bye_rest with linear sum. Global cap at ±7.0 points. This replaces the previous separate smoothing in `smooth_correlated_stack()` and `SituationalFactors.__post_init__()`. New file: `src/adjustments/aggregator.py`.
+- **Fixed Double-Damping Bug with Unified Environmental Stack** - Major fix to the adjustment aggregator. The previous four-bucket design applied smoothing to the physical bucket (100%/25%) and then soft cap on top, creating two layers of penalty that destroyed valid betting edges. The fix consolidates all environmental factors (HFA, travel, altitude, rest, consecutive_road) into a single stack with one soft cap layer: threshold 5.0 pts, excess weight 60%. Standard games (stack ≤5.0) get no dampening at all—only extreme stacks are smoothed. Mental bucket (letdown, lookahead, sandwich) unchanged at 100%/50%/25%. Boosts bucket (rivalry) unchanged as linear sum. Performance restored to baseline: Core MAE 12.21, Core 5+ Edge 57.1%.
+- **Consolidated All Adjustment Smoothing into AdjustmentAggregator** - Major architectural refactor to eliminate double-smoothing. All game adjustments (HFA, travel, altitude, rest, letdown, lookahead, sandwich, consecutive road, rivalry) now flow through a single aggregator. Global cap at ±7.0 points. This replaces the previous separate smoothing in `smooth_correlated_stack()` and `SituationalFactors.__post_init__()`. New file: `src/adjustments/aggregator.py`.
 - **Simplified SituationalFactors to Raw Container** - Removed all smoothing logic from SituationalFactors dataclass. It now stores raw adjustment values only. Added `get_matchup_factors()` method that returns raw factors for the aggregator. Legacy `get_matchup_adjustment()` retained for backward compatibility.
 - **Added Consecutive Road Games Penalty** - Teams playing their second consecutive road game receive -1.5 pt penalty. Travel fatigue compounds—back-to-back away games exceed the sum of individual road trips. Implementation checks team's last played game (not necessarily previous week due to byes). Travel-consecutive correlation in aggregator reduces consecutive_road by 50% when travel > 1.5 pts.
 - **Refactored Short Week to Non-Linear Penalty** - When one team is on short week (≤5 days) and opponent is on normal/rested schedule (>6 days), a hardcoded -2.5 pt penalty applies instead of linear calculation. Short week disadvantage is severe and non-linear—not just "2 fewer rest days." Linear rest calculation still applies for other scenarios (bye vs bye, mini-bye vs normal, etc.).

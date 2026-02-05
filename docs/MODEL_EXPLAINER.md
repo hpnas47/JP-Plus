@@ -156,14 +156,15 @@ After calculating base efficiency ratings, JP+ applies game-specific adjustments
 
 ### Consolidated Adjustment Smoothing
 
-All game adjustments flow through a single aggregator that applies four-bucket smoothing to prevent double-counting correlated factors:
+All game adjustments flow through a single aggregator that applies unified environmental stack smoothing to prevent double-counting correlated factors:
 
 | Bucket | Factors | Smoothing |
 |--------|---------|-----------|
-| **Venue** | HFA | None (100%) |
-| **Physical** | travel, altitude, consecutive road, short week | Aggressive (100%/25%) |
+| **Environmental Stack** | HFA, travel, altitude, rest, consecutive road | Single-layer soft cap (threshold 5.0, excess 60%) |
 | **Mental** | letdown, lookahead, sandwich | Standard (100%/50%/25%) |
-| **Boosts** | rivalry, bye week rest | Linear sum |
+| **Boosts** | rivalry | Linear sum |
+
+**How it works:** All environmental factors sum linearly first. If the total is ≤5.0 pts, no dampening is applied—this is a standard game. Only when the stack exceeds 5.0 pts does the soft cap kick in: `env_score = 5.0 + (excess × 0.60)`. This single-layer approach avoids "double damping" where separate smoothing steps compound incorrectly.
 
 **Why this matters:** A team flying cross-country for a 2nd straight road game while in a letdown spot after a big win is disadvantaged—but not 3x disadvantaged. The smoothing captures the directional effect while preventing over-prediction.
 
