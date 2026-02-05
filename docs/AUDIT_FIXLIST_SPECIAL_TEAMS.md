@@ -1,4 +1,4 @@
-```md
+
 # AUDIT_FIXLIST_SPECIAL_TEAMS.md
 
 **Target:** `src/models/special_teams.py`  
@@ -126,4 +126,5 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 - Backtests show ST adjustments are stable and do not degrade performance.
 
 ---
+
 ```
