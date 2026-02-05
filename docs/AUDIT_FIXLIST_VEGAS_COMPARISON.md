@@ -1,4 +1,4 @@
-```md
+
 # AUDIT_FIXLIST_VEGAS_COMPARISON.md
 
 **Target:** `src/predictions/vegas_comparison.py`  
@@ -113,4 +113,5 @@
 6. P1.4 Robust sorting  
 7. P2.1 Opener diagnostics  
 8. P2.2 game_id support in line movement
+
 ```
