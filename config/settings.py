@@ -48,6 +48,7 @@ class Settings:
     bye_week_advantage: float = 1.5
     letdown_penalty: float = -2.0
     lookahead_penalty: float = -1.5
+    sandwich_extra_penalty: float = -1.0  # Extra penalty when BOTH letdown AND lookahead
     rivalry_underdog_boost: float = 1.0
 
     # Travel Adjustment

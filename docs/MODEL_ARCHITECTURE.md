@@ -266,8 +266,9 @@ EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments.
 | | Altitude | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
 | | Correlated Stack Smoothing | - | Prevents over-prediction when HFA+travel+altitude combine |
 | **Scheduling** | Rest Differential | ±1.5 pts | Based on actual days between games |
-| | Letdown Spot | -1.5 pts | Beat ranked team last week, facing unranked now |
+| | Letdown Spot | -2.0 pts | Beat ranked team last week, facing unranked now |
 | | Lookahead Spot | -1.5 pts | Rival or top-10 opponent next week |
+| | Sandwich Spot | -1.0 pts extra | BOTH letdown AND lookahead (compounding) |
 | | Rivalry Boost | +1.0 pts | Underdog in rivalry game only |
 | **Opponent/Pace** | FCS Penalty | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
 | | Special Teams | -3 to +3 pts | Full ST differential (FG+Punt+Kickoff PBTA) |
@@ -342,13 +343,16 @@ CFB scheduling creates meaningful rest differentials beyond simple bye weeks:
 
 **Example:** Oregon (9 days after Thursday game) vs Texas (7 days) = +1.0 pts Oregon
 
-#### Letdown, Lookahead, and Rivalry
+#### Letdown, Lookahead, Sandwich, and Rivalry
 
 | Factor | Value | Condition |
 |--------|-------|-----------|
-| **Letdown Spot** | -1.5 pts | Beat top-15 team last week, facing unranked opponent |
+| **Letdown Spot** | -2.0 pts | Beat top-15 team last week, facing unranked opponent |
 | **Lookahead Spot** | -1.5 pts | Rival or top-10 opponent next week |
+| **Sandwich Spot** | -1.0 pts extra | BOTH letdown AND lookahead apply to same team |
 | **Rivalry Boost** | +1.0 pts | Underdog in rivalry game only |
+
+**Sandwich Spot:** The most dangerous scheduling spot in CFB. When a team is coming off a massive emotional win (letdown) AND has a massive game on deck next week (lookahead), the unranked team in the middle is the "meat" of the sandwich. Total penalty: -4.5 pts (-2.0 letdown + -1.5 lookahead + -1.0 compounding).
 
 **Historical Rankings:** Letdown detection uses **ranking at time of game**, not current ranking. JP+ fetches AP poll week-by-week from CFBD `/rankings` endpoint. Example: If Oregon beat #2 Ohio State in Week 7 (who later dropped to #20), Week 8 still shows letdown spot.
 

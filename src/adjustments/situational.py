@@ -114,6 +114,7 @@ class SituationalFactors:
     rest_days: int = 7  # Actual days of rest for this team
     letdown_penalty: float = 0.0
     lookahead_penalty: float = 0.0
+    sandwich_penalty: float = 0.0  # Extra penalty when BOTH letdown AND lookahead apply
     rivalry_boost: float = 0.0
     total_adjustment: float = 0.0
 
@@ -122,6 +123,7 @@ class SituationalFactors:
             self.rest_advantage
             + self.letdown_penalty
             + self.lookahead_penalty
+            + self.sandwich_penalty
             + self.rivalry_boost
         )
 
@@ -139,7 +141,15 @@ class SituationalAdjuster:
     - Rest advantage: Days of rest differential (bye week, short week, mini-bye)
     - Letdown spot: Team coming off big win vs top-15 now facing unranked
     - Look-ahead spot: Team with rival/top-10 opponent next week
+    - Sandwich spot: BOTH letdown AND lookahead (compounding penalty)
     - Rivalry: Underdog gets small boost in rivalry games
+
+    Sandwich Spot:
+    The most dangerous scheduling spot in CFB is the "sandwich" - when a team
+    is coming off a massive emotional win (letdown) AND has a massive game
+    on deck next week (lookahead). The unranked team in the middle is the
+    "meat" of the sandwich. When both flags trigger, an extra compounding
+    penalty is applied beyond the sum of individual penalties.
 
     Rest Day Categories:
     - Bye week: 14+ days (team didn't play previous week)
@@ -160,6 +170,7 @@ class SituationalAdjuster:
         short_week_penalty: Optional[float] = None,
         letdown_penalty: Optional[float] = None,
         lookahead_penalty: Optional[float] = None,
+        sandwich_extra_penalty: Optional[float] = None,
         rivalry_boost: Optional[float] = None,
     ):
         """Initialize situational adjuster.
@@ -169,6 +180,7 @@ class SituationalAdjuster:
             short_week_penalty: Points penalty per day below normal rest
             letdown_penalty: Points penalty for letdown spot
             lookahead_penalty: Points penalty for look-ahead spot
+            sandwich_extra_penalty: Extra penalty when BOTH letdown AND lookahead apply
             rivalry_boost: Points boost for underdog in rivalry
         """
         settings = get_settings()
@@ -189,6 +201,11 @@ class SituationalAdjuster:
             lookahead_penalty
             if lookahead_penalty is not None
             else settings.lookahead_penalty
+        )
+        self.sandwich_extra_penalty = (
+            sandwich_extra_penalty
+            if sandwich_extra_penalty is not None
+            else settings.sandwich_extra_penalty
         )
         self.rivalry_boost = (
             rivalry_boost
@@ -532,18 +549,30 @@ class SituationalAdjuster:
                 factors.rest_days = 7  # Assume normal week
 
         # Letdown spot (uses historical rankings for previous opponent)
-        if self.check_letdown_spot(
+        in_letdown = self.check_letdown_spot(
             team, current_week, opponent, schedule_df, rankings, historical_rankings
-        ):
+        )
+        if in_letdown:
             factors.letdown_penalty = self.letdown_penalty
             logger.debug(f"{team} in letdown spot: {self.letdown_penalty}")
 
         # Look-ahead spot (uses current rankings - perception matters)
-        if self.check_lookahead_spot(
+        in_lookahead = self.check_lookahead_spot(
             team, current_week, schedule_df, rankings, historical_rankings
-        ):
+        )
+        if in_lookahead:
             factors.lookahead_penalty = self.lookahead_penalty
             logger.debug(f"{team} in look-ahead spot: {self.lookahead_penalty}")
+
+        # SANDWICH SPOT: Team is in BOTH letdown AND lookahead - the most dangerous spot
+        # Coming off a big emotional win AND looking ahead to a big game next week
+        # The unranked opponent in the middle is the "meat" of the sandwich
+        if in_letdown and in_lookahead:
+            factors.sandwich_penalty = self.sandwich_extra_penalty
+            logger.info(
+                f"SANDWICH SPOT: {team} in letdown AND lookahead - "
+                f"extra penalty: {self.sandwich_extra_penalty}"
+            )
 
         # Rivalry boost (for underdog only)
         if self.check_rivalry(team, opponent) and not team_is_favorite:
@@ -556,6 +585,7 @@ class SituationalAdjuster:
             factors.rest_advantage  # Will be 0 here, set in get_matchup_adjustment
             + factors.letdown_penalty
             + factors.lookahead_penalty
+            + factors.sandwich_penalty
             + factors.rivalry_boost
         )
 
@@ -623,12 +653,14 @@ class SituationalAdjuster:
             home_factors.rest_advantage
             + home_factors.letdown_penalty
             + home_factors.lookahead_penalty
+            + home_factors.sandwich_penalty
             + home_factors.rivalry_boost
         )
         away_factors.total_adjustment = (
             away_factors.rest_advantage  # 0 - rest differential is on home side
             + away_factors.letdown_penalty
             + away_factors.lookahead_penalty
+            + away_factors.sandwich_penalty
             + away_factors.rivalry_boost
         )
 
@@ -647,6 +679,8 @@ class SituationalAdjuster:
             "away_letdown": away_factors.letdown_penalty,
             "home_lookahead": home_factors.lookahead_penalty,
             "away_lookahead": away_factors.lookahead_penalty,
+            "home_sandwich": home_factors.sandwich_penalty,
+            "away_sandwich": away_factors.sandwich_penalty,
             "home_rivalry": home_factors.rivalry_boost,
             "away_rivalry": away_factors.rivalry_boost,
             "net": net_adjustment,
