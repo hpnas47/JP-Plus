@@ -134,11 +134,14 @@ After calculating base efficiency ratings, JP+ applies game-specific adjustments
 
 Formula: `(home_rest - away_rest) × 0.5 pts/day`. Example: Oregon (9 days after Thursday game) vs Texas (7 days after Saturday game) = +1.0 pts for Oregon.
 
-**Letdown Spot (-2.0 pts):** Team beat a top-15 opponent last week, now facing unranked opponent. *Uses historical rankings at time of game, not current rankings.*
+**Letdown Spot (-2.0 to -2.5 pts):** Team had a "big win" last week, now facing unranked opponent. Big win = beat top-15 team OR beat arch-rival (rivalry hangover). *Uses historical rankings at time of game, not current rankings.*
+
+- **Home letdown:** -2.0 pts (crowd keeps team engaged)
+- **Away letdown:** -2.5 pts (sleepy road game multiplier)
 
 **Lookahead Spot (-1.5 pts):** Team has a rival or top-10 opponent next week.
 
-**Sandwich Spot (extra -1.0 pts):** The most dangerous scheduling spot in CFB—when BOTH letdown AND lookahead apply. Team just beat a ranked opponent and has a big game on deck next week. The unranked team in the middle is the "meat" of the sandwich. Total penalty: -4.5 pts (-2.0 letdown + -1.5 lookahead + -1.0 compounding).
+**Sandwich Spot (extra -1.0 pts):** The most dangerous scheduling spot in CFB—when BOTH letdown AND lookahead apply. Team just had a big win and has a big game on deck next week. The unranked team in the middle is the "meat" of the sandwich. Total penalty: -4.5 to -5.0 pts.
 
 **Rivalry Boost (+1.0 pts):** Underdog in rivalry game only.
 

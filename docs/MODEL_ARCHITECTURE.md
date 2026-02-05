@@ -266,7 +266,7 @@ EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments.
 | | Altitude | 0-3 pts | High altitude venues (BYU, Air Force, Colorado) |
 | | Correlated Stack Smoothing | - | Prevents over-prediction when HFA+travel+altitude combine |
 | **Scheduling** | Rest Differential | ±1.5 pts | Based on actual days between games |
-| | Letdown Spot | -2.0 pts | Beat ranked team last week, facing unranked now |
+| | Letdown Spot | -2.0/-2.5 pts | Big win last week (ranked or rival), facing unranked |
 | | Lookahead Spot | -1.5 pts | Rival or top-10 opponent next week |
 | | Sandwich Spot | -1.0 pts extra | BOTH letdown AND lookahead (compounding) |
 | | Rivalry Boost | +1.0 pts | Underdog in rivalry game only |
@@ -347,12 +347,23 @@ CFB scheduling creates meaningful rest differentials beyond simple bye weeks:
 
 | Factor | Value | Condition |
 |--------|-------|-----------|
-| **Letdown Spot** | -2.0 pts | Beat top-15 team last week, facing unranked opponent |
+| **Letdown Spot (home)** | -2.0 pts | "Big win" last week, facing unranked opponent |
+| **Letdown Spot (away)** | -2.5 pts | Same, but traveling (sleepy road game) |
 | **Lookahead Spot** | -1.5 pts | Rival or top-10 opponent next week |
 | **Sandwich Spot** | -1.0 pts extra | BOTH letdown AND lookahead apply to same team |
 | **Rivalry Boost** | +1.0 pts | Underdog in rivalry game only |
 
-**Sandwich Spot:** The most dangerous scheduling spot in CFB. When a team is coming off a massive emotional win (letdown) AND has a massive game on deck next week (lookahead), the unranked team in the middle is the "meat" of the sandwich. Total penalty: -4.5 pts (-2.0 letdown + -1.5 lookahead + -1.0 compounding).
+**Letdown "Big Win" Criteria (either triggers):**
+1. Beat a top-15 ranked team (using historical ranking at time of game)
+2. Beat an arch-rival (regardless of rival's ranking) — "Rivalry Hangover"
+
+**Sleepy Road Game Multiplier:** Analysis of 89 letdown games (2022-2024) showed clear venue effect:
+- Home letdown: 52.4% ATS, +0.1 pts vs spread (crowd keeps team engaged)
+- Away letdown: 48.9% ATS, -2.5 pts vs spread (sleepy road game)
+
+The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
+
+**Sandwich Spot:** The most dangerous scheduling spot in CFB. When a team is coming off a massive emotional win (letdown) AND has a massive game on deck next week (lookahead), the unranked team in the middle is the "meat" of the sandwich. Analysis showed sandwich teams cover only **36.4% ATS** (4/11 games). Total penalty: -4.5 to -5.0 pts.
 
 **Historical Rankings:** Letdown detection uses **ranking at time of game**, not current ranking. JP+ fetches AP poll week-by-week from CFBD `/rankings` endpoint. Example: If Oregon beat #2 Ohio State in Week 7 (who later dropped to #20), Week 8 still shows letdown spot.
 
