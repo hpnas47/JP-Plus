@@ -5,7 +5,7 @@ double-counting when correlated factors stack on the same team.
 
 Four-Bucket Architecture:
 ------------------------
-Bucket A (Venue): HFA - no smoothing, applied directly
+Bucket A (Venue): HFA - raw value
 Bucket B (Physical/Fatigue): travel, altitude, consecutive_road, negative rest
     - Aggressive smoothing: largest at 100%, all others at 25%
     - Travel-consecutive correlation: when travel > 1.5, reduce consecutive_road by 50%
@@ -13,6 +13,16 @@ Bucket C (Mental/Focus): letdown, lookahead, sandwich
     - Standard smoothing: largest at 100%, second at 50%, others at 25%
 Bucket D (Boosts): rivalry_boost, positive rest
     - Linear sum (no dampening for positive factors)
+
+Venue-Physical Integration (Soft Cap):
+--------------------------------------
+Linear sum for standard games, soft cap for extreme stacks only.
+This preserves full HFA+Travel for most matchups while dampening only the
+extreme "super stacks" (>6.0 pts combined) that cause MAE regression.
+
+    - If |venue + physical| <= 6.0: Use linear sum (no damping)
+    - If |venue + physical| > 6.0: Apply soft cap
+        integrated = (6.0 + excess * 0.5) * sign(raw_stack)
 
 Global Cap: ±7.0 points to prevent unrealistic adjustments.
 """
@@ -42,8 +52,9 @@ class AggregatedAdjustments:
     net_adjustment: float = 0.0  # Total adjustment favoring home team
 
     # Bucket breakdowns (for diagnostics)
-    venue_bucket: float = 0.0  # Bucket A: HFA (no smoothing)
+    venue_bucket: float = 0.0  # Bucket A: HFA (raw)
     physical_bucket: float = 0.0  # Bucket B: travel + altitude + consecutive_road + negative rest
+    integrated_env: float = 0.0  # Venue + Physical after integration smoothing
     mental_bucket: float = 0.0  # Bucket C: letdown + lookahead + sandwich
     boosts_bucket: float = 0.0  # Bucket D: rivalry + positive rest
 
@@ -60,6 +71,7 @@ class AggregatedAdjustments:
 
     # Pre-smoothing raw values (for debugging)
     raw_total: float = 0.0
+    venue_physical_aligned: bool = False  # True if venue and physical had same sign
     was_capped: bool = False
 
     def to_dict(self) -> dict:
@@ -68,11 +80,13 @@ class AggregatedAdjustments:
             "net_adjustment": self.net_adjustment,
             "venue_bucket": self.venue_bucket,
             "physical_bucket": self.physical_bucket,
+            "integrated_env": self.integrated_env,
             "mental_bucket": self.mental_bucket,
             "boosts_bucket": self.boosts_bucket,
             "smoothed_hfa": self.smoothed_hfa,
             "smoothed_travel": self.smoothed_travel,
             "smoothed_altitude": self.smoothed_altitude,
+            "venue_physical_aligned": self.venue_physical_aligned,
             "raw_total": self.raw_total,
             "was_capped": self.was_capped,
         }
@@ -99,6 +113,8 @@ class AdjustmentAggregator:
     PHYSICAL_SECONDARY_WEIGHT: float = 0.25  # Weight for non-largest physical factors
     MENTAL_SECOND_WEIGHT: float = 0.50  # Weight for second-largest mental factor
     MENTAL_OTHER_WEIGHT: float = 0.25  # Weight for remaining mental factors
+    VENUE_PHYSICAL_SOFT_CAP: float = 6.0  # Threshold where soft cap kicks in for venue+physical stack
+    VENUE_PHYSICAL_EXCESS_WEIGHT: float = 0.50  # Weight for excess above soft cap
 
     def __init__(
         self,
@@ -107,6 +123,8 @@ class AdjustmentAggregator:
         physical_secondary_weight: Optional[float] = None,
         mental_second_weight: Optional[float] = None,
         mental_other_weight: Optional[float] = None,
+        venue_physical_soft_cap: Optional[float] = None,
+        venue_physical_excess_weight: Optional[float] = None,
     ):
         """Initialize the aggregator with smoothing parameters.
 
@@ -116,6 +134,8 @@ class AdjustmentAggregator:
             physical_secondary_weight: Weight for non-largest physical factors
             mental_second_weight: Weight for second-largest mental factor
             mental_other_weight: Weight for remaining mental factors
+            venue_physical_soft_cap: Threshold where soft cap kicks in (default: 4.5)
+            venue_physical_excess_weight: Weight for excess above soft cap (default: 0.50)
         """
         self.global_cap = global_cap if global_cap is not None else self.GLOBAL_CAP
         self.travel_consecutive_threshold = (
@@ -137,6 +157,16 @@ class AdjustmentAggregator:
             mental_other_weight
             if mental_other_weight is not None
             else self.MENTAL_OTHER_WEIGHT
+        )
+        self.venue_physical_soft_cap = (
+            venue_physical_soft_cap
+            if venue_physical_soft_cap is not None
+            else self.VENUE_PHYSICAL_SOFT_CAP
+        )
+        self.venue_physical_excess_weight = (
+            venue_physical_excess_weight
+            if venue_physical_excess_weight is not None
+            else self.VENUE_PHYSICAL_EXCESS_WEIGHT
         )
 
     def aggregate(
@@ -202,8 +232,9 @@ class AdjustmentAggregator:
 
         # Short week penalty (negative rest_advantage means home is disadvantaged)
         # Positive rest_advantage goes to boosts bucket
+        # Keep the negative sign - this hurts home team
         if home_factors.rest_advantage < 0:
-            physical_factors.append(("short_week", abs(home_factors.rest_advantage)))
+            physical_factors.append(("short_week", home_factors.rest_advantage))  # Negative, hurts home
 
         # Apply physical smoothing: largest at 100%, others at 25%
         result.physical_bucket = self._smooth_physical(physical_factors)
@@ -278,12 +309,44 @@ class AdjustmentAggregator:
         # calculated as home - away differential and assigned to home
 
         # =====================================================================
+        # VENUE-PHYSICAL INTEGRATION (Soft Cap)
+        # Linear sum for standard games, soft cap for extreme stacks.
+        # This preserves full HFA+Travel for most games while dampening only
+        # the extreme "super stacks" (>4.5 pts) that cause MAE regression.
+        # =====================================================================
+        venue = result.venue_bucket
+        physical = result.physical_bucket
+
+        # Sum linearly first
+        raw_stack = venue + physical
+
+        # Check if stack exceeds soft cap threshold
+        if abs(raw_stack) <= self.venue_physical_soft_cap:
+            # Standard game - use linear sum as-is
+            result.integrated_env = raw_stack
+            result.venue_physical_aligned = False  # No damping applied
+        else:
+            # Extreme stack - apply soft cap
+            # integrated = (cap + excess * weight) * sign
+            sign = 1 if raw_stack > 0 else -1
+            excess = abs(raw_stack) - self.venue_physical_soft_cap
+            result.integrated_env = (
+                self.venue_physical_soft_cap + excess * self.venue_physical_excess_weight
+            ) * sign
+            result.venue_physical_aligned = True  # Damping was applied
+
+            logger.debug(
+                f"Venue-Physical soft cap: raw_stack={raw_stack:.2f} "
+                f"-> integrated={result.integrated_env:.2f} "
+                f"(cap={self.venue_physical_soft_cap}, excess={excess:.2f})"
+            )
+
+        # =====================================================================
         # FINAL CALCULATION
-        # net = venue + physical + mental + boosts
+        # net = integrated_env + mental + boosts
         # =====================================================================
         raw_total = (
-            result.venue_bucket
-            + result.physical_bucket
+            result.integrated_env
             + result.mental_bucket
             + result.boosts_bucket
         )
@@ -304,10 +367,14 @@ class AdjustmentAggregator:
     def _smooth_physical(self, factors: list[tuple[str, float]]) -> float:
         """Apply aggressive smoothing to physical factors.
 
-        Largest factor at 100%, all others at 25%.
+        Factors that favor home (positive) and hurt home (negative) are smoothed
+        separately within each group, then summed. This ensures correlated factors
+        are smoothed together while opposing factors sum linearly.
+
+        Within each group: Largest at 100%, all others at 25%.
 
         Args:
-            factors: List of (name, value) tuples
+            factors: List of (name, value) tuples (positive = favors home, negative = hurts home)
 
         Returns:
             Smoothed sum of physical factors
@@ -315,17 +382,28 @@ class AdjustmentAggregator:
         if not factors:
             return 0.0
 
-        # Sort by absolute value descending
-        sorted_factors = sorted(factors, key=lambda x: abs(x[1]), reverse=True)
+        # Separate positive (favor home) and negative (hurt home) factors
+        positive_factors = [(n, v) for n, v in factors if v > 0]
+        negative_factors = [(n, v) for n, v in factors if v < 0]
 
-        # Largest at 100%
-        smoothed = sorted_factors[0][1]
+        # Smooth positive factors (favor home)
+        positive_smoothed = 0.0
+        if positive_factors:
+            sorted_pos = sorted(positive_factors, key=lambda x: x[1], reverse=True)
+            positive_smoothed = sorted_pos[0][1]  # Largest at 100%
+            for _, value in sorted_pos[1:]:
+                positive_smoothed += value * self.physical_secondary_weight
 
-        # Others at 25%
-        for _, value in sorted_factors[1:]:
-            smoothed += value * self.physical_secondary_weight
+        # Smooth negative factors (hurt home)
+        negative_smoothed = 0.0
+        if negative_factors:
+            sorted_neg = sorted(negative_factors, key=lambda x: x[1])  # Most negative first
+            negative_smoothed = sorted_neg[0][1]  # Largest magnitude at 100%
+            for _, value in sorted_neg[1:]:
+                negative_smoothed += value * self.physical_secondary_weight
 
-        return smoothed
+        # Sum the two groups (opposing factors sum linearly)
+        return positive_smoothed + negative_smoothed
 
     def _smooth_mental(self, factors: list[tuple[str, float]]) -> float:
         """Apply standard smoothing to mental factors.
