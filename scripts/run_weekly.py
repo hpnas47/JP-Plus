@@ -192,7 +192,8 @@ def fetch_historical_data(
     all_games = []
 
     for year in years:
-        logger.info(f"Fetching {year} season data...")
+        # P3.9: Per-year progress at debug level for quiet runs
+        logger.debug(f"Fetching {year} season data...")
         try:
             games = client.get_games(year)
             for game in games:

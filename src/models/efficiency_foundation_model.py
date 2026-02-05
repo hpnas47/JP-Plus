@@ -484,7 +484,8 @@ class EfficiencyFoundationModel:
                 "time decay will not be applied"
             )
 
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Validated {len(df)} plays: "
             f"required columns OK, period column {'present' if 'period' in plays_df.columns or 'quarter' in plays_df.columns else 'MISSING (defaulted)'}"
         )
@@ -557,14 +558,15 @@ class EfficiencyFoundationModel:
         # Apply combined filter once (avoids multiple intermediate DataFrames)
         df = df[keep_mask]
 
+        # P3.9: Debug level for per-week logging (runs many times during backtest)
         filtered_count = initial_count - len(df)
         if filtered_count > 0:
-            logger.info(
+            logger.debug(
                 f"Prepared {len(df)} plays for EFM "
                 f"(filtered {filtered_count} non-scrimmage/invalid/NaN plays)"
             )
         else:
-            logger.info(f"Prepared {len(df)} plays for EFM")
+            logger.debug(f"Prepared {len(df)} plays for EFM")
 
         # P3.2: Vectorized success calculation (replaces row-wise apply)
         prep_start = time.time()
@@ -925,24 +927,25 @@ class EfficiencyFoundationModel:
         if has_home_info:
             learned_hfa = coefficients[-1]
             team_coefficients = coefficients[:-1]
-            logger.info(
+            # P3.9: Debug level for per-week ridge stats (runs many times during backtest)
+            logger.debug(
                 f"Ridge adjust {metric_col}: intercept={intercept:.4f}, "
                 f"implicit_HFA={learned_hfa:.4f} (neutral-field regression)"
             )
         else:
             team_coefficients = coefficients
-            logger.info(f"Ridge adjust {metric_col}: intercept={intercept:.4f} (no home info)")
+            logger.debug(f"Ridge adjust {metric_col}: intercept={intercept:.4f} (no home info)")
 
         total_time = time.time() - start_time
-        logger.info(
+        logger.debug(
             f"  Sparse matrix: {n_plays:,} plays × {n_cols} cols, "
             f"{nnz:,} non-zeros ({100*nnz/(n_plays*n_cols):.2f}% density)"
         )
-        logger.info(
+        logger.debug(
             f"  Memory: {sparse_memory_mb:.2f} MB sparse vs {dense_memory_mb:.2f} MB dense "
             f"({memory_savings_pct:.1f}% savings)"
         )
-        logger.info(
+        logger.debug(
             f"  Time: {build_time*1000:.1f}ms build + {fit_time*1000:.1f}ms fit = "
             f"{total_time*1000:.1f}ms total"
         )
@@ -1047,7 +1050,8 @@ class EfficiencyFoundationModel:
                 "Provide games_df or ensure plays_df contains game_id."
             )
 
-        logger.info(f"Games played computed from {games_source} for {len(games_played)} teams")
+        # P3.9: Debug level for per-week logging
+        logger.debug(f"Games played computed from {games_source} for {len(games_played)} teams")
 
         # Calculate per-game stats (P2.6: separate lost/forced for O/D split)
         lost_per_game = {}
@@ -1066,10 +1070,10 @@ class EfficiencyFoundationModel:
         # Store games played for Bayesian shrinkage in calculate_ratings
         self.team_games_played = games_played
 
-        # Log summary stats
+        # Log summary stats (P3.9: debug level for per-week logging)
         avg_lost = np.mean(list(lost_per_game.values()))
         avg_forced = np.mean(list(forced_per_game.values()))
-        logger.info(
+        logger.debug(
             f"Calculated turnover stats for {len(all_teams)} teams: "
             f"avg lost={avg_lost:.2f}/game, avg forced={avg_forced:.2f}/game"
         )
@@ -1154,7 +1158,8 @@ class EfficiencyFoundationModel:
         """
         # Prepare plays (with data leakage guard if max_week provided)
         prepared = self._prepare_plays(plays_df, max_week=max_week)
-        logger.info(f"Prepared {len(prepared)} plays for EFM")
+        # P3.9: Debug level for per-week logging
+        logger.debug(f"Prepared {len(prepared)} plays for EFM")
 
         # P3.6: Build canonical team index ONCE, reuse throughout pipeline
         # This eliminates redundant sorted(set(...) | set(...)) calls
@@ -1170,7 +1175,8 @@ class EfficiencyFoundationModel:
         # This is the key: regress on SUCCESS RATE, not margins
         # NEUTRAL-FIELD: If home_team is present, regression separates team skill from HFA
         # CACHING: Results cached by (season, max_week, metric) if both are provided
-        logger.info("Ridge adjusting Success Rate...")
+        # P3.9: Debug level for per-week logging
+        logger.debug("Ridge adjusting Success Rate...")
         adj_off_sr, adj_def_sr, self.learned_hfa_sr = self._ridge_adjust_metric(
             prepared, "is_success", season=season, eval_week=max_week
         )
@@ -1181,7 +1187,7 @@ class EfficiencyFoundationModel:
         # P3.5: No .copy() needed - _ridge_adjust_metric() only reads from DataFrame
         successful_plays = prepared[prepared["is_success"]]
         if len(successful_plays) > 1000 and "ppa" in successful_plays.columns:
-            logger.info("Ridge adjusting IsoPPP...")
+            logger.debug("Ridge adjusting IsoPPP...")
             adj_off_isoppp, adj_def_isoppp, self.learned_hfa_isoppp = self._ridge_adjust_metric(
                 successful_plays, "ppa", season=season, eval_week=max_week
             )
@@ -1199,7 +1205,7 @@ class EfficiencyFoundationModel:
 
         # Calculate turnover stats if turnover_weight > 0 (P2.6: split O/D)
         if self.turnover_weight > 0 and "play_type" in plays_df.columns:
-            logger.info("Calculating turnover stats...")
+            logger.debug("Calculating turnover stats...")
             self.turnovers_lost, self.turnovers_forced, self.turnover_margin = \
                 self._calculate_turnover_stats(plays_df, games_df)
         else:
@@ -1319,7 +1325,8 @@ class EfficiencyFoundationModel:
                 def_plays=def_plays,
             )
 
-        logger.info(f"Calculated EFM ratings for {len(self.team_ratings)} teams")
+        # P3.9: Debug level for per-week logging
+        logger.debug(f"Calculated EFM ratings for {len(self.team_ratings)} teams")
 
         # Normalize ratings to target standard deviation
         # This ensures Team A rating - Team B rating = expected spread
@@ -1384,7 +1391,8 @@ class EfficiencyFoundationModel:
         # Calculate scale factor from overall rating
         scale = self.rating_std / overall_std
 
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Normalizing ratings: mean {overall_mean:.2f} → 0, "
             f"std {overall_std:.2f} → {self.rating_std:.1f} (scale={scale:.2f}x)"
         )

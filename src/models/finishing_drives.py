@@ -393,7 +393,8 @@ class FinishingDrivesModel:
                 goal_to_go_attempts=int(gtg_attempts),
             )
 
-        logger.info(f"Calculated finishing drives ratings for {len(self.team_ratings)} teams")
+        # P3.9: Debug level for per-week logging
+        logger.debug(f"Calculated finishing drives ratings for {len(self.team_ratings)} teams")
 
     def get_summary_df(self) -> pd.DataFrame:
         """Get summary of all team ratings as a DataFrame.

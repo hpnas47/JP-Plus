@@ -467,7 +467,8 @@ class SpecialTeamsModel:
             )
             self.team_ratings[team] = rating
 
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Calculated FG ratings for {len(self.team_ratings)} teams "
             f"from {len(fg_plays)} FG attempts"
         )
@@ -620,7 +621,8 @@ class SpecialTeamsModel:
             per_game_rating = row["total_value"] / estimated_games
             punt_ratings[team] = per_game_rating
 
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Calculated punt ratings for {len(punt_ratings)} teams "
             f"from {len(punt_plays)} punts"
         )
@@ -755,7 +757,8 @@ class SpecialTeamsModel:
             returns = return_ratings.get(team, 0.0)
             kickoff_ratings[team] = coverage + returns
 
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Calculated kickoff ratings for {len(kickoff_ratings)} teams "
             f"from {len(kickoff_plays)} kickoffs"
         )
@@ -828,7 +831,8 @@ class SpecialTeamsModel:
                 overall_rating=overall,
             )
 
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Calculated complete ST ratings for {len(self.team_ratings)} teams "
             f"(FG: {len(fg_ratings)}, Punt: {len(punt_ratings)}, Kickoff: {len(kickoff_ratings)})"
         )

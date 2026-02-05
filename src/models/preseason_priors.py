@@ -785,15 +785,15 @@ class PreseasonPriors:
 
             portal_impact[team] = scaled_impact
 
-        # Log top winners/losers
+        # Log top winners/losers (P3.9: debug level for quiet runs)
         sorted_impact = sorted(portal_impact.items(), key=lambda x: (-x[1], x[0]))
         if sorted_impact:
-            logger.info("Top portal winners (position-weighted value):")
+            logger.debug("Top portal winners (position-weighted value):")
             for team, impact in sorted_impact[:5]:
-                logger.info(f"  {team}: {impact:+.1%}")
-            logger.info("Top portal losers:")
+                logger.debug(f"  {team}: {impact:+.1%}")
+            logger.debug("Top portal losers:")
             for team, impact in sorted_impact[-5:]:
-                logger.info(f"  {team}: {impact:+.1%}")
+                logger.debug(f"  {team}: {impact:+.1%}")
 
         return portal_impact
 
@@ -1189,12 +1189,12 @@ class PreseasonPriors:
                 f"{high_ret[0]} ({high_ret[1]:.0%})"
             )
 
-        # Log coaching adjustments
+        # Log coaching adjustments (P3.9: per-team details at debug level)
         if coaching_adjustments:
-            logger.info(f"Applied coaching change adjustments to {len(coaching_adjustments)} teams:")
+            logger.info(f"Applied coaching change adjustments to {len(coaching_adjustments)} teams")
             for team, coach, adj, t_rank, p_rank in sorted(coaching_adjustments, key=lambda x: -abs(x[2])):
                 direction = "↑" if adj > 0 else "↓"
-                logger.info(
+                logger.debug(
                     f"  {team} ({coach}): {direction}{abs(adj):.1f} pts "
                     f"(talent #{t_rank}, perf #{p_rank})"
                 )

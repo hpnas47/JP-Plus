@@ -263,9 +263,11 @@ class QBInjuryAdjuster:
         return self.depth_charts.get(team)
 
     def print_depth_charts(self) -> None:
-        """Print all depth charts."""
-        print("\nQB Depth Charts:")
-        print("-" * 70)
+        """Print all depth charts.
+
+        P3.9: Converted from print() to logger.info() for consistent logging.
+        """
+        logger.info("QB Depth Charts:")
         for team in sorted(self.depth_charts.keys()):
             chart = self.depth_charts[team]
-            print(f"  {chart}")
+            logger.info(f"  {chart}")

@@ -289,6 +289,29 @@
     - HFA, travel, altitude lookups would need vectorized versions
   - **Verification:** Backtest 2024 weeks 5-7: identical results (MAE 12.60, ATS 74-75-7)
 
+- **P3.9: Logging Verbosity Control (Gate Debug Output)**
+  - **Problem:** Per-week EFM, ST, and FD calculations logged at INFO level, flooding output with 16+ log lines per season per model component during backtests
+  - **Solution:** Gate non-essential logging behind verbosity flags and DEBUG level
+  - **Changes:**
+    1. Added `--verbose` flag to `backtest.py` for detailed per-week output
+    2. Changed per-week model logs (EFM, SpecialTeams, FinishingDrives) to DEBUG level
+    3. Changed per-year iteration logs in `fetch_all_season_data()` to DEBUG level
+    4. Made `print_data_sanity_report()` compact by default (warnings-only), verbose for details
+    5. Converted QB adjuster `print()` statements to `logger.info()`
+    6. Changed portal winners/losers and coaching adjustment per-team logs to DEBUG
+  - **Files modified:**
+    - `scripts/backtest.py`: Added `--verbose` flag, gated per-week MAE and sanity details
+    - `scripts/run_weekly.py`: Changed per-year historical fetch to DEBUG
+    - `src/models/efficiency_foundation_model.py`: Ridge stats, validation, ratings to DEBUG
+    - `src/models/special_teams.py`: FG/Punt/Kickoff ratings to DEBUG
+    - `src/models/finishing_drives.py`: Ratings calculation to DEBUG
+    - `src/adjustments/home_field.py`: Trajectory modifiers to DEBUG
+    - `src/adjustments/qb_adjustment.py`: Converted print() to logger.info()
+    - `src/models/preseason_priors.py`: Portal winners/losers, coaching details to DEBUG
+  - **Default behavior:** Quiet summary output with warnings only
+  - **Verbose behavior:** `--verbose` shows per-week MAE, per-year data details
+  - **Debug behavior:** Full logging restored with `--debug` flag (sets DEBUG level)
+
 - **Implemented Data Leakage Prevention Guards**
   - **Problem:** Walk-forward backtesting relies on filtering data by game_id/week, but no programmatic guards existed to catch accidental leakage of future data into model training
   - **Solution:** Added explicit assertions throughout the pipeline that verify `max_week` constraints

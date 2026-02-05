@@ -392,7 +392,8 @@ class HomeFieldAdvantage:
         baseline_end = recent_start  # exclusive
 
         # Log the year ranges to prove no current-year data is used
-        logger.info(
+        # P3.9: Debug level for per-week logging
+        logger.debug(
             f"Trajectory modifiers for {current_year}: "
             f"baseline years [{baseline_start}-{baseline_end - 1}], "
             f"recent years [{recent_start}-{recent_end - 1}] "
@@ -440,7 +441,8 @@ class HomeFieldAdvantage:
                 modifiers[team] = round(modifier, 2)
 
         self.trajectory_modifiers = modifiers
-        logger.info(f"Calculated trajectory modifiers for {len(modifiers)} teams")
+        # P3.9: Debug level for per-week logging
+        logger.debug(f"Calculated trajectory modifiers for {len(modifiers)} teams")
 
         return modifiers
 

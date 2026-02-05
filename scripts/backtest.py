@@ -166,7 +166,8 @@ def fetch_season_data(
             postseason_count += 1
         if postseason_count > 0:
             successful_weeks.append(16)
-            logger.info(f"Fetched {postseason_count} postseason games for {year}")
+            # P3.9: Debug level for quiet runs
+            logger.debug(f"Fetched {postseason_count} postseason games for {year}")
     except Exception as e:
         logger.warning(f"Failed to fetch postseason games for {year}: {e}")
 
@@ -225,7 +226,8 @@ def fetch_season_data(
         postseason_lines = client.get_betting_lines(year, season_type="postseason")
         process_betting_lines(postseason_lines)
         if postseason_lines:
-            logger.info(f"Fetched {len([l for l in postseason_lines if l.lines])} postseason betting lines for {year}")
+            # P3.9: Debug level for quiet runs
+            logger.debug(f"Fetched {len([l for l in postseason_lines if l.lines])} postseason betting lines for {year}")
     except Exception as e:
         logger.warning(f"Error fetching betting lines: {e}")
 
@@ -382,7 +384,8 @@ def fetch_season_plays(
 
         if postseason_play_count > 0:
             successful_weeks.append(16)
-            logger.info(f"Fetched {postseason_play_count} postseason efficiency plays for {year}")
+            # P3.9: Debug level for quiet runs
+            logger.debug(f"Fetched {postseason_play_count} postseason efficiency plays for {year}")
     except Exception as e:
         logger.warning(f"Failed to fetch postseason plays for {year}: {e}")
 
@@ -395,7 +398,8 @@ def fetch_season_plays(
     else:
         logger.debug(f"Plays fetch for {year}: all {len(successful_weeks)} weeks OK")
 
-    logger.info(
+    # P3.9: Debug level for quiet runs
+    logger.debug(
         f"Fetched {len(early_down_plays)} early-down, {len(turnover_plays)} turnover, "
         f"{len(efficiency_plays)} efficiency, {len(st_plays)} ST plays for {year}"
     )
@@ -1245,7 +1249,7 @@ def print_clv_report(ats_df: pd.DataFrame) -> None:
         print("  ⚠ Negative CLV at 5+ edge - edge may be illusory (market moves against us)")
 
 
-def print_data_sanity_report(season_data: dict, years: list[int]) -> None:
+def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool = False) -> None:
     """Print sanity report after data fetch (P3.4).
 
     Reports:
@@ -1254,16 +1258,21 @@ def print_data_sanity_report(season_data: dict, years: list[int]) -> None:
     - Betting line coverage rate
     - Week coverage
 
+    P3.9: Default is compact summary; use verbose=True for per-year details.
+
     Args:
         season_data: Dict from fetch_all_season_data
         years: List of years fetched
+        verbose: Whether to print per-year breakdown (default False for quiet runs)
     """
-    print("\n" + "=" * 60)
-    print("DATA SANITY REPORT")
-    print("=" * 60)
-
     # Expected games per season (roughly 850-900 for FBS)
     EXPECTED_GAMES_PER_YEAR = 870
+
+    # Aggregate statistics across years
+    total_games = 0
+    total_betting = 0
+    total_plays = 0
+    warnings = []
 
     for year in years:
         games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
@@ -1272,6 +1281,10 @@ def print_data_sanity_report(season_data: dict, years: list[int]) -> None:
         n_betting = len(betting_df)
         n_efficiency = len(efficiency_plays_df)
         n_fbs = len(fbs_teams)
+
+        total_games += n_games
+        total_betting += n_betting
+        total_plays += n_efficiency
 
         # Game count check
         game_pct = n_games / EXPECTED_GAMES_PER_YEAR * 100
@@ -1288,19 +1301,48 @@ def print_data_sanity_report(season_data: dict, years: list[int]) -> None:
         missing_game_weeks = expected_weeks - weeks_with_games
         missing_play_weeks = expected_weeks - weeks_with_plays
 
-        print(f"\n{year}:")
-        print(f"  {game_status} Games: {n_games:,} (expected ~{EXPECTED_GAMES_PER_YEAR}, {game_pct:.0f}%)")
-        print(f"  {betting_status} Betting lines: {n_betting:,} ({betting_coverage:.0f}% coverage)")
-        print(f"    FBS teams: {n_fbs}")
-        print(f"    Efficiency plays: {n_efficiency:,}")
+        # Track warnings
+        if game_pct < 95:
+            warnings.append(f"{year}: {game_status} Games {game_pct:.0f}%")
+        if betting_coverage < 90:
+            warnings.append(f"{year}: {betting_status} Betting {betting_coverage:.0f}%")
         if missing_game_weeks:
-            print(f"    ⚠ Missing game weeks: {sorted(missing_game_weeks)}")
+            warnings.append(f"{year}: Missing game weeks {sorted(missing_game_weeks)}")
         if missing_play_weeks:
-            print(f"    ⚠ Missing play weeks: {sorted(missing_play_weeks)}")
-        if priors:
-            print(f"    Preseason priors: {len(priors.preseason_ratings)} teams")
+            warnings.append(f"{year}: Missing play weeks {sorted(missing_play_weeks)}")
 
-    print()
+        # P3.9: Per-year details only in verbose mode
+        if verbose:
+            if year == years[0]:
+                print("\n" + "=" * 60)
+                print("DATA SANITY REPORT")
+                print("=" * 60)
+
+            print(f"\n{year}:")
+            print(f"  {game_status} Games: {n_games:,} (expected ~{EXPECTED_GAMES_PER_YEAR}, {game_pct:.0f}%)")
+            print(f"  {betting_status} Betting lines: {n_betting:,} ({betting_coverage:.0f}% coverage)")
+            print(f"    FBS teams: {n_fbs}")
+            print(f"    Efficiency plays: {n_efficiency:,}")
+            if missing_game_weeks:
+                print(f"    ⚠ Missing game weeks: {sorted(missing_game_weeks)}")
+            if missing_play_weeks:
+                print(f"    ⚠ Missing play weeks: {sorted(missing_play_weeks)}")
+            if priors:
+                print(f"    Preseason priors: {len(priors.preseason_ratings)} teams")
+
+    # P3.9: Compact summary for non-verbose (warnings only)
+    if not verbose:
+        if warnings:
+            print(f"\nData warnings: {len(warnings)} issues")
+            for w in warnings[:5]:  # Show first 5 warnings
+                print(f"  ⚠ {w}")
+            if len(warnings) > 5:
+                print(f"  ... and {len(warnings) - 5} more (use --verbose for details)")
+        else:
+            betting_rate = total_betting / total_games * 100 if total_games > 0 else 0
+            print(f"\nData: {total_games:,} games, {total_plays:,} plays, {betting_rate:.0f}% betting coverage")
+    else:
+        print()
 
 
 def fetch_all_season_data(
@@ -1324,15 +1366,16 @@ def fetch_all_season_data(
     season_data = {}
 
     for year in years:
-        logger.info(f"\nFetching data for {year}...")
+        # P3.9: Per-year detailed logs at debug level for quiet runs
+        logger.debug(f"Fetching data for {year}...")
 
         games_df, betting_df = fetch_season_data(client, year)
-        logger.info(f"Loaded {len(games_df)} games, {len(betting_df)} betting lines")
+        logger.debug(f"Loaded {len(games_df)} games, {len(betting_df)} betting lines")
 
         plays_df, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
 
         turnover_df = build_game_turnovers(games_df, turnover_plays_df)
-        logger.info(f"Built turnover margins for {len(turnover_df)} games")
+        logger.debug(f"Built turnover margins for {len(turnover_df)} games")
 
         # Sanity check: validate data completeness for determinism
         weeks_with_games = games_df["week"].unique().to_list() if len(games_df) > 0 else []
@@ -1348,12 +1391,12 @@ def fetch_all_season_data(
                 f"plays missing weeks {sorted(missing_play_weeks) if missing_play_weeks else 'none'}"
             )
         else:
-            logger.info(f"Data completeness check for {year}: all weeks 1-15 present")
+            logger.debug(f"Data completeness check for {year}: all weeks 1-15 present")
 
         # Fetch FBS teams for EFM filtering
         fbs_teams_list = client.get_fbs_teams(year)
         fbs_teams = {t.school for t in fbs_teams_list}
-        logger.info(f"Loaded {len(fbs_teams)} FBS teams")
+        logger.debug(f"Loaded {len(fbs_teams)} FBS teams")
 
         priors = None
         if use_priors:
@@ -1364,7 +1407,7 @@ def fetch_all_season_data(
                     use_portal=use_portal,
                     portal_scale=portal_scale,
                 )
-                logger.info(
+                logger.debug(
                     f"Loaded preseason priors for {len(priors.preseason_ratings)} teams"
                 )
             except Exception as e:
@@ -1448,7 +1491,8 @@ def run_backtest(
     all_ats = []
 
     for year in years:
-        logger.info(f"\nBacktesting {year} season...")
+        # P3.9: Per-year progress at debug level for quiet runs
+        logger.debug(f"Backtesting {year} season...")
 
         games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_data[year]
 
@@ -1481,10 +1525,10 @@ def run_backtest(
             ats_results = calculate_ats_results(predictions, betting_df, use_opening_line)
             all_ats.append(ats_results)
 
-        # Year metrics
+        # Year metrics (P3.9: debug level for quiet runs)
         year_df = pd.DataFrame(predictions)
         if not year_df.empty:
-            logger.info(f"{year} MAE: {year_df['abs_error'].mean():.2f}")
+            logger.debug(f"{year} MAE: {year_df['abs_error'].mean():.2f}")
 
     # Combine results
     predictions_df = pd.DataFrame(all_predictions)
@@ -1493,9 +1537,9 @@ def run_backtest(
     # Calculate overall metrics
     metrics = calculate_metrics(predictions_df, ats_df)
 
-    # Log ridge adjustment cache statistics
+    # Log ridge adjustment cache statistics (P3.9: debug level for quiet runs)
     cache_stats = get_ridge_cache_stats()
-    logger.info(
+    logger.debug(
         f"Ridge cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
         f"{cache_stats['size']} entries (hit rate: {cache_stats['hit_rate']:.1%})"
     )
@@ -1615,6 +1659,7 @@ def print_results(
     results: dict,
     ats_df: pd.DataFrame = None,
     diagnostics: bool = True,
+    verbose: bool = False,
 ) -> None:
     """Print backtest results to console.
 
@@ -1623,6 +1668,7 @@ def print_results(
         ats_df: Optional ATS results DataFrame for sanity reporting
         diagnostics: Whether to print detailed diagnostics (stack, CLV, phase reports).
                     Set False for faster output in sweeps. Default True.
+        verbose: Whether to print per-week breakdowns and detailed logs. Default False.
     """
     print("\n" + "=" * 50)
     print("BACKTEST RESULTS")
@@ -1652,9 +1698,9 @@ def print_results(
             if key in metrics:
                 print(f"  {threshold}+ pt edge: {metrics[key]}")
 
-    # Weekly MAE breakdown
+    # Weekly MAE breakdown (P3.9: gated behind --verbose for faster default runs)
     predictions_df = results["predictions"]
-    if not predictions_df.empty:
+    if verbose and not predictions_df.empty:
         print(f"\nMAE by Week:")
         weekly = predictions_df.groupby("week").agg(
             games=("abs_error", "count"),
@@ -1882,6 +1928,12 @@ def main():
         action="store_true",
         help="Skip diagnostic reports (stack analysis, phase metrics, CLV). Faster for sweeps.",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose output (per-week MAE, detailed logging). Default is quiet summary.",
+    )
 
     args = parser.parse_args()
 
@@ -1910,7 +1962,8 @@ def main():
     )
 
     # P3.4: Print data sanity report
-    print_data_sanity_report(season_data, args.years)
+    # P3.9: Pass verbose flag for per-year breakdown
+    print_data_sanity_report(season_data, args.years, verbose=args.verbose)
 
     # Print full config for transparency
     print("\n" + "=" * 60)
@@ -1950,10 +2003,12 @@ def main():
 
     # P3.4: Print results with ATS data for sanity report
     # P3.7: Skip detailed diagnostics if --no-diagnostics flag is set
+    # P3.9: Use --verbose for per-week breakdown (default is quiet summary)
     print_results(
         results,
         ats_df=results.get("ats_results"),
         diagnostics=not args.no_diagnostics,
+        verbose=args.verbose,
     )
 
     # Save to CSV if requested
