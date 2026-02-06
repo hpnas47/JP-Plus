@@ -69,6 +69,71 @@
 
 ---
 
+## Session: February 5, 2026 (Evening)
+
+### Completed: Full P0 Reconciliation
+
+Scanned all 8 `AUDIT_FIXLIST_*.md` files, identified 11 unfixed P0 items, and implemented all of them with Quant Auditor backtest gate after each file change.
+
+- **Backtest P0.2 — Postseason play completeness**
+  - `fetch_season_plays()` now loops weeks 1-5 for postseason plays (guards against CFBD API behavior changes)
+  - `fetch_all_season_data()` adds postseason coverage sanity check comparing games-with-plays to total postseason games
+
+- **Finishing Drives P0.2 — Remove fabricated minimums**
+  - Fixed `rz_failed_4th` → `rz_failed` (NameError left from P0.1 drive-level refactor)
+  - All `max(1, ...)` hacks already removed by P0.1; this fixes the residual crash bug
+
+- **Special Teams P0.2 — Fix `calculate_team_rating()` double-normalization**
+  - Punt/kickoff components (per-event averages) were incorrectly divided by count before scaling
+  - FG now divides total by estimated games; punt/kickoff multiply per-event avg by events-per-game
+
+- **Special Teams P0.3 — Document `calculate_from_game_stats()` as fallback**
+  - Units already correct after P0.1; added docstring and debug logging marking it as fallback path
+
+- **Preseason Priors P0.1 — Unify talent scaling**
+  - Added `talent_rating_normalized` field to `PreseasonRating` dataclass
+  - `blend_with_inseason()` now uses z-score-normalized talent (same scale as preseason blending) instead of ad hoc `(raw - 750) / 25.0`
+
+- **Preseason Priors P0.2 — Rank direction sanity checks**
+  - Added `_validate_data_quality()` method: logs dataset intersection sizes, validates elite programs appear in talent top-20 and have positive SP+ ratings
+
+- **Preseason Priors P0.3 — Coaching table consistency**
+  - Removed Dan Lanning from `COACHING_CHANGES[2022]` (already in `FIRST_TIME_HCS`)
+
+- **Vegas Comparison P0.2 — Add `game_id` to ValuePlay**
+  - Added `game_id` field to `ValuePlay` dataclass, `compare_prediction()` output, and `value_plays_to_dataframe()`
+
+- **Weekly Odds Capture P0.1 — Replace heuristic week detection**
+  - Added `--year`/`--week` CLI arguments; heuristic demoted to fallback with warning
+
+- **Weekly Odds Capture P0.2 — Fix SQLite upsert**
+  - Replaced `INSERT OR REPLACE` with `INSERT...ON CONFLICT DO UPDATE` (preserves row identity, no orphaned FK references)
+
+- **Weekly Odds Capture P0.3 — Enable FK enforcement**
+  - Added `PRAGMA foreign_keys = ON` after connection creation
+
+### Updated Baseline (Post-Full P0 Reconciliation)
+
+| Metric | Pre-Reconciliation | Post-Reconciliation | Delta |
+|--------|-------------------|--------------------:|-------|
+| Core MAE (4yr) | 12.55 | 12.49 | -0.06 |
+| Core ATS (4yr Close) | 52.0% | 51.9% | -0.1% |
+| Core 3+ (4yr Close) | 51.9% | 53.1% | **+1.2%** |
+| Core 5+ (4yr Close) | 53.2% | 54.7% | **+1.5%** |
+
+**Key takeaway:** Talent scaling unification (P0.1) improved high-confidence picks significantly (5+ edge +1.5%). All-picks ATS held steady. No P0 items remain unfixed across all 8 audit files.
+
+### Files Modified
+- `scripts/backtest.py` — postseason multi-week fetch + coverage check
+- `src/models/finishing_drives.py` — `rz_failed_4th` → `rz_failed` bug fix
+- `src/models/special_teams.py` — double-normalization fix + fallback docs
+- `src/models/preseason_priors.py` — talent normalization + data validation + coaching table cleanup
+- `src/predictions/vegas_comparison.py` — `game_id` in ValuePlay end-to-end
+- `scripts/weekly_odds_capture.py` — explicit year/week, safe upsert, FK enforcement
+- All 8 `docs/AUDIT_FIXLIST_*.md` files — P0 items marked fixed
+
+---
+
 ## Session: February 5, 2026
 
 ### Completed Today
