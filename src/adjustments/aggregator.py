@@ -186,6 +186,13 @@ class AdjustmentAggregator:
         # Home team consecutive road is rare but would be negative
         consecutive_away = abs(away_factors.consecutive_road_penalty)
         consecutive_home = abs(home_factors.consecutive_road_penalty)
+
+        # Travel/Consecutive Road Interaction: When travel >1.5 pts, reduce
+        # consecutive road by 50% to prevent double-counting the fatigue component
+        if result.raw_travel > 1.5:
+            consecutive_away *= 0.5
+            consecutive_home *= 0.5
+
         result.raw_consecutive_road = consecutive_away - consecutive_home
 
         # =====================================================================
