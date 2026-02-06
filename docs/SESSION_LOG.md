@@ -69,6 +69,102 @@
 
 ---
 
+## Session: February 6, 2026 (Evening)
+
+### Theme: Finishing Drives Investigation — 4 Rejections → EFM Integration
+
+Comprehensive investigation of the FinishingDrives sub-model. Five engineering iterations, three agents (Code Auditor, Quant Auditor, Model Strategist), and four backtest rejections led to the definitive conclusion: RZ efficiency is ~88% redundant with EFM's IsoPPP. The correct architecture is Ridge integration, not post-hoc addition.
+
+---
+
+#### Commit 1: drive_id Pipeline Fix + Postseason Display (fd700fa)
+**Impact: Data pipeline — enables FinishingDrives model to function**
+
+- Added `drive_id` field to efficiency_plays extraction at 3 locations in `scripts/backtest.py` (regular season, postseason, delta cache).
+- Without drive_id, red zone trips couldn't be counted at the drive level — FD was silently producing zero for all teams.
+- Collapsed postseason pseudo-weeks (16+) into single "Post" row in MAE-by-week and sanity check reports.
+
+#### Commit 2: Per-Game Normalization + Magnitude Cap (bb67d0f)
+**Impact: Engineering fix — prevented ±7.9pt swings**
+
+- **Bug**: `overall = (ppt - 4.8) * (total_rz_trips / 10.0)` used cumulative trip count that grew with games played. By Week 12, matchup differentials reached ±7.9 points.
+- **Fix**: Normalized to `avg_rz_trips_per_game = total_rz_trips / games_played`.
+- Added `MAX_MATCHUP_DIFFERENTIAL = 1.5` class constant with `np.clip()` in `get_matchup_differential()`.
+- Added `games_played` parameter tracking throughout all calculation pathways.
+- **Backtest**: MAE 12.65 (+0.06) — REJECTED (exceeds +0.05 threshold).
+
+#### Commit 3: Calibration Fix — EXPECTED_POINTS_PER_TRIP 4.8 → 4.05 (aa5ba20)
+**Impact: Reduced bias but still insufficient**
+
+- Empirical FBS mean PPT is ~4.0-4.1, not 4.8. Fixed constant created systematic downward bias.
+- **Backtest**: MAE 12.65 (+0.06), 60% cap saturation — REJECTED. Year-to-year PPT variance (3.25–3.78) means no fixed constant works across all years.
+
+#### Commit 4: Shelve FD at Zero Weight (d92d249)
+**Impact: Model protection — removed harmful signal**
+
+- Set `components.finishing_drives = 0.0` in `spread_generator.py` while preserving all infrastructure.
+- Confirmed exact baseline recovery: MAE 12.52, ATS 51.6%, 5+ Edge 53.5%.
+
+#### Commit 5: Dynamic Seasonal Baseline + Reactivation (2840ad1)
+**Impact: Solved cap saturation (57% → 4.5%) but signal still redundant**
+
+- Replaced fixed constant with dynamic `_seasonal_mean_ppt` computed from all teams in training window.
+- Eliminated trips-per-game multiplier (was the 3.5x amplifier): `overall = ppt - seasonal_mean_ppt`.
+- Walk-forward safe: backtest engine pre-filters plays to weeks < prediction_week.
+- **Cap saturation**: 57% → 4.5% (target was <15%).
+- **Backtest**: MAE 12.55 (+0.03), ATS 51.3% — REJECTED. Cohort analysis: games with highest FD had WORST MAE (12.82 vs 12.42 neutral). Model-Strategist confirmed ~70-80% overlap with IsoPPP.
+
+#### Commit 6: Final Shelving with Full Rationale (8fcbb13)
+**Impact: Definitive closure on additive FD approach**
+
+- Re-shelved FD at 0.0 weight after 4th consecutive rejection.
+- Documented root cause: IsoPPP (EPA-based) already captures red zone scoring at play level.
+- FD is not opponent-adjusted — Sun Belt teams with high PPT vs weak defenses appear elite.
+- Preserved all infrastructure for future residualization or EFM integration.
+
+#### Commit 7: RZ Efficiency as EFM Ridge Feature (2dd6bae)
+**Impact: Architecturally correct integration — zero regression**
+
+- Created `_add_rz_scoring_feature()` in EFM: assigns scoring values (TD=7.0, FG=3.0, other=0.0) for RZ plays (yards_to_goal ≤ 20).
+- Ridge regression naturally opponent-adjusts and learns optimal weight alongside SR and IsoPPP.
+- Ridge coefficient: mean |coef| = 0.12, but only **2.2% of total rating variance** (0.27 pts std).
+- **Backtest**: MAE 12.52, ATS 51.6%, 5+ Edge 53.5% — exact baseline match. CONDITIONAL PASS.
+- Confirms Model Strategist hypothesis: ~88% of RZ signal already captured by IsoPPP. Ridge correctly suppresses the feature to near-zero effective weight.
+
+#### Commit 8: Model Governance Update (be465d7)
+**Impact: Codified lessons learned into CLAUDE.md**
+
+- Added Model Strategist role (redundancy filter, signal test, temporal integrity).
+- Tightened MAE tolerance from +0.05 to +0.02 based on FD investigation findings.
+- Added Anti-Drift Guardrail: new features must be evaluated for EFM integration before post-hoc addition.
+- Added Redundancy Protocol: Quant Auditor must report correlation against existing PPA/IsoPPP for any proposed signal.
+
+---
+
+### Key Lesson: The Finishing Drives Principle
+
+> Any sub-model measuring a subset of what EFM captures at play level must be **residualized against EFM** or **integrated as a Ridge feature**, not added as a post-hoc constant. Post-hoc addition double-counts shared signal and lacks opponent adjustment.
+
+This principle is now codified in CLAUDE.md as the "Anti-Drift Guardrail."
+
+### Baseline (Unchanged)
+
+| Metric | Value |
+|--------|-------|
+| **MAE (core weeks 4-15)** | 12.52 |
+| **ATS All** | 51.6% (1347-1263-51) |
+| **ATS 3+ Edge** | 52.3% (738-672) |
+| **ATS 5+ Edge** | 53.5% (474-412) |
+
+### Files Changed (Session Total)
+- `src/models/finishing_drives.py` — Per-game normalization, dynamic baseline, magnitude cap
+- `src/models/efficiency_foundation_model.py` — RZ scoring as Ridge feature
+- `src/predictions/spread_generator.py` — FD shelved at 0.0 (signal flows through EFM)
+- `scripts/backtest.py` — drive_id pipeline, postseason display cleanup
+- `CLAUDE.md` — Model governance: redundancy protocol, tighter tolerances
+
+---
+
 ## Session: February 6, 2026
 
 ### Theme: Performance Engineering — 16 min → 25 sec (38x cumulative speedup)
