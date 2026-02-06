@@ -400,6 +400,7 @@ def fetch_season_plays(
                     efficiency_plays.append({
                         "week": week,
                         "game_id": play.game_id,
+                        "drive_id": play.drive_id,  # For red zone trip calculation
                         "down": play.down,
                         "distance": play.distance,
                         "yards_gained": play.yards_gained or 0,
@@ -465,6 +466,7 @@ def fetch_season_plays(
                     efficiency_plays.append({
                         "week": 16,
                         "game_id": play.game_id,
+                        "drive_id": play.drive_id,  # For red zone trip calculation
                         "down": play.down,
                         "distance": play.distance,
                         "yards_gained": play.yards_gained or 0,
@@ -1612,6 +1614,7 @@ def fetch_week_data_delta(
                 efficiency_plays.append({
                     "week": target_week,
                     "game_id": play.game_id,
+                    "drive_id": play.drive_id,  # For red zone trip calculation
                     "down": play.down,
                     "distance": play.distance,
                     "yards_gained": play.yards_gained or 0,
@@ -2418,12 +2421,15 @@ def print_results(
         print(f"\n### MAE by Week\n")
         print("| Week | Games | MAE |")
         print("|------|-------|-----|")
-        weekly = predictions_df.groupby("week").agg(
+        # Collapse postseason pseudo-weeks (16+) into a single "Post" row
+        display_week = predictions_df["week"].clip(upper=16)
+        weekly = predictions_df.assign(display_week=display_week).groupby("display_week").agg(
             games=("abs_error", "count"),
             mae=("abs_error", "mean"),
         )
         for week, row in weekly.iterrows():
-            print(f"| {int(week):2d} | {int(row['games'])} | {row['mae']:.2f} |")
+            label = "Post" if int(week) == 16 else f"{int(week):3d} "
+            print(f"| {label} | {int(row['games'])} | {row['mae']:.2f} |")
 
     # P3.7: Diagnostic reports are optional (skip with --no-diagnostics for faster sweeps)
     if diagnostics:
@@ -2463,15 +2469,18 @@ def print_prediction_sanity_report(results: dict, ats_df: pd.DataFrame = None) -
 
     print("\n### Sanity Check\n")
 
-    # Predictions per week
+    # Predictions per week (collapse postseason pseudo-weeks into single bucket)
     print("\nPredictions per week:")
-    week_counts = predictions_df.groupby("week").size()
-    weeks_low = week_counts[week_counts < 30].index.tolist()
-    weeks_high = week_counts[week_counts > 80].index.tolist()
-    print(f"  Total: {len(predictions_df):,} predictions across {len(week_counts)} weeks")
-    print(f"  Range: {week_counts.min()}-{week_counts.max()} per week")
-    if weeks_low:
-        print(f"  ⚠ Low weeks (<30): {weeks_low}")
+    display_week = predictions_df["week"].clip(upper=16)
+    week_counts = display_week.value_counts().sort_index()
+    n_regular = (predictions_df["week"] <= 15).sum()
+    n_post = (predictions_df["week"] >= 16).sum()
+    reg_weeks = predictions_df[predictions_df["week"] <= 15]["week"].nunique()
+    print(f"  Total: {len(predictions_df):,} predictions ({reg_weeks} regular-season weeks + postseason)")
+    print(f"  Regular season: {n_regular:,} games | Postseason: {n_post:,} games")
+    reg_counts = week_counts[week_counts.index < 16]
+    if len(reg_counts) > 0:
+        print(f"  Per-week range (regular): {reg_counts.min()}-{reg_counts.max()}")
 
     # Line match rate (from ATS results)
     if ats_df is not None and not ats_df.empty:
