@@ -13,6 +13,7 @@ from src.models.finishing_drives import FinishingDrivesModel
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
+from config.teams import TRIPLE_OPTION_TEAMS
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
 from src.adjustments.aggregator import AdjustmentAggregator, TravelBreakdown
@@ -85,15 +86,7 @@ def smooth_correlated_stack(
     return smoothed_hfa, smoothed_travel, smoothed_altitude
 
 
-# Triple-option / slow-pace teams that require spread compression
-# These teams have ~30% worse MAE due to fewer possessions per game
-# Spreads should be compressed toward 0 to account for reduced game volume
-TRIPLE_OPTION_TEAMS = frozenset({
-    "Army",
-    "Navy",
-    "Air Force",
-    "Kennesaw State",
-})
+# TRIPLE_OPTION_TEAMS imported from config.teams (single source of truth)
 
 # Elite FCS teams (based on 2022-2024 performance vs FBS)
 # These teams average +2 to +15 margin vs FBS (compared to +30 for average FCS)

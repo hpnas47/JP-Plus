@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from config.settings import get_settings
+from config.teams import TRIPLE_OPTION_TEAMS
 
 logger = logging.getLogger(__name__)
 
@@ -139,12 +140,7 @@ TALENT_RANK_OVERRIDES = {}
 # - Navy vs Memphis: Ours +21.4, Vegas +9.5 → 11.9 pt gap
 # Using 8.0 pt boost as conservative estimate (half of observed gap)
 
-TRIPLE_OPTION_TEAMS = frozenset({
-    "Army",
-    "Navy",
-    "Air Force",
-    "Kennesaw State",
-})
+# TRIPLE_OPTION_TEAMS imported from config.teams (single source of truth)
 
 TRIPLE_OPTION_RATING_BOOST = 6.0  # Points to add to raw SP+ rating (conservative)
 
@@ -1351,26 +1347,38 @@ class PreseasonPriors:
         - Weeks 4-5: Tipping point (~50%)
         - Weeks 8-9: Priors nearly gone (~5%)
 
-        Additionally, talent composite persists as a floor all year.
-        This prevents elite-talent teams from dropping too far with bad performance.
+        Additionally, talent composite persists as a decaying floor over the season.
+        This prevents elite-talent teams from dropping too far with bad performance early,
+        while allowing the ridge regression to dominate late-season when it has more data.
 
         Args:
             inseason_ratings: Current in-season ratings
             games_played: Average games played per team (or weeks into season)
             games_for_full_weight: Games needed before in-season dominates (default 9)
-            talent_floor_weight: Persistent talent weight all year (default 0.08 = 8%)
+            talent_floor_weight: Starting talent weight early season (default 0.08 = 8%)
 
         Returns:
             Blended ratings dictionary
         """
+        # Tier 1: Decay talent floor over the season
+        # Full value early (when EFM data is sparse), minimal late (when ridge is reliable)
+        TALENT_FLOOR_MIN = 0.03
+        if games_played <= 0:
+            effective_talent_floor = talent_floor_weight  # 0.08 early
+        elif games_played >= games_for_full_weight:
+            effective_talent_floor = TALENT_FLOOR_MIN  # 0.03 late
+        else:
+            t = games_played / games_for_full_weight
+            effective_talent_floor = talent_floor_weight - (talent_floor_weight - TALENT_FLOOR_MIN) * t
+
         # Non-linear fade curve matching SP+ methodology
         # Uses sigmoid-like curve: slower fade early, faster in middle, levels off
         if games_played <= 0:
-            prior_weight = 0.95 - talent_floor_weight  # Adjust for talent floor
+            prior_weight = 0.95 - effective_talent_floor  # Adjust for talent floor
             inseason_weight = 0.0
         elif games_played >= games_for_full_weight:
             prior_weight = 0.05  # Small residual prior weight even late
-            inseason_weight = 1.0 - prior_weight - talent_floor_weight
+            inseason_weight = 1.0 - prior_weight - effective_talent_floor
         else:
             # Sigmoid-style curve for smoother transition
             # At week 3: ~65%, week 5: ~50%, week 7: ~25%, week 9: ~5%
@@ -1378,11 +1386,11 @@ class PreseasonPriors:
             # Modified sigmoid: steeper in middle, flatter at ends
             prior_weight = 0.92 * (1.0 - t ** 1.5) ** 1.2
             prior_weight = max(prior_weight, 0.05)
-            inseason_weight = 1.0 - prior_weight - talent_floor_weight
+            inseason_weight = 1.0 - prior_weight - effective_talent_floor
 
         logger.debug(
             f"Blending week {games_played}: prior={prior_weight:.1%}, "
-            f"inseason={inseason_weight:.1%}, talent_floor={talent_floor_weight:.1%}"
+            f"inseason={inseason_weight:.1%}, talent_floor={effective_talent_floor:.1%}"
         )
 
         # DETERMINISM: Sort for consistent iteration order
@@ -1399,11 +1407,11 @@ class PreseasonPriors:
             if team in self.preseason_ratings:
                 talent_rating = self.preseason_ratings[team].talent_rating_normalized
 
-            # Blend: prior + in-season + persistent talent floor
+            # Blend: prior + in-season + decaying talent floor
             blended[team] = (
                 preseason * prior_weight
                 + inseason * inseason_weight
-                + talent_rating * talent_floor_weight
+                + talent_rating * effective_talent_floor
             )
 
         return blended

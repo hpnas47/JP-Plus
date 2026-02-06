@@ -1,4 +1,14 @@
-"""Team metadata including altitude venues and rivalries."""
+"""Team metadata including altitude venues, rivalries, and triple-option teams."""
+
+# Triple-option teams: service academies + option-scheme teams
+# These teams run ~55 plays/game vs ~70 normal, creating higher variance.
+# Used for: spread compression (spread_generator), rating boost + talent skip (preseason_priors)
+TRIPLE_OPTION_TEAMS: frozenset[str] = frozenset({
+    "Army",
+    "Navy",
+    "Air Force",
+    "Kennesaw State",
+})
 
 # High altitude venues with elevation (feet) and point adjustment for visiting sea-level teams
 ALTITUDE_VENUES: dict[str, dict] = {
