@@ -552,9 +552,10 @@ class SpreadGenerator:
         )
 
         # Finishing drives differential (red zone efficiency)
-        # REACTIVATED: Now uses dynamic seasonal baseline to eliminate systematic bias
-        # Infrastructure: drive_id pipeline, per-game normalization, ±1.5pt cap
-        components.finishing_drives = self.finishing_drives.get_matchup_differential(home_team, away_team)
+        # SHELVED: 4 consecutive backtest rejections confirmed ~70-80% overlap with EFM (IsoPPP).
+        # Infrastructure preserved: drive_id pipeline, per-game normalization, dynamic baseline, ±1.5pt cap.
+        # Reactivation path: residualize against EFM or integrate RZ metric as EFM feature.
+        components.finishing_drives = 0.0  # self.finishing_drives.get_matchup_differential(home_team, away_team)
 
         # FCS adjustment (when FBS plays FCS)
         components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
