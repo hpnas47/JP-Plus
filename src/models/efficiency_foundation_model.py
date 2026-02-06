@@ -1631,6 +1631,9 @@ class EfficiencyFoundationModel:
     def get_ratings_df(self) -> pd.DataFrame:
         """Get ratings as DataFrame sorted by overall rating.
 
+        Columns follow the JP+ Power Ratings Display Protocol (see CLAUDE.md):
+        Rank | Team | Overall | Offense (rank) | Defense (rank) | Special Teams (rank)
+
         Returns:
             DataFrame with all team ratings including O/D/ST breakdown
         """

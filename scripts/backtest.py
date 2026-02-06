@@ -249,7 +249,7 @@ def fetch_season_data(
     # Prefer DraftKings for consistency, fall back to any available
     preferred_providers = ["DraftKings", "ESPN Bet", "Bovada"]
 
-    def process_betting_lines(lines_list):
+    def process_betting_lines(lines_list: list) -> None:
         """Process betting lines and append to betting list."""
         for game_lines in lines_list:
             if not game_lines.lines:
@@ -1272,10 +1272,7 @@ def print_phase_report(ats_df: pd.DataFrame, predictions_df: pd.DataFrame = None
         print("\nPhase Report: No phase data available")
         return
 
-    print("\n" + "=" * 90)
-    print("PHASE-BY-PHASE PERFORMANCE")
-    print("=" * 90)
-    print()
+    print("\n### Phase-by-Phase Performance\n")
 
     # Format and print table
     display_cols = ["Phase", "Weeks", "Games", "MAE", "MAE vs Close", "ATS %", "3+ Edge", "5+ Edge", "Mean CLV"]
@@ -1288,7 +1285,13 @@ def print_phase_report(ats_df: pd.DataFrame, predictions_df: pd.DataFrame = None
                 lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"
             )
 
-    print(phase_metrics[available_cols].to_string(index=False))
+    # Print as Markdown table
+    header = "| " + " | ".join(available_cols) + " |"
+    sep = "| " + " | ".join(["---"] * len(available_cols)) + " |"
+    print(header)
+    print(sep)
+    for _, row in phase_metrics[available_cols].iterrows():
+        print("| " + " | ".join(str(row[c]) for c in available_cols) + " |")
     print()
 
 
@@ -1304,16 +1307,15 @@ def print_clv_report(ats_df: pd.DataFrame) -> None:
         print(f"\nCLV Report: {report['error']}")
         return
 
-    print(f"\nClosing Line Value (CLV) Report:")
-    print(f"  Games with open+close lines: {report['total_games_with_clv']}")
-    print()
-    print(f"  {'Edge':<8} {'N':>6} {'Mean CLV':>10} {'CLV > 0':>10} {'ATS %':>8}")
-    print(f"  {'-'*8} {'-'*6} {'-'*10} {'-'*10} {'-'*8}")
+    print(f"\n### Closing Line Value (CLV)\n")
+    print(f"Games with open+close lines: {report['total_games_with_clv']}\n")
+    print("| Edge | N | Mean CLV | CLV > 0 | ATS % |")
+    print("|------|---|----------|---------|-------|")
 
     for name, stats in report["buckets"].items():
         print(
-            f"  {name:<8} {stats['n']:>6} {stats['mean_clv']:>+10.2f} "
-            f"{stats['positive_clv_pct']:>9.1f}% {stats['ats_pct']:>7.1f}%"
+            f"| {name} | {stats['n']} | {stats['mean_clv']:+.2f} "
+            f"| {stats['positive_clv_pct']:.1f}% | {stats['ats_pct']:.1f}% |"
         )
 
     # Interpretation
@@ -1860,44 +1862,46 @@ def print_results(
                     Set False for faster output in sweeps. Default True.
         verbose: Whether to print per-week breakdowns and detailed logs. Default False.
     """
-    print("\n" + "=" * 50)
-    print("BACKTEST RESULTS")
-    print("=" * 50)
+    print("\n## BACKTEST RESULTS\n")
 
     metrics = results["metrics"]
-    print(f"\nTotal games predicted: {metrics['total_games']}")
-    print(f"\nError Metrics:")
-    print(f"  MAE (vs actual):  {metrics['mae']:.2f} points")
+    print(f"Total games predicted: {metrics['total_games']}\n")
+
+    # Error Metrics table
+    print("| Metric | Value |")
+    print("|--------|-------|")
+    print(f"| MAE (vs actual) | {metrics['mae']:.2f} pts |")
     if "mae_vs_close" in metrics:
-        print(f"  MAE (vs closing): {metrics['mae_vs_close']:.2f} points")
-    print(f"  RMSE: {metrics['rmse']:.2f} points")
-    print(f"  Median Error: {metrics['median_error']:.2f} points")
-    print(f"\nPrediction Accuracy:")
-    print(f"  Within 3 pts: {metrics['within_3']:.1%}")
-    print(f"  Within 7 pts: {metrics['within_7']:.1%}")
-    print(f"  Within 10 pts: {metrics['within_10']:.1%}")
+        print(f"| MAE (vs closing) | {metrics['mae_vs_close']:.2f} pts |")
+    print(f"| RMSE | {metrics['rmse']:.2f} pts |")
+    print(f"| Median Error | {metrics['median_error']:.2f} pts |")
+    print(f"| Within 3 pts | {metrics['within_3']:.1%} |")
+    print(f"| Within 7 pts | {metrics['within_7']:.1%} |")
+    print(f"| Within 10 pts | {metrics['within_10']:.1%} |")
 
     if "ats_record" in metrics:
-        print(f"\nAgainst the Spread:")
-        print(f"  Record: {metrics['ats_record']}")
-        print(f"  Win Rate: {metrics['ats_win_rate']:.1%}")
-        print(f"  ROI: {metrics['roi']:.1%}")
+        print(f"\n### Against the Spread\n")
+        print("| Edge | Record | Win % | ROI |")
+        print("|------|--------|-------|-----|")
+        print(f"| All | {metrics['ats_record']} | {metrics['ats_win_rate']:.1%} | {metrics['roi']:.1%} |")
 
-        for threshold in [2, 3, 5]:
+        for threshold in [3, 5]:
             key = f"ats_{threshold}pt_edge"
             if key in metrics:
-                print(f"  {threshold}+ pt edge: {metrics[key]}")
+                print(f"| {threshold}+ pts | {metrics[key]} |  |  |")
 
     # Weekly MAE breakdown (P3.9: gated behind --verbose for faster default runs)
     predictions_df = results["predictions"]
     if verbose and not predictions_df.empty:
-        print(f"\nMAE by Week:")
+        print(f"\n### MAE by Week\n")
+        print("| Week | Games | MAE |")
+        print("|------|-------|-----|")
         weekly = predictions_df.groupby("week").agg(
             games=("abs_error", "count"),
             mae=("abs_error", "mean"),
         )
         for week, row in weekly.iterrows():
-            print(f"  Week {week:2d}: MAE={row['mae']:5.2f}  (n={int(row['games'])})")
+            print(f"| {int(week):2d} | {int(row['games'])} | {row['mae']:.2f} |")
 
     # P3.7: Diagnostic reports are optional (skip with --no-diagnostics for faster sweeps)
     if diagnostics:
@@ -1935,9 +1939,7 @@ def print_prediction_sanity_report(results: dict, ats_df: pd.DataFrame = None) -
     if predictions_df.empty:
         return
 
-    print("\n" + "-" * 50)
-    print("SANITY CHECK")
-    print("-" * 50)
+    print("\n### Sanity Check\n")
 
     # Predictions per week
     print("\nPredictions per week:")

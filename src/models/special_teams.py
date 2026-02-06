@@ -74,7 +74,7 @@ class SpecialTeamsModel:
     # ~0.04 points per yard of field position change
     YARDS_TO_POINTS = 0.04
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the special teams model."""
         self.team_ratings: dict[str, SpecialTeamsRating] = {}
 
@@ -457,7 +457,7 @@ class SpecialTeamsModel:
             return
 
         # Parse distance from play_text
-        def extract_distance(text):
+        def extract_distance(text: str) -> Optional[int]:
             if pd.isna(text):
                 return None
             match = re.search(r'(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
@@ -602,20 +602,20 @@ class SpecialTeamsModel:
 
         # Parse punt distance from play_text
         # Examples: "John Smith punt for 45 yards", "punt for 52 Yds"
-        def extract_punt_yards(text):
+        def extract_punt_yards(text: str) -> Optional[int]:
             if pd.isna(text):
                 return None
             match = re.search(r'punt\s+(?:for\s+)?(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
             return int(match.group(1)) if match else None
 
         # Detect touchbacks (ball goes into end zone)
-        def is_touchback(text):
+        def is_touchback(text: str) -> bool:
             if pd.isna(text):
                 return False
             return 'touchback' in str(text).lower()
 
         # Detect inside-20 (fair catch or downed inside 20)
-        def is_inside_20(text):
+        def is_inside_20(text: str) -> bool:
             if pd.isna(text):
                 return False
             text_lower = str(text).lower()
@@ -625,7 +625,7 @@ class SpecialTeamsModel:
                    ('fair catch' in text_lower and 'to the' in text_lower)
 
         # Parse return yards
-        def extract_return_yards(text):
+        def extract_return_yards(text: str) -> int:
             if pd.isna(text):
                 return 0
             # "returned by X for Y yards" or "return for Y yards"

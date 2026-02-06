@@ -186,6 +186,9 @@ class ExcelExporter:
     ) -> None:
         """Create power ratings sheet.
 
+        Follows the JP+ Power Ratings Display Protocol (see CLAUDE.md):
+        Rank | Team | Overall | Offense (rank) | Defense (rank) | Special Teams (rank)
+
         Args:
             wb: Workbook to add sheet to
             ratings_df: DataFrame with team ratings

@@ -48,7 +48,7 @@ class FinishingDrivesModel:
     # With 150+ RZ plays per team, raw data is reliable
     PRIOR_RZ_TRIPS = 10
 
-    def __init__(self, regress_to_mean: bool = True, prior_strength: int = None):
+    def __init__(self, regress_to_mean: bool = True, prior_strength: Optional[int] = None) -> None:
         """Initialize the finishing drives model.
 
         Args:
