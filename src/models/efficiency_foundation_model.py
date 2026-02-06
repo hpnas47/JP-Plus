@@ -344,6 +344,7 @@ class EfficiencyFoundationModel:
         garbage_time_weight: float = 0.1,  # Weight for garbage time plays (0 to discard)
         rating_std: float = 12.0,  # Target std for ratings (SP+ uses ~12)
         asymmetric_garbage: bool = True,  # Only penalize trailing team in garbage time
+        leading_garbage_weight: float = 1.0,  # Weight for leading team's garbage time plays
         time_decay: float = 1.0,  # Per-week decay factor (1.0 = no decay, 0.95 = 5% per week)
     ):
         """Initialize Efficiency Foundation Model.
@@ -359,8 +360,10 @@ class EfficiencyFoundationModel:
             garbage_time_weight: Weight for garbage time plays (0.1 recommended, 0 to discard)
             rating_std: Target standard deviation for ratings. Set to 12.0 for SP+-like scale
                        where Team A - Team B = expected spread. Higher = more spread between teams.
-            asymmetric_garbage: If True, only trailing team's garbage time plays are down-weighted.
-                              Leading team keeps full weight (they earned the blowout through efficiency).
+            asymmetric_garbage: If True, trailing team's garbage time plays are down-weighted.
+                              Leading team gets partial credit (leading_garbage_weight, default 0.5).
+            leading_garbage_weight: Weight for leading team's plays during garbage time (default 1.0).
+                                  1.0 = full credit (best ATS), 0.5 = half credit. Tested 0.5/0.7/symmetric - all degraded 5+ edge.
             time_decay: Per-week decay factor for play weights. 1.0 = no decay (all weeks equal).
                        0.95 = 5% decay per week (Week 1 plays get ~0.54 weight by Week 12).
                        Formula: weight *= decay ^ (max_week - play_week)
@@ -373,6 +376,7 @@ class EfficiencyFoundationModel:
         self.turnover_prior_strength = turnover_prior_strength
         self.garbage_time_weight = garbage_time_weight
         self.asymmetric_garbage = asymmetric_garbage
+        self.leading_garbage_weight = leading_garbage_weight
         self.time_decay = time_decay
 
         self.team_ratings: dict[str, TeamEFMRating] = {}
@@ -569,7 +573,8 @@ class EfficiencyFoundationModel:
         return df
 
     def _prepare_plays(
-        self, plays_df: pd.DataFrame, max_week: int | None = None
+        self, plays_df: pd.DataFrame, max_week: int | None = None,
+        team_conferences: Optional[dict[str, str]] = None
     ) -> pd.DataFrame:
         """Filter and prepare plays for analysis.
 
@@ -581,6 +586,8 @@ class EfficiencyFoundationModel:
             plays_df: Raw play-by-play DataFrame
             max_week: Maximum week allowed in training data (for data leakage prevention).
                       If provided, asserts no plays exceed this week and uses it for time_decay.
+            team_conferences: Optional dict mapping team name to conference name.
+                            If provided, applies 1.5x weight to non-conference games.
 
         Returns:
             Filtered DataFrame with success and garbage time flags
@@ -667,18 +674,22 @@ class EfficiencyFoundationModel:
             df = df[~df["is_garbage_time"]]
             df["weight"] = 1.0
         elif self.asymmetric_garbage:
-            # Asymmetric: only penalize TRAILING team's garbage time plays
-            # Leading team keeps full weight - they earned the blowout through efficiency
-            # Vectorized: weight = 1.0 unless (garbage_time AND offense trailing)
+            # Three-tier garbage time: leading team gets partial credit,
+            # trailing team heavily down-weighted, non-GT plays full weight.
+            # Prevents stat-padding inflation while still crediting dominance.
             offense_margin = df["offense_score"].values - df["defense_score"].values
             is_gt = df["is_garbage_time"].values
             is_trailing = offense_margin <= 0
+            is_leading = offense_margin > 0
 
-            # Full weight unless in garbage time AND trailing
             df["weight"] = np.where(
                 is_gt & is_trailing,
-                self.garbage_time_weight,
-                1.0
+                self.garbage_time_weight,           # 0.1 for trailing team
+                np.where(
+                    is_gt & is_leading,
+                    self.leading_garbage_weight,     # 0.5 for leading team
+                    1.0                              # full weight outside GT
+                )
             )
         else:
             # Symmetric: weight ALL garbage time plays at reduced value
@@ -697,6 +708,23 @@ class EfficiencyFoundationModel:
             # Recent plays (reference_week) get weight 1.0, older plays get less
             df["time_weight"] = self.time_decay ** (decay_reference_week - df["week"])
             df["weight"] = df["weight"] * df["time_weight"]
+
+        # Apply non-conference game weighting (1.5x boost for OOC matchups)
+        # This reduces conference circularity in ridge regression by anchoring
+        # conference ratings to external benchmarks. Only boosts FBS-vs-FBS OOC games.
+        if team_conferences is not None and "offense" in df.columns and "defense" in df.columns:
+            # Map teams to conferences (vectorized lookup)
+            off_conf = df["offense"].map(team_conferences)
+            def_conf = df["defense"].map(team_conferences)
+
+            # Non-conference game: both teams are FBS (in conference dict) and different conferences
+            # .notna() ensures both teams are FBS (missing conf = FCS team, don't boost)
+            is_ooc_fbs = off_conf.notna() & def_conf.notna() & (off_conf != def_conf)
+            ooc_count = is_ooc_fbs.sum()
+
+            if ooc_count > 0:
+                df["weight"] = np.where(is_ooc_fbs, df["weight"] * 1.5, df["weight"])
+                logger.debug(f"  Applied 1.5x weight to {ooc_count:,} non-conference FBS plays")
 
         prep_time = time.time() - prep_start
         logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")
@@ -1250,6 +1278,7 @@ class EfficiencyFoundationModel:
         games_df: Optional[pd.DataFrame] = None,
         max_week: int | None = None,
         season: int | None = None,
+        team_conferences: Optional[dict[str, str]] = None,
     ) -> dict[str, TeamEFMRating]:
         """Calculate efficiency-based ratings for all teams.
 
@@ -1316,12 +1345,14 @@ class EfficiencyFoundationModel:
                       If provided, asserts no plays exceed this week. Also used as cache key.
             season: Season year for cache key. If provided with max_week, enables caching
                     of ridge regression results.
+            team_conferences: Optional dict mapping team name to conference name.
+                            If provided, applies 1.5x weight to non-conference games.
 
         Returns:
             Dict mapping team name to TeamEFMRating
         """
         # Prepare plays (with data leakage guard if max_week provided)
-        prepared = self._prepare_plays(plays_df, max_week=max_week)
+        prepared = self._prepare_plays(plays_df, max_week=max_week, team_conferences=team_conferences)
         # P3.9: Debug level for per-week logging
         logger.debug(f"Prepared {len(prepared)} plays for EFM")
 
@@ -1535,12 +1566,180 @@ class EfficiencyFoundationModel:
         # P3.9: Debug level for per-week logging
         logger.debug(f"Calculated EFM ratings for {len(self.team_ratings)} teams")
 
+        # Conference Strength Anchor: adjust ratings based on non-conference performance
+        # Applied AFTER Ridge regression but BEFORE normalization to break conference
+        # circularity. Only activates when team_conferences and games_df are both provided.
+        if team_conferences is not None and games_df is not None:
+            conf_anchor = self._calculate_conference_anchor(
+                games_df, team_conferences, max_week=max_week
+            )
+            if conf_anchor:
+                for team, rating in self.team_ratings.items():
+                    adj = conf_anchor.get(team, 0.0)
+                    if abs(adj) > 0.001:
+                        # Split adjustment evenly between offense and defense
+                        # This preserves the overall = off + def invariant
+                        new_off = rating.offensive_rating + adj / 2
+                        new_def = rating.defensive_rating + adj / 2
+                        new_overall = new_off + new_def
+                        self.team_ratings[team] = TeamEFMRating(
+                            team=rating.team,
+                            raw_success_rate=rating.raw_success_rate,
+                            raw_isoppp=rating.raw_isoppp,
+                            adj_success_rate=rating.adj_success_rate,
+                            adj_isoppp=rating.adj_isoppp,
+                            efficiency_rating=rating.efficiency_rating,
+                            explosiveness_rating=rating.explosiveness_rating,
+                            offensive_rating=new_off,
+                            defensive_rating=new_def,
+                            special_teams_rating=rating.special_teams_rating,
+                            turnover_rating=rating.turnover_rating,
+                            overall_rating=new_overall,
+                            off_plays=rating.off_plays,
+                            def_plays=rating.def_plays,
+                        )
+
         # Normalize ratings to target standard deviation
         # This ensures Team A rating - Team B rating = expected spread
         # Note: all_teams from CFBD API is FBS teams only
         self._normalize_ratings(all_teams)
 
         return self.team_ratings
+
+    def _calculate_conference_anchor(
+        self,
+        games_df: pd.DataFrame,
+        team_conferences: dict[str, str],
+        max_week: int | None = None,
+        anchor_scale: float = 0.08,
+        prior_games: int = 30,
+        max_adjustment: float = 2.0,
+    ) -> dict[str, float]:
+        """Calculate conference strength adjustment from non-conference game performance.
+
+        Addresses conference circularity in Ridge regression: teams in a weak conference
+        inflate each other's opponent-adjusted metrics because the Ridge system is nearly
+        closed for conference games. This anchor uses out-of-conference (OOC) results as
+        an external reference point.
+
+        Algorithm:
+        1. Identify non-conference FBS-vs-FBS games from games_df
+        2. Calculate average scoring margin per conference in OOC games
+        3. Apply Bayesian shrinkage: n_games / (n_games + prior_games) to suppress
+           early-season noise when sample sizes are small
+        4. Scale the deviation to produce a per-team adjustment (capped at +-max_adjustment)
+
+        The adjustment is applied to overall_rating BEFORE normalization, so it
+        affects the relative ordering of teams across conferences while preserving
+        intra-conference relationships from Ridge regression.
+
+        Args:
+            games_df: Games DataFrame with home_team, away_team, home_points, away_points
+            team_conferences: Dict mapping team name to conference name
+            max_week: If provided, only use games through this week
+            anchor_scale: Converts margin deviation to rating points (default 0.08).
+                         With Bayesian shrinkage, this controls the maximum impact.
+                         E.g., margin=+10, full shrinkage -> adj = 10 * 0.08 = 0.8 pts
+            prior_games: Bayesian prior equivalent games for shrinkage (default 30).
+                        With 15 OOC games, shrinkage = 15/(15+30) = 0.33.
+                        With 60 OOC games, shrinkage = 60/(60+30) = 0.67.
+            max_adjustment: Hard cap on adjustment magnitude (default 2.0 pts)
+
+        Returns:
+            Dict mapping team name to conference anchor adjustment (in pre-normalization points)
+        """
+        if games_df is None or len(games_df) == 0 or not team_conferences:
+            return {}
+
+        df = games_df.copy()
+
+        # Filter to games within the training window
+        if max_week is not None and "week" in df.columns:
+            df = df[df["week"] <= max_week]
+
+        # Need scoring data
+        required = ["home_team", "away_team", "home_points", "away_points"]
+        if not all(col in df.columns for col in required):
+            logger.debug("Conference anchor: missing required columns in games_df")
+            return {}
+
+        # Drop games without scores
+        df = df.dropna(subset=["home_points", "away_points"])
+
+        # Map teams to conferences
+        df["home_conf"] = df["home_team"].map(team_conferences)
+        df["away_conf"] = df["away_team"].map(team_conferences)
+
+        # Non-conference = both teams are FBS (have conference) and different conferences
+        ooc_mask = (
+            df["home_conf"].notna() &
+            df["away_conf"].notna() &
+            (df["home_conf"] != df["away_conf"])
+        )
+        ooc_games = df[ooc_mask].copy()
+
+        if len(ooc_games) < 10:
+            logger.debug(f"Conference anchor: only {len(ooc_games)} OOC games, skipping")
+            return {}
+
+        # Calculate margin from each team's perspective in OOC games
+        # Vectorized: build arrays for home conf margins and away conf margins
+        home_margins = ooc_games["home_points"].values - ooc_games["away_points"].values
+        home_confs = ooc_games["home_conf"].values
+        away_confs = ooc_games["away_conf"].values
+
+        # Build (conference, margin) pairs for all team appearances
+        confs = np.concatenate([home_confs, away_confs])
+        margins = np.concatenate([home_margins, -home_margins])
+
+        margins_df = pd.DataFrame({"conference": confs, "margin": margins})
+
+        # Aggregate per conference
+        conf_stats = margins_df.groupby("conference").agg(
+            mean_margin=("margin", "mean"),
+            n_games=("margin", "count"),
+        )
+
+        # FBS-wide average OOC margin (should be near 0 for FBS-vs-FBS)
+        fbs_avg_margin = margins_df["margin"].mean()
+
+        # Calculate per-conference adjustment with Bayesian shrinkage
+        conf_adjustments = {}
+        for conf, row in conf_stats.iterrows():
+            n = row["n_games"]
+            # Bayesian shrinkage: more games -> more trust in the signal
+            shrinkage = n / (n + prior_games)
+
+            # Raw deviation from FBS average
+            deviation = row["mean_margin"] - fbs_avg_margin
+
+            # Shrunken adjustment: shrinkage * scale * deviation
+            raw_adj = shrinkage * anchor_scale * deviation
+            adj = np.clip(raw_adj, -max_adjustment, max_adjustment)
+            conf_adjustments[conf] = adj
+
+        # Log conference anchor adjustments
+        sorted_confs = sorted(conf_adjustments.items(), key=lambda x: x[1])
+        n_nonzero = sum(1 for _, a in conf_adjustments.items() if abs(a) > 0.01)
+        logger.info(
+            f"Conference Anchor ({len(ooc_games)} OOC games, "
+            f"FBS avg={fbs_avg_margin:.1f}, {n_nonzero} confs adjusted):"
+        )
+        for conf, adj in sorted_confs:
+            n = conf_stats.loc[conf, "n_games"] if conf in conf_stats.index else 0
+            mean_m = conf_stats.loc[conf, "mean_margin"] if conf in conf_stats.index else 0
+            shrink = n / (n + prior_games)
+            if abs(adj) > 0.01:
+                logger.info(
+                    f"  {conf}: OOC={mean_m:+.1f} ({n} games, shrink={shrink:.2f}) -> adj={adj:+.2f}"
+                )
+
+        # Map conference adjustment to individual teams
+        team_adjustments = {}
+        for team, conf in team_conferences.items():
+            team_adjustments[team] = conf_adjustments.get(conf, 0.0)
+
+        return team_adjustments
 
     def _normalize_ratings(self, fbs_teams: set[str]) -> None:
         """Normalize ratings to target standard deviation.

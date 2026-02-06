@@ -582,6 +582,7 @@ def walk_forward_predict(
     fcs_penalty_standard: float = 32.0,
     st_plays_df: Optional[pl.DataFrame] = None,
     historical_rankings: Optional[HistoricalRankings] = None,
+    team_conferences: Optional[dict[str, str]] = None,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -612,6 +613,7 @@ def walk_forward_predict(
         fcs_penalty_standard: Points for standard FCS teams (default 32.0)
         st_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
         historical_rankings: Week-by-week AP poll rankings for letdown spot detection
+        team_conferences: Dict mapping team name to conference name for conference strength anchor
 
     Returns:
         List of prediction result dictionaries
@@ -675,7 +677,11 @@ def walk_forward_predict(
             asymmetric_garbage=asymmetric_garbage,
         )
 
-        efm.calculate_ratings(train_plays_pd, train_games_pd, max_week=pred_week - 1, season=year)
+        efm.calculate_ratings(
+            train_plays_pd, train_games_pd,
+            max_week=pred_week - 1, season=year,
+            team_conferences=team_conferences,
+        )
 
         # Get ratings directly from EFM (full precision, already normalized to std=12)
         # IMPORTANT: Do NOT use get_ratings_df() here - it rounds to 1 decimal place
@@ -1390,7 +1396,9 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
     for year in years:
         # Unpack season data (historical_rankings added for letdown spot detection)
         season_tuple = season_data[year]
-        if len(season_tuple) == 9:
+        if len(season_tuple) >= 10:
+            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings, team_conferences = season_tuple
+        elif len(season_tuple) == 9:
             games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
         else:
             # Backward compatibility for old 8-tuple format
@@ -1987,6 +1995,14 @@ def fetch_all_season_data(
         fbs_teams = {t.school for t in fbs_teams_list}
         logger.debug(f"Loaded {len(fbs_teams)} FBS teams")
 
+        # Build conference map for Conference Strength Anchor (year-appropriate)
+        team_conferences = {}
+        for t in fbs_teams_list:
+            if t.school and t.conference:
+                team_conferences[t.school] = t.conference
+        logger.debug(f"Built conference map: {len(team_conferences)} teams across "
+                     f"{len(set(team_conferences.values()))} conferences for {year}")
+
         # Load historical AP rankings (for letdown spot detection)
         historical_rankings = HistoricalRankings("AP Top 25")
         try:
@@ -2010,7 +2026,7 @@ def fetch_all_season_data(
                 logger.warning(f"Could not load preseason priors for {year}: {e}")
                 priors = None
 
-        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings)
+        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings, team_conferences)
 
     return season_data
 
@@ -2048,11 +2064,15 @@ def _process_single_season(
     clear_ridge_cache()
 
     # Unpack season data
-    if len(season_tuple) == 9:
+    if len(season_tuple) >= 10:
+        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings, team_conferences = season_tuple
+    elif len(season_tuple) == 9:
         games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
+        team_conferences = None
     else:
         games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
         historical_rankings = None
+        team_conferences = None
 
     # Walk-forward predictions
     predictions = walk_forward_predict(
@@ -2076,6 +2096,7 @@ def _process_single_season(
         fcs_penalty_standard=fcs_penalty_standard,
         st_plays_df=st_plays_df,
         historical_rankings=historical_rankings,
+        team_conferences=team_conferences,
     )
 
     # Calculate ATS

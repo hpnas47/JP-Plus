@@ -18,16 +18,17 @@
 
 | Slice | Weeks | Games | MAE | ATS |
 |-------|-------|-------|-----|-----|
-| **Full (`--start-week 1`)** | 1–Post | 3,258 | 13.03 | 50.8% |
-| Phase 1 (Calibration) | 1–3 | 597 | 14.95 | 47.1% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.52** | **52.0%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.40 | 46.2% |
-| **Standard (`--start-week 4`)** | 4–Post | 2,665 | 12.59 | 51.6% |
-| 3+ Edge (Core) | 4–15 | 1,410 | — | 52.3% (738-672) |
-| 5+ Edge (Core) | 4–15 | 886 | — | 53.5% (474-412) |
+| **Full (`--start-week 1`)** | 1–Post | 3,258 | 13.00 | 50.2% |
+| Phase 1 (Calibration) | 1–3 | 597 | 14.95 | 47.3% |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.49** | **51.3%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.40 | 47.4% |
+| **Standard (`--start-week 4`)** | 4–Post | 2,665 | 12.55 | 51.0% |
+| 3+ Edge (Core) | 4–15 | 1,379 | — | 52.9% (730-649) |
+| 5+ Edge (Core) | 4–15 | 840 | — | 54.8% (460-380) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
+- **Conference Anchor:** OOC game weighting (1.5x) + Bayesian conference strength anchor. Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 
 ---
 
