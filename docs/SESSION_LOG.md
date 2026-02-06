@@ -69,6 +69,55 @@
 
 ---
 
+## Session: February 5, 2026 (Late Night)
+
+### Completed: P3 Implementation Sweep
+
+Final sweep focused on system legibility and long-term maintainability. Docstrings, type hints, logging format, project documentation, and the last EFM performance optimization. Zero MAE tolerance enforced throughout.
+
+#### Batch 1: Docstrings, Type Hints, Logging, PROJECT_MAP (all accepted)
+
+- **Docstring audit**: All top-level functions in `src/models/` and `scripts/backtest.py` already had Google-style docstrings. Added JP+ Power Ratings Display Protocol reference to `get_ratings_df()` (EFM) and `excel_export.py`.
+- **Type hinting**: Fixed 3 `__init__` methods missing `-> None` (finishing_drives, special_teams, preseason_priors). Fixed `prior_strength: int = None` to `Optional[int] = None`. Added type hints to 5 nested helper functions in special_teams.py (`extract_distance`, `extract_punt_yards`, `is_touchback`, `is_inside_20`, `extract_return_yards`). Added type hint to `process_betting_lines` closure in backtest.py.
+- **Logging cleanup**: Converted backtest `print_results()` output from plain text to Markdown tables (metrics, ATS, CLV report, phase report, sanity check). Headers use `##`/`###` Markdown syntax. Phase report uses manual Markdown table construction (no `tabulate` dependency).
+- **PROJECT_MAP.md**: Generated comprehensive file map covering all 45+ Python files across 10 directories (`src/models/`, `src/adjustments/`, `src/predictions/`, `src/api/`, `src/data/`, `src/reports/`, `src/utils/`, `config/`, `scripts/`, `docs/`).
+
+#### Batch 2: EFM P3.1 + D.1 (both accepted)
+
+- **EFM P3.1 — Vectorize sparse COO construction**: Replaced Python per-row loop (O(N_plays) iterations) with vectorized numpy operations. Team-to-index lookup via list comprehension to int32 arrays. Row/col/data assembled via `np.concatenate`. Home team comparison uses `np.asarray(dtype=object)` to avoid pandas Categorical comparison errors. Backtest MAE identical.
+- **EFM D.1 — Ridge sanity logging**: Added consolidated debug-level sanity summary after post-centering: intercept, learned HFA, off/def mean and std, n_teams, n_plays. Reported in a single log line per ridge fit. (Most sub-metrics already existed from P0.2, P1.1 fixes; D.1 consolidates them.)
+
+#### Quant Auditor Decision Gate Results
+
+| Batch | MAE Delta | Verdict |
+|-------|-----------|---------|
+| Batch 1 (Docstrings+Types+Logging+Docs) | 0.00 | PASS |
+| Batch 2 (EFM P3.1+D.1) | 0.00 | PASS |
+
+### Baseline (Post-P3 Sweep — unchanged)
+
+| Metric | 2024-2025 | 4-Year (2022-2025) |
+|--------|-----------|-------------------|
+| Core MAE | 12.43 | 12.49 |
+| Core ATS (close) | 51.33% | 51.87% |
+| Core 3+ edge | 53.5% | 53.1% |
+| Core 5+ edge | 55.7% | 54.7% |
+
+### Audit Sweep Progress (Final — All Priorities)
+
+| Priority | Total | Fixed | Deferred/Rejected | Remaining |
+|----------|-------|-------|-------------------|-----------|
+| P0 | 11 | 11 | 0 | 0 |
+| P1 | 18 | 15 | 3 | 0 |
+| P2 | 16 | 12 | 4 | 0 |
+| P3 | 2 | 2 | 0 | 0 |
+| D (Diagnostics) | 1 | 1 | 0 | 0 |
+| **Total** | **48** | **41** | **7** | **0** |
+
+**Key takeaway:** Full audit sweep complete (P0 through P3 + diagnostics). 41/48 items fixed. All 7 remaining items are deferred with documented blockers (external API research or model recalibration required). Codebase is fully documented with type hints, Google-style docstrings, Markdown output, and PROJECT_MAP.md.
+
+---
+
 ## Session: February 5, 2026 (Night)
 
 ### Completed: P2 Implementation Sweep
