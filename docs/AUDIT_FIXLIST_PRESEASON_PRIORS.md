@@ -75,12 +75,12 @@ This module is feature-rich (asymmetric regression, coaching change, portal impa
 
 ## P2 — Robustness & historical correctness
 
-- [ ] **P2.1 Conference-by-year semantics for P4/G5 classification** -- DEFERRED
+- [x] **P2.1 Conference-by-year semantics for P4/G5 classification** -- FIXED 2026-02-05
   - **Issue:** Portal "level-up discount" uses conference data that may reflect current alignment rather than the season being modeled (realignment years).
   - **Acceptance criteria:**
     - If possible, use conference affiliation appropriate for the modeled year.
     - If not possible, document the approximation and add warnings for known realignment seasons/teams.
-  - **Status:** Deferred 2026-02-05. Requires historical conference affiliation data by year from CFBD API. Current P4/G5 classification uses static lists which are correct for 2024-2025 but may misclassify teams in 2022-2023 realignment transition years (e.g., USC/UCLA, Colorado, Texas, Oklahoma).
+  - **Fix applied:** Changed `_fetch_team_conferences()` to use `get_fbs_teams(year=year)` instead of `get_teams()`. The `get_fbs_teams` endpoint accepts a year parameter and returns conference affiliations as of that year, correctly handling realignment (USC/UCLA to Big Ten 2024, Texas/Oklahoma to SEC 2024, etc.). Also cleaned up static `P4_TEAMS` override set to only contain true independents (Notre Dame, BYU pre-2023) since year-appropriate conference lookup now handles moved teams.
 
 ---
 

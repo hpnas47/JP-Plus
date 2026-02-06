@@ -227,7 +227,7 @@ class PreseasonPriors:
         prior_year_weight: float = 0.6,
         talent_weight: float = 0.4,
         regression_factor: float = 0.3,
-    ):
+    ) -> None:
         """Initialize preseason priors calculator.
 
         Args:
@@ -433,17 +433,22 @@ class PreseasonPriors:
     }
 
     # Power 4 Conferences (for level-up discount logic)
+    # Note: Conference lookup is now year-appropriate via get_fbs_teams(year=year)
     P4_CONFERENCES = {
         'SEC', 'Big Ten', 'Big 12', 'ACC',
-        # Include independents that play P4-level schedules
-        'Notre Dame', 'FBS Independents',
+        # FBS Independents conference label for teams like Notre Dame, Army, etc.
+        'FBS Independents',
     }
 
-    # Teams that are P4 level (for edge cases and independents)
+    # P4-level teams that may not be in a P4 conference in a given year
+    # With year-appropriate conference lookup (P2.1 fix), this is now minimal:
+    # - Notre Dame: Independent but plays P4-level schedule (ACC for most games)
+    # - BYU: Was independent 2011-2022, joined Big 12 in 2023
+    # Other teams (USC, UCLA, Oregon, etc.) are handled by year-appropriate
+    # conference lookup and don't need static overrides.
     P4_TEAMS = {
-        'Notre Dame', 'BYU', 'USC', 'UCLA', 'Oregon', 'Washington',
-        'Colorado', 'Arizona', 'Arizona State', 'Utah',
-        # Any other P4-level independents
+        'Notre Dame',
+        'BYU',  # Override for 2011-2022 when BYU was independent
     }
 
     # High-contact positions for physicality tax (G5→P4 transfers)
@@ -633,24 +638,31 @@ class PreseasonPriors:
             return set()
 
     def _fetch_team_conferences(self, year: int) -> dict[str, str]:
-        """Fetch conference affiliation for all teams.
+        """Fetch conference affiliation for all FBS teams for a specific year.
+
+        Uses get_fbs_teams(year=year) to get year-appropriate conference data,
+        which correctly handles realignment (e.g., USC/UCLA to Big Ten in 2024,
+        Texas/Oklahoma to SEC in 2024).
 
         Args:
-            year: Season year
+            year: Season year (conference affiliations as of this year)
 
         Returns:
             Dict mapping team name to conference name
         """
         try:
-            teams = self.teams_api.get_teams()
+            # P2.1 FIX: Use get_fbs_teams with year parameter to get
+            # year-appropriate conference affiliations instead of get_teams()
+            # which returns current (potentially future) affiliations
+            teams = self.teams_api.get_fbs_teams(year=year)
             conf_map = {}
             for t in teams:
                 if t.school and t.conference:
                     conf_map[t.school] = t.conference
-            logger.debug(f"Fetched conference data for {len(conf_map)} teams")
+            logger.debug(f"Fetched {year} conference data for {len(conf_map)} FBS teams")
             return conf_map
         except Exception as e:
-            logger.warning(f"Could not fetch team conferences: {e}")
+            logger.warning(f"Could not fetch team conferences for {year}: {e}")
             return {}
 
     def calculate_portal_impact(
