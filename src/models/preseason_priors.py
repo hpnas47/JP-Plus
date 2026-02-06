@@ -226,6 +226,8 @@ class PreseasonPriors:
         prior_year_weight: float = 0.6,
         talent_weight: float = 0.4,
         regression_factor: float = 0.3,
+        use_churn_penalty: bool = False,
+        use_talent_decay: bool = True,
     ) -> None:
         """Initialize preseason priors calculator.
 
@@ -234,11 +236,16 @@ class PreseasonPriors:
             prior_year_weight: Weight for previous year's rating (0-1)
             talent_weight: Weight for talent composite (0-1)
             regression_factor: How much to regress prior ratings toward mean (0-1)
+            use_churn_penalty: If True, apply roster churn penalty to portal impact (default False)
+            use_talent_decay: If True, decay talent_floor_weight from 0.08→0.03 over weeks 0-10.
+                If False, use static talent_floor_weight all season (legacy behavior).
         """
         self.client = client
         self.prior_year_weight = prior_year_weight
         self.talent_weight = talent_weight
         self.regression_factor = regression_factor
+        self.use_churn_penalty = use_churn_penalty
+        self.use_talent_decay = use_talent_decay
 
         self.preseason_ratings: dict[str, PreseasonRating] = {}
 
@@ -612,6 +619,74 @@ class PreseasonPriors:
 
         return pos_weight * quality_factor * level_discount
 
+    def calculate_roster_churn_penalty(
+        self,
+        returning_production_pct: float,
+        portal_additions: int,
+        roster_size: int = 85,
+    ) -> float:
+        """Calculate roster churn penalty coefficient for portal impact.
+
+        TALENT MIRAGE HYPOTHESIS: Portal-heavy teams with low returning production
+        are systematically overvalued because we treat incoming transfers too generously.
+        The "talent mirage" occurs when a team replaces experienced players with
+        highly-rated transfers who may not gel immediately due to:
+        - Scheme learning curve
+        - Team chemistry/cohesion gaps
+        - Leadership vacuum from lost incumbents
+
+        This penalty dampens the portal impact for high-churn rosters.
+
+        Args:
+            returning_production_pct: Percentage of prior-year production returning (0-1)
+            portal_additions: Number of incoming portal transfers
+            roster_size: Total roster spots (default 85)
+
+        Returns:
+            Penalty coefficient (0.0 to 1.0):
+            - 1.0 = no penalty (high continuity: >60% returning, <15 portal adds)
+            - 0.7 = heavy penalty (high churn: <40% returning, >25 portal adds)
+            - Values interpolated smoothly between these bounds
+
+        Examples:
+            - Team with 70% returning, 10 portal adds → ~1.0 (no penalty)
+            - Team with 50% returning, 20 portal adds → ~0.85 (mild penalty)
+            - Team with 30% returning, 30 portal adds → ~0.70 (heavy penalty)
+        """
+        # Clamp inputs to valid ranges
+        ret_pct = max(0.0, min(1.0, returning_production_pct))
+        portal_pct = portal_additions / roster_size
+
+        # Define continuity score: higher = more stable roster
+        # Weight returning production heavily (70%) since it captures actual PPA returning
+        # Weight portal churn moderately (30%) since some churn is normal/healthy
+        continuity_score = 0.7 * ret_pct + 0.3 * (1.0 - portal_pct)
+
+        # Map continuity score to penalty coefficient using sigmoid curve
+        # This creates smooth transitions rather than harsh thresholds
+        #
+        # Reference points:
+        # - continuity = 0.75 (60% ret + 15 portal) → penalty ~1.0 (no penalty)
+        # - continuity = 0.50 (typical churn) → penalty ~0.85
+        # - continuity = 0.35 (40% ret + 25 portal) → penalty ~0.75
+        # - continuity = 0.25 (heavy churn) → penalty ~0.70
+
+        # Sigmoid formula: penalty = min_penalty + (1 - min_penalty) / (1 + exp(-k * (x - midpoint)))
+        # Parameters tuned to match reference points above
+        min_penalty = 0.70  # Floor at 70% of portal impact (never fully discount)
+        midpoint = 0.50     # Continuity score at which penalty = ~0.85
+        steepness = 8.0     # Controls curve steepness (higher = sharper transition)
+
+        # Calculate sigmoid
+        sigmoid_input = steepness * (continuity_score - midpoint)
+        # Clamp to prevent overflow in exp
+        sigmoid_input = max(-20, min(20, sigmoid_input))
+        sigmoid = 1.0 / (1.0 + np.exp(-sigmoid_input))
+
+        penalty_coefficient = min_penalty + (1.0 - min_penalty) * sigmoid
+
+        return float(penalty_coefficient)
+
     def fetch_fbs_teams(self, year: int) -> set[str]:
         """Fetch the set of FBS team names for a given year.
 
@@ -668,6 +743,7 @@ class PreseasonPriors:
         portal_scale: float = 0.15,
         fbs_only: bool = True,
         impact_cap: float = 0.12,
+        returning_production: Optional[dict[str, float]] = None,
     ) -> dict[str, float]:
         """Calculate net transfer portal impact for each team using unit-level analysis.
 
@@ -675,11 +751,15 @@ class PreseasonPriors:
         and continuity tax for losing incumbents. Reflects 2026 market reality
         where elite trench play is the primary driver of rating stability.
 
+        If use_churn_penalty is enabled, applies roster churn penalty to dampen
+        portal impact for high-turnover teams (Talent Mirage hypothesis).
+
         Args:
             year: Season year (fetches transfers FOR this year)
             portal_scale: How much to scale portal impact (default 0.15, matches production caller)
             fbs_only: If True, only include FBS teams in results (default True)
             impact_cap: Maximum team-wide portal impact (default ±12%)
+            returning_production: Optional dict of returning production pct per team (for churn penalty)
 
         Returns:
             Dictionary mapping team name to adjusted returning production modifier
@@ -770,6 +850,9 @@ class PreseasonPriors:
         incoming_df = transfers_df[transfers_df['destination'].notna()]
         incoming = incoming_df.groupby('destination')['incoming_value'].sum()
 
+        # Count portal additions per team (for churn penalty)
+        portal_additions_count = incoming_df.groupby('destination').size()
+
         # Log coverage and level-up stats
         has_dest = len(incoming_df)
         logger.info(
@@ -796,17 +879,47 @@ class PreseasonPriors:
             all_teams = [t for t in all_teams if t in fbs_teams]
 
         portal_impact = {}
+        churn_penalties_applied = []  # Track for logging
 
         for team in all_teams:
             out_val = outgoing.get(team, 0.0)
             in_val = incoming.get(team, 0.0)
             net_val = in_val - out_val
 
-            # Scale the impact and apply tighter cap (±12%)
+            # Apply roster churn penalty if enabled
+            churn_penalty = 1.0  # Default: no penalty
+            if self.use_churn_penalty and net_val > 0 and returning_production:
+                # Only penalize positive portal impact (gains, not losses)
+                # Rationale: Losses already hurt via continuity tax; no need to double-penalize
+                portal_adds = portal_additions_count.get(team, 0)
+                ret_pct = returning_production.get(team, 0.5)  # Default to average if missing
+
+                churn_penalty = self.calculate_roster_churn_penalty(
+                    returning_production_pct=ret_pct,
+                    portal_additions=portal_adds,
+                )
+
+                # Log significant penalties (penalty < 0.95 = >5% reduction)
+                if churn_penalty < 0.95:
+                    churn_penalties_applied.append((team, ret_pct, portal_adds, churn_penalty))
+
+            # Scale the impact, cap to ±12%, THEN apply churn penalty
+            # Penalty must come AFTER the cap so high-churn teams that hit the
+            # cap still get penalized (otherwise the cap absorbs the penalty)
             scaled_impact = net_val * portal_scale
             scaled_impact = max(-impact_cap, min(impact_cap, scaled_impact))
+            scaled_impact *= churn_penalty
 
             portal_impact[team] = scaled_impact
+
+        # Log churn penalties if applied
+        if churn_penalties_applied:
+            logger.info(f"Applied roster churn penalty to {len(churn_penalties_applied)} teams")
+            logger.debug("Teams with significant churn penalties (>5% reduction):")
+            for team, ret_pct, adds, penalty in sorted(churn_penalties_applied, key=lambda x: x[3]):
+                logger.debug(
+                    f"  {team}: penalty={penalty:.2f} (ret={ret_pct:.1%}, portal_adds={adds})"
+                )
 
         # Log top winners/losers (P3.9: debug level for quiet runs)
         sorted_impact = sorted(portal_impact.items(), key=lambda x: (-x[1], x[0]))
@@ -1122,7 +1235,11 @@ class PreseasonPriors:
         # Fetch transfer portal impact if enabled
         portal_impact = {}
         if use_portal:
-            portal_impact = self.calculate_portal_impact(year, portal_scale=portal_scale)
+            portal_impact = self.calculate_portal_impact(
+                year,
+                portal_scale=portal_scale,
+                returning_production=returning_prod,  # Pass for churn penalty calculation
+            )
 
         # P0.2: Validate data quality and rank direction
         self._validate_data_quality(prior_sp, talent, talent_normalized, returning_prod, portal_impact)
@@ -1335,6 +1452,47 @@ class PreseasonPriors:
             return self.preseason_ratings[team].combined_rating
         return 0.0
 
+    @staticmethod
+    def calculate_decayed_talent_weight(
+        games_played: int,
+        w_base: float = 0.08,
+        w_min: float = 0.03,
+        target_week: int = 10,
+    ) -> float:
+        """Calculate temporally-decayed talent floor weight.
+
+        Replaces the static talent_floor_weight (0.08) with a dynamic value
+        that decays linearly as in-season data becomes more robust.
+
+        Rationale: Early in the season, recruiting talent is a strong prior
+        signal (Talent > Performance when N_games < 4). By mid-season, actual
+        play-by-play efficiency is far more predictive, and the talent floor
+        should shrink to avoid inflating teams whose on-field results diverge
+        from their recruiting profile (the "Talent Mirage").
+
+        Formula: W(t) = max(W_base - t * decay_rate, W_min)
+        where decay_rate = (W_base - W_min) / target_week
+
+        Args:
+            games_played: Number of games played (pred_week - 1)
+            w_base: Starting weight at week 0 (default 0.08)
+            w_min: Minimum floor weight (default 0.03)
+            target_week: Week at which decay reaches w_min (default 10)
+
+        Returns:
+            Decayed talent weight (between w_min and w_base)
+
+        Examples:
+            Week 0 (preseason): 0.080
+            Week 3:             0.065
+            Week 5:             0.055
+            Week 10+:           0.030
+        """
+        if games_played <= 0:
+            return w_base
+        decay_rate = (w_base - w_min) / target_week
+        return max(w_base - games_played * decay_rate, w_min)
+
     def blend_with_inseason(
         self,
         inseason_ratings: dict[str, float],
@@ -1349,26 +1507,36 @@ class PreseasonPriors:
         - Weeks 4-5: Tipping point (~50%)
         - Weeks 8-9: Priors nearly gone (~5%)
 
-        Additionally, talent composite persists as a floor all year.
-        This prevents elite-talent teams from dropping too far with bad performance.
+        The talent floor decays from talent_floor_weight (0.08) at week 0
+        down to 0.03 by week 10, preventing late-season inflation of
+        high-talent teams with poor on-field efficiency.
 
         Args:
             inseason_ratings: Current in-season ratings
             games_played: Average games played per team (or weeks into season)
             games_for_full_weight: Games needed before in-season dominates (default 9)
-            talent_floor_weight: Persistent talent weight all year (default 0.08 = 8%)
+            talent_floor_weight: Base talent weight at week 0 (default 0.08 = 8%).
+                Decays to 0.03 by week 10 via calculate_decayed_talent_weight().
 
         Returns:
             Blended ratings dictionary
         """
+        # Apply temporal decay to talent floor weight (if enabled)
+        if self.use_talent_decay:
+            effective_talent_weight = self.calculate_decayed_talent_weight(
+                games_played, w_base=talent_floor_weight,
+            )
+        else:
+            effective_talent_weight = talent_floor_weight
+
         # Non-linear fade curve matching SP+ methodology
         # Uses sigmoid-like curve: slower fade early, faster in middle, levels off
         if games_played <= 0:
-            prior_weight = 0.95 - talent_floor_weight  # Adjust for talent floor
+            prior_weight = 0.95 - effective_talent_weight  # Adjust for talent floor
             inseason_weight = 0.0
         elif games_played >= games_for_full_weight:
             prior_weight = 0.05  # Small residual prior weight even late
-            inseason_weight = 1.0 - prior_weight - talent_floor_weight
+            inseason_weight = 1.0 - prior_weight - effective_talent_weight
         else:
             # Sigmoid-style curve for smoother transition
             # At week 3: ~65%, week 5: ~50%, week 7: ~25%, week 9: ~5%
@@ -1376,23 +1544,27 @@ class PreseasonPriors:
             # Modified sigmoid: steeper in middle, flatter at ends
             prior_weight = 0.92 * (1.0 - t ** 1.5) ** 1.2
             prior_weight = max(prior_weight, 0.05)
-            inseason_weight = 1.0 - prior_weight - talent_floor_weight
+            inseason_weight = 1.0 - prior_weight - effective_talent_weight
 
         logger.debug(
             f"Blending week {games_played}: prior={prior_weight:.1%}, "
-            f"inseason={inseason_weight:.1%}, talent_floor={talent_floor_weight:.1%}"
+            f"inseason={inseason_weight:.1%}, "
+            f"talent_floor={effective_talent_weight:.1%} "
+            f"(base={talent_floor_weight:.1%})"
         )
 
         # DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(set(inseason_ratings.keys()) | set(self.preseason_ratings.keys()))
         blended = {}
 
+        # Track high-talent outlier impact for diagnostics
+        high_talent_reductions = []
+
         for team in all_teams:
             preseason = self.get_preseason_rating(team)
             inseason = inseason_ratings.get(team, 0.0)
 
             # P0.1: Use normalized talent (already on SP+ rating scale) for persistent floor
-            # Previously used ad hoc (raw - 750) / 25.0 which was on a different scale
             talent_rating = 0.0
             if team in self.preseason_ratings:
                 talent_rating = self.preseason_ratings[team].talent_rating_normalized
@@ -1400,8 +1572,31 @@ class PreseasonPriors:
             blended[team] = (
                 preseason * prior_weight
                 + inseason * inseason_weight
-                + talent_rating * talent_floor_weight
+                + talent_rating * effective_talent_weight
             )
+
+            # Log reduction for high-talent outliers (talent_composite > 90th pct)
+            # Normalized talent > ~15 indicates elite recruiting (top ~15 programs)
+            if talent_rating > 15.0 and effective_talent_weight < talent_floor_weight:
+                static_contribution = talent_rating * talent_floor_weight
+                decayed_contribution = talent_rating * effective_talent_weight
+                reduction = static_contribution - decayed_contribution
+                high_talent_reductions.append((team, talent_rating, reduction))
+
+        # Log high-talent outlier reductions
+        if high_talent_reductions:
+            high_talent_reductions.sort(key=lambda x: -x[2])
+            logger.debug(
+                f"Talent floor decay shaved points from {len(high_talent_reductions)} "
+                f"high-talent teams (week {games_played}):"
+            )
+            for team, talent, reduction in high_talent_reductions[:10]:
+                logger.debug(
+                    f"  {team}: talent={talent:.1f}, "
+                    f"reduction={reduction:-.2f} pts "
+                    f"(static={talent * talent_floor_weight:.2f} → "
+                    f"decayed={talent * effective_talent_weight:.2f})"
+                )
 
         return blended
 
