@@ -346,6 +346,15 @@ class EfficiencyFoundationModel:
         asymmetric_garbage: bool = True,  # Only penalize trailing team in garbage time
         leading_garbage_weight: float = 1.0,  # Weight for leading team's garbage time plays
         time_decay: float = 1.0,  # Per-week decay factor (1.0 = no decay, 0.95 = 5% per week)
+        mov_weight: float = 0.0,  # Weight for MOV calibration layer (0.0 to disable) - DEPRECATED
+        mov_cap: float = 5.0,  # Cap for MOV adjustment in points (prevents extreme swings) - DEPRECATED
+        fraud_tax_enabled: bool = False,  # Enable "Efficiency Fraud" tax (one-way penalty) - DISABLED: degraded 5+ edge by 0.2%
+        fraud_tax_penalty: float = 2.0,  # Fixed penalty in rating points for efficiency frauds
+        fraud_tax_threshold: float = 2.5,  # Win gap threshold to trigger penalty
+        rz_leverage_enabled: bool = True,  # Enable Red Zone leverage weighting
+        rz_weight_20: float = 1.5,  # Weight multiplier for plays inside the 20-yard line
+        rz_weight_10: float = 2.0,  # Weight multiplier for plays inside the 10-yard line
+        empty_yards_weight: float = 0.7,  # Weight for "empty" successful plays between opp 40-20
     ):
         """Initialize Efficiency Foundation Model.
 
@@ -367,6 +376,20 @@ class EfficiencyFoundationModel:
             time_decay: Per-week decay factor for play weights. 1.0 = no decay (all weeks equal).
                        0.95 = 5% decay per week (Week 1 plays get ~0.54 weight by Week 12).
                        Formula: weight *= decay ^ (max_week - play_week)
+            mov_weight: DEPRECATED - Weight for MOV calibration layer (default 0.0, disabled).
+                       Use fraud_tax_enabled instead for asymmetric penalty.
+            mov_cap: DEPRECATED - Cap for MOV adjustment in points (default 5.0).
+            fraud_tax_enabled: Enable "Efficiency Fraud" tax (default True).
+                              Applies a one-way penalty to teams with high efficiency but poor wins.
+            fraud_tax_penalty: Fixed penalty in rating points (default 2.0).
+                              Applied when expected_wins - actual_wins > threshold.
+            fraud_tax_threshold: Win gap threshold to trigger penalty (default 2.5 wins).
+            rz_leverage_enabled: Enable Red Zone leverage weighting (default True).
+                                Up-weight plays near the goal line to emphasize finishing efficiency.
+            rz_weight_20: Weight multiplier for plays inside the 20-yard line (default 1.5).
+            rz_weight_10: Weight multiplier for plays inside the 10-yard line (default 2.0).
+            empty_yards_weight: Weight for "empty" successful plays between opponent 40-20 (default 0.7).
+                               Devalues successful plays that stall without entering the red zone or scoring.
         """
         self.ridge_alpha = ridge_alpha
         self.efficiency_weight = efficiency_weight
@@ -378,6 +401,15 @@ class EfficiencyFoundationModel:
         self.asymmetric_garbage = asymmetric_garbage
         self.leading_garbage_weight = leading_garbage_weight
         self.time_decay = time_decay
+        self.mov_weight = mov_weight
+        self.mov_cap = mov_cap
+        self.fraud_tax_enabled = fraud_tax_enabled
+        self.fraud_tax_penalty = fraud_tax_penalty
+        self.fraud_tax_threshold = fraud_tax_threshold
+        self.rz_leverage_enabled = rz_leverage_enabled
+        self.rz_weight_20 = rz_weight_20
+        self.rz_weight_10 = rz_weight_10
+        self.empty_yards_weight = empty_yards_weight
 
         self.team_ratings: dict[str, TeamEFMRating] = {}
 
@@ -725,6 +757,66 @@ class EfficiencyFoundationModel:
             if ooc_count > 0:
                 df["weight"] = np.where(is_ooc_fbs, df["weight"] * 1.5, df["weight"])
                 logger.debug(f"  Applied 1.5x weight to {ooc_count:,} non-conference FBS plays")
+
+        # Apply Red Zone Leverage weighting (up-weight plays near the goal line)
+        # Hypothesis: Finishing efficiency in the red zone is more revealing than field-position efficiency.
+        # A team that succeeds between the 20s but fails inside the 20 is a "paper tiger".
+        if self.rz_leverage_enabled and "yards_to_goal" in df.columns:
+            # Inside the 10-yard line: 2.0x weight (critical scoring zone)
+            inside_10 = df["yards_to_goal"] <= 10
+            # Inside the Red Zone (20-yard line): 1.5x weight
+            inside_20 = (df["yards_to_goal"] <= 20) & ~inside_10
+
+            inside_10_count = inside_10.sum()
+            inside_20_count = inside_20.sum()
+
+            df["weight"] = np.where(inside_10, df["weight"] * self.rz_weight_10, df["weight"])
+            df["weight"] = np.where(inside_20, df["weight"] * self.rz_weight_20, df["weight"])
+
+            if inside_10_count > 0 or inside_20_count > 0:
+                total_plays = len(df)
+                logger.debug(
+                    f"  Red Zone Leverage: {inside_10_count:,} plays inside 10 ({inside_10_count/total_plays*100:.1f}%, "
+                    f"{self.rz_weight_10}x weight), "
+                    f"{inside_20_count:,} plays 10-20 yds ({inside_20_count/total_plays*100:.1f}%, {self.rz_weight_20}x weight)"
+                )
+
+        # Apply Empty Yards Filter (devalue successful plays that stall between opponent 40-20)
+        # Hypothesis: "Paper tigers" rack up yards between the 20s but can't finish drives.
+        # A successful play at the 30 that gains 4 yards (still at 26) = empty success.
+        if self.rz_leverage_enabled and "yards_to_goal" in df.columns and "is_success" in df.columns:
+            # Plays in the "empty yards" zone: opponent 40 to 20
+            in_empty_zone = (df["yards_to_goal"] >= 20) & (df["yards_to_goal"] <= 40)
+
+            # Successful plays in this zone that DON'T enter the red zone or score
+            # A play enters the RZ if: yards_to_goal - yards_gained < 20
+            if "yards_gained" in df.columns:
+                enters_rz = (df["yards_to_goal"] - df["yards_gained"]) < 20
+            else:
+                enters_rz = pd.Series(False, index=df.index)
+
+            # Check for scoring plays
+            is_scoring = pd.Series(False, index=df.index)
+            if "play_type" in df.columns:
+                scoring_types = ["Passing Touchdown", "Rushing Touchdown", "Field Goal Good"]
+                is_scoring = df["play_type"].isin(scoring_types)
+
+            # Apply 0.7x weight to successful plays in empty zone that don't enter RZ or score
+            is_empty_success = (
+                in_empty_zone &
+                (df["is_success"] == 1) &
+                ~enters_rz &
+                ~is_scoring
+            )
+
+            empty_count = is_empty_success.sum()
+            if empty_count > 0:
+                df["weight"] = np.where(is_empty_success, df["weight"] * self.empty_yards_weight, df["weight"])
+                total_plays = len(df)
+                logger.debug(
+                    f"  Empty Yards Filter: {empty_count:,} plays down-weighted ({empty_count/total_plays*100:.1f}%, "
+                    f"{self.empty_yards_weight}x weight)"
+                )
 
         prep_time = time.time() - prep_start
         logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")
@@ -1599,6 +1691,17 @@ class EfficiencyFoundationModel:
                             def_plays=rating.def_plays,
                         )
 
+        # MOV Calibration: DEPRECATED - symmetric adjustment degraded performance
+        # Kept for backward compatibility but defaults to disabled (mov_weight=0.0)
+        if self.mov_weight > 0.0:
+            self._apply_mov_calibration(games_df, max_week=max_week)
+
+        # Efficiency Fraud Tax: One-way penalty for teams with high efficiency but poor wins
+        # Addresses the "UCF Paradox" (4-8 teams rating like 8-4 teams) without dragging down elite teams
+        # Applied after conference anchor, before normalization (same timing as MOV)
+        if self.fraud_tax_enabled:
+            self._apply_efficiency_fraud_tax(games_df, max_week=max_week)
+
         # Normalize ratings to target standard deviation
         # This ensures Team A rating - Team B rating = expected spread
         # Note: all_teams from CFBD API is FBS teams only
@@ -1740,6 +1843,387 @@ class EfficiencyFoundationModel:
             team_adjustments[team] = conf_adjustments.get(conf, 0.0)
 
         return team_adjustments
+
+    def _apply_mov_calibration(
+        self,
+        games_df: pd.DataFrame,
+        max_week: int | None = None,
+    ) -> None:
+        """Apply Margin of Victory calibration layer to ratings.
+
+        This method addresses the "UCF Paradox": EFM is outcome-blind (based only on
+        play efficiency), so a 4-8 team can rate nearly identically to an 8-4 team
+        if their success rates are similar. This calibration grounds efficiency ratings
+        in actual game outcomes.
+
+        Algorithm:
+        1. For each team, calculate expected margin based on current EFM ratings:
+           expected_margin = sum(team_rating - opponent_rating) / n_games
+        2. Calculate actual margin from game results:
+           actual_margin = sum(points_for - points_against) / n_games
+        3. Calculate residual (actual outperformance vs expectation):
+           residual = actual_margin - expected_margin
+        4. Scale residual to be on same magnitude as ratings (≈1 residual point = 1 rating point)
+        5. Cap residual to prevent extreme swings from blowouts: clamp to [-mov_cap, +mov_cap]
+        6. Blend into ratings: final_rating = efm_rating + mov_weight × residual_scaled
+
+        WALK-FORWARD SAFETY:
+        - Only uses games from weeks ≤ max_week (same as training data)
+        - Expected margins computed from current EFM ratings (already opponent-adjusted)
+        - No future data leakage
+
+        EARLY SEASON HANDLING:
+        - Residuals are per-game averages (not cumulative), so work with 1+ games
+        - Small sample sizes naturally result in smaller adjustments due to fewer data points
+
+        INTERPRETATION:
+        - Positive residual: Team wins by more than their efficiency predicts (e.g., clutch finishing)
+        - Negative residual: Team wins by less than expected (e.g., close losses, bad luck)
+        - Zero residual: Team performs exactly as their efficiency suggests
+
+        Args:
+            games_df: Games DataFrame with columns: home_team, away_team, home_points, away_points
+            max_week: Maximum week to include (for walk-forward chronology)
+
+        Side Effects:
+            Updates self.team_ratings with MOV-calibrated ratings
+        """
+        if self.mov_weight == 0.0:
+            logger.debug("MOV calibration disabled (mov_weight=0.0)")
+            return
+
+        if games_df is None or len(games_df) == 0:
+            logger.warning("MOV calibration: no games_df provided, skipping")
+            return
+
+        # Validate required columns
+        required = ["home_team", "away_team", "home_points", "away_points"]
+        if not all(col in games_df.columns for col in required):
+            logger.warning(f"MOV calibration: missing required columns {required}, skipping")
+            return
+
+        df = games_df.copy()
+
+        # Filter to training window
+        if max_week is not None and "week" in df.columns:
+            df = df[df["week"] <= max_week]
+
+        # Drop games without scores
+        df = df.dropna(subset=["home_points", "away_points"])
+
+        if len(df) == 0:
+            logger.warning("MOV calibration: no complete games in training window, skipping")
+            return
+
+        # Get current EFM ratings (before MOV adjustment)
+        # These are PRE-NORMALIZATION ratings (still in raw point scale)
+        team_efm_ratings = {
+            team: rating.overall_rating
+            for team, rating in self.team_ratings.items()
+        }
+
+        # Calculate per-team statistics
+        team_stats = {}
+
+        for team in team_efm_ratings.keys():
+            # Get all games involving this team
+            home_games = df[df["home_team"] == team].copy()
+            away_games = df[df["away_team"] == team].copy()
+
+            n_home = len(home_games)
+            n_away = len(away_games)
+            n_games = n_home + n_away
+
+            if n_games == 0:
+                continue  # Skip teams with no games in training window
+
+            # Calculate actual margin (points_for - points_against)
+            home_actual = (home_games["home_points"] - home_games["away_points"]).sum()
+            away_actual = (away_games["away_points"] - away_games["home_points"]).sum()
+            total_actual_margin = home_actual + away_actual
+            actual_margin_per_game = total_actual_margin / n_games
+
+            # Calculate expected margin based on EFM ratings
+            # expected_margin = team_rating - opponent_rating for each game
+            home_expected = 0.0
+            for _, game in home_games.iterrows():
+                opp = game["away_team"]
+                if opp in team_efm_ratings:
+                    home_expected += team_efm_ratings[team] - team_efm_ratings[opp]
+                # If opponent not in ratings (FCS, etc.), assume 0 differential
+
+            away_expected = 0.0
+            for _, game in away_games.iterrows():
+                opp = game["home_team"]
+                if opp in team_efm_ratings:
+                    away_expected += team_efm_ratings[team] - team_efm_ratings[opp]
+
+            total_expected_margin = home_expected + away_expected
+            expected_margin_per_game = total_expected_margin / n_games
+
+            # Calculate residual (actual - expected)
+            residual = actual_margin_per_game - expected_margin_per_game
+
+            team_stats[team] = {
+                "n_games": n_games,
+                "actual_margin_per_game": actual_margin_per_game,
+                "expected_margin_per_game": expected_margin_per_game,
+                "residual": residual,
+            }
+
+        # Calculate scaling factor
+        # The residual is already in points per game, which is naturally on the same scale
+        # as rating points (since ratings predict point differential). So scale = 1.0.
+        # However, we apply a cap to prevent extreme swings from blowout schedules.
+
+        # Apply MOV adjustment to ratings
+        n_adjusted = 0
+        total_adjustment = 0.0
+
+        for team, rating in self.team_ratings.items():
+            if team not in team_stats:
+                continue  # No games, no adjustment
+
+            stats = team_stats[team]
+            residual = stats["residual"]
+
+            # Cap the residual to prevent extreme swings
+            capped_residual = np.clip(residual, -self.mov_cap, self.mov_cap)
+
+            # Calculate adjustment: mov_weight × capped_residual
+            adjustment = self.mov_weight * capped_residual
+
+            # Apply to overall rating (split evenly between offense and defense)
+            # This preserves the overall = off + def invariant
+            new_off = rating.offensive_rating + adjustment / 2
+            new_def = rating.defensive_rating + adjustment / 2
+            new_overall = new_off + new_def
+
+            # Update rating
+            self.team_ratings[team] = TeamEFMRating(
+                team=rating.team,
+                raw_success_rate=rating.raw_success_rate,
+                raw_isoppp=rating.raw_isoppp,
+                adj_success_rate=rating.adj_success_rate,
+                adj_isoppp=rating.adj_isoppp,
+                efficiency_rating=rating.efficiency_rating,
+                explosiveness_rating=rating.explosiveness_rating,
+                offensive_rating=new_off,
+                defensive_rating=new_def,
+                special_teams_rating=rating.special_teams_rating,
+                turnover_rating=rating.turnover_rating,
+                overall_rating=new_overall,
+                off_plays=rating.off_plays,
+                def_plays=rating.def_plays,
+            )
+
+            n_adjusted += 1
+            total_adjustment += adjustment
+
+        if n_adjusted > 0:
+            avg_adjustment = total_adjustment / n_adjusted
+            logger.info(
+                f"MOV calibration applied to {n_adjusted} teams "
+                f"(weight={self.mov_weight:.2f}, cap=±{self.mov_cap:.1f}pts, "
+                f"avg_adjustment={avg_adjustment:+.2f}pts)"
+            )
+        else:
+            logger.warning("MOV calibration: no teams adjusted (no game data)")
+
+    def _apply_efficiency_fraud_tax(
+        self,
+        games_df: pd.DataFrame,
+        max_week: int | None = None,
+    ) -> None:
+        """Apply asymmetric "Efficiency Fraud" tax to ratings.
+
+        PROBLEM: The "UCF Paradox" - Teams with high efficiency metrics but terrible
+        win-loss records (e.g., UCF 2024: 4-8 record but rated #15 in efficiency).
+        EFM is outcome-blind, so a team that loses close games can rate as high as
+        a team that wins them.
+
+        SOLUTION: One-way penalty for teams whose actual wins significantly lag their
+        expected wins based on EFM ratings. This is NOT a symmetric MOV calibration -
+        we NEVER boost over-performers, only penalize under-performers.
+
+        Algorithm:
+        1. Calculate Expected Win Total for each team:
+           - For each game: P(win) = 1 / (1 + exp(-(team_rating - opp_rating + HFA) / 7.0))
+           - Sum P(win) across all games
+        2. Calculate Actual Win Total from game results
+        3. Identify "Efficiency Frauds": win_gap = expected_wins - actual_wins
+        4. Apply fixed penalty if win_gap > threshold:
+           - Rating adjustment: -fraud_tax_penalty (default -2.0 points)
+           - Split evenly between offense and defense to preserve overall = off + def
+        5. NEVER apply positive adjustments (asymmetric by design)
+
+        WALK-FORWARD SAFETY:
+        - Only uses games from weeks ≤ max_week (same as training data)
+        - Expected wins computed from current EFM ratings (already opponent-adjusted)
+        - No future data leakage
+
+        DESIGN CHOICES:
+        - Fixed penalty (not proportional): Simple, predictable, prevents cascading effects
+        - One-way only: Never reward over-performance, only penalize efficiency fraud
+        - Win probability logistic: 7.0-point spread ≈ 1 std dev of game outcomes
+
+        Args:
+            games_df: Games DataFrame with columns: home_team, away_team, home_points, away_points
+            max_week: Maximum week to include (for walk-forward chronology)
+
+        Side Effects:
+            Updates self.team_ratings with fraud tax penalties applied
+        """
+        if not self.fraud_tax_enabled:
+            logger.debug("Efficiency Fraud tax disabled")
+            return
+
+        if games_df is None or len(games_df) == 0:
+            logger.warning("Efficiency Fraud tax: no games_df provided, skipping")
+            return
+
+        # Validate required columns
+        required = ["home_team", "away_team", "home_points", "away_points"]
+        if not all(col in games_df.columns for col in required):
+            logger.warning(f"Efficiency Fraud tax: missing required columns {required}, skipping")
+            return
+
+        df = games_df.copy()
+
+        # Filter to training window
+        if max_week is not None and "week" in df.columns:
+            df = df[df["week"] <= max_week]
+
+        # Drop games without scores
+        df = df.dropna(subset=["home_points", "away_points"])
+
+        if len(df) == 0:
+            logger.warning("Efficiency Fraud tax: no complete games in training window, skipping")
+            return
+
+        # Get current EFM ratings (before fraud tax)
+        # These are PRE-NORMALIZATION ratings (still in raw point scale)
+        team_efm_ratings = {
+            team: rating.overall_rating
+            for team, rating in self.team_ratings.items()
+        }
+
+        # Fixed HFA value for expected win calculation (roughly league average)
+        HFA_POINTS = 2.5
+
+        # Logistic function parameter: 7.0 points ≈ 1 std dev of game outcomes
+        LOGISTIC_SCALE = 7.0
+
+        # Calculate expected and actual wins for each team
+        team_win_stats = {}
+
+        for team in team_efm_ratings.keys():
+            # Get all games involving this team
+            home_games = df[df["home_team"] == team].copy()
+            away_games = df[df["away_team"] == team].copy()
+
+            n_games = len(home_games) + len(away_games)
+
+            if n_games == 0:
+                continue  # Skip teams with no games in training window
+
+            # Calculate actual wins
+            home_wins = (home_games["home_points"] > home_games["away_points"]).sum()
+            away_wins = (away_games["away_points"] > away_games["home_points"]).sum()
+            actual_wins = home_wins + away_wins
+
+            # Calculate expected wins using logistic win probability
+            expected_wins = 0.0
+
+            # Home games: team gets HFA bonus
+            for _, game in home_games.iterrows():
+                opp = game["away_team"]
+                if opp in team_efm_ratings:
+                    rating_diff = team_efm_ratings[team] - team_efm_ratings[opp] + HFA_POINTS
+                else:
+                    # Opponent not rated (FCS, etc.) - assume team is favored by their rating + HFA
+                    rating_diff = team_efm_ratings[team] + HFA_POINTS
+
+                # Win probability: 1 / (1 + exp(-rating_diff / scale))
+                win_prob = 1.0 / (1.0 + np.exp(-rating_diff / LOGISTIC_SCALE))
+                expected_wins += win_prob
+
+            # Away games: opponent gets HFA bonus
+            for _, game in away_games.iterrows():
+                opp = game["home_team"]
+                if opp in team_efm_ratings:
+                    rating_diff = team_efm_ratings[team] - team_efm_ratings[opp] - HFA_POINTS
+                else:
+                    # Opponent not rated (FCS, etc.) - assume team is favored by their rating minus HFA
+                    rating_diff = team_efm_ratings[team] - HFA_POINTS
+
+                win_prob = 1.0 / (1.0 + np.exp(-rating_diff / LOGISTIC_SCALE))
+                expected_wins += win_prob
+
+            # Calculate win gap (positive = under-performing efficiency)
+            win_gap = expected_wins - actual_wins
+
+            team_win_stats[team] = {
+                "n_games": n_games,
+                "actual_wins": actual_wins,
+                "expected_wins": expected_wins,
+                "win_gap": win_gap,
+            }
+
+        # Apply fraud tax to under-performers
+        n_penalized = 0
+        fraud_teams = []
+
+        for team, rating in self.team_ratings.items():
+            if team not in team_win_stats:
+                continue  # No games, no adjustment
+
+            stats = team_win_stats[team]
+            win_gap = stats["win_gap"]
+
+            # Only penalize if win_gap exceeds threshold (one-way asymmetric)
+            if win_gap > self.fraud_tax_threshold:
+                # Apply fixed penalty
+                penalty = -self.fraud_tax_penalty
+
+                # Split evenly between offense and defense to preserve overall = off + def
+                new_off = rating.offensive_rating + penalty / 2
+                new_def = rating.defensive_rating + penalty / 2
+                new_overall = new_off + new_def
+
+                # Update rating
+                self.team_ratings[team] = TeamEFMRating(
+                    team=rating.team,
+                    raw_success_rate=rating.raw_success_rate,
+                    raw_isoppp=rating.raw_isoppp,
+                    adj_success_rate=rating.adj_success_rate,
+                    adj_isoppp=rating.adj_isoppp,
+                    efficiency_rating=rating.efficiency_rating,
+                    explosiveness_rating=rating.explosiveness_rating,
+                    offensive_rating=new_off,
+                    defensive_rating=new_def,
+                    special_teams_rating=rating.special_teams_rating,
+                    turnover_rating=rating.turnover_rating,
+                    overall_rating=new_overall,
+                    off_plays=rating.off_plays,
+                    def_plays=rating.def_plays,
+                )
+
+                n_penalized += 1
+                fraud_teams.append(
+                    f"{team}: {stats['actual_wins']:.0f}-? (exp={stats['expected_wins']:.1f}, "
+                    f"gap={win_gap:+.1f})"
+                )
+
+        if n_penalized > 0:
+            logger.info(
+                f"Efficiency Fraud tax applied to {n_penalized} teams "
+                f"(penalty=-{self.fraud_tax_penalty:.1f}pts, threshold={self.fraud_tax_threshold:.1f} wins)"
+            )
+            for fraud_info in fraud_teams:
+                logger.info(f"  FRAUD: {fraud_info}")
+        else:
+            logger.debug("Efficiency Fraud tax: no teams penalized (all within threshold)")
 
     def _normalize_ratings(self, fbs_teams: set[str]) -> None:
         """Normalize ratings to target standard deviation.
