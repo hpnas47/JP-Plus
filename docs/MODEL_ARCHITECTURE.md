@@ -79,9 +79,36 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 - Opening line edge is consistently higher than closing line edge across all years
 
 **2025 Top 25** (end-of-season including CFP):
-1. Ohio State (+27.5), 2. Indiana (+26.8) ★, 3. Notre Dame (+25.4), 4. Oregon (+23.4), 5. Miami (+22.8)
 
-★ Indiana - National Champions, beat Alabama 38-3, Oregon 56-22, Miami 27-21 in CFP.
+| Rank | Team | Overall | Off | Def |
+|------|------|---------|-----|-----|
+| 1 | Ohio State | +27.5 | +12.9 | +14.6 |
+| 2 | **Indiana** | +26.8 | +15.1 | +10.7 |
+| 3 | Notre Dame | +25.4 | +12.5 | +11.9 |
+| 4 | Oregon | +23.4 | +11.4 | +11.8 |
+| 5 | Miami | +22.8 | +9.3 | +13.1 |
+| 6 | Texas Tech | +22.0 | +3.4 | +17.9 |
+| 7 | Texas A&M | +19.2 | +10.1 | +9.8 |
+| 8 | Alabama | +18.8 | +7.0 | +11.1 |
+| 9 | Georgia | +17.5 | +8.1 | +9.4 |
+| 10 | Utah | +17.5 | +11.3 | +6.2 |
+| 11 | Vanderbilt | +17.4 | +17.1 | +0.3 |
+| 12 | Oklahoma | +16.8 | +0.9 | +16.0 |
+| 13 | Missouri | +16.5 | +4.4 | +12.5 |
+| 14 | Ole Miss | +16.2 | +12.3 | +4.0 |
+| 15 | Washington | +16.1 | +9.3 | +6.6 |
+| 16 | Louisville | +15.1 | +6.1 | +8.6 |
+| 17 | Tennessee | +14.1 | +12.1 | +1.6 |
+| 18 | James Madison | +14.1 | +3.2 | +11.0 |
+| 19 | BYU | +13.7 | +7.7 | +5.6 |
+| 20 | Texas | +13.4 | +3.5 | +9.4 |
+| 21 | South Florida | +12.7 | +6.4 | +5.7 |
+| 22 | Florida State | +12.3 | +10.9 | +1.5 |
+| 23 | Penn State | +12.0 | +7.9 | +4.1 |
+| 24 | USC | +11.8 | +12.6 | -0.9 |
+| 25 | Auburn | +11.5 | +3.0 | +8.1 |
+
+**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP.
 
 ### Betting Line Data Sources
 
