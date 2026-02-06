@@ -349,19 +349,19 @@ class VegasComparison:
 
         df = pd.DataFrame(comparisons)
 
-        # Add additional columns
-        df["model_favorite"] = df.apply(
-            lambda r: r["home_team"] if r["model_spread"] > 0 else r["away_team"],
-            axis=1,
+        # PERFORMANCE: Vectorized favorite determination (replaces .apply() for 10-100x speedup)
+        # Model favorite: home if model_spread > 0, else away
+        df["model_favorite"] = np.where(
+            df["model_spread"] > 0,
+            df["home_team"],
+            df["away_team"]
         )
 
-        df["vegas_favorite"] = df.apply(
-            lambda r: (
-                r["home_team"]
-                if r["vegas_spread"] is not None and r["vegas_spread"] < 0
-                else (r["away_team"] if r["vegas_spread"] is not None else None)
-            ),
-            axis=1,
+        # Vegas favorite: home if vegas_spread < 0, away if > 0, None if missing
+        df["vegas_favorite"] = np.where(
+            df["vegas_spread"].isna(),
+            None,
+            np.where(df["vegas_spread"] < 0, df["home_team"], df["away_team"])
         )
 
         # P1.4: Ensure edge is numeric (coerce non-numeric to NaN) before sorting

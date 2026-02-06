@@ -165,12 +165,9 @@ def precalculate_schedule_metadata(schedule_df: pd.DataFrame) -> pd.DataFrame:
     instead of per-game O(N) filtering, eliminating repeated date parsing
     and DataFrame scans from the inner loop.
 
-    Adds columns:
-        home_days_rest, away_days_rest: Days since each team's last game
-        home_last_opponent, away_last_opponent: Previous opponent
-        home_next_opponent, away_next_opponent: Next opponent
-        home_is_season_opener, away_is_season_opener: No prior games flag
-        game_datetime: Parsed, tz-naive datetime (reusable)
+    Pre-computes ALL data needed by check_letdown_spot, check_lookahead_spot,
+    and check_consecutive_road, converting O(N) DataFrame scans per game
+    into O(1) dict lookups.
 
     Also stores an O(1) lookup dict in df.attrs['schedule_meta'] keyed
     by (team, game_datetime_str) for instant per-game access.
@@ -184,14 +181,20 @@ def precalculate_schedule_metadata(schedule_df: pd.DataFrame) -> pd.DataFrame:
     # Parse dates once (the expensive operation we're eliminating from the loop)
     df["game_datetime"] = pd.to_datetime(df["start_date"], utc=True).dt.tz_localize(None)
 
+    # Determine if results are available (for letdown spot: won last game?)
+    has_results = "home_points" in df.columns and "away_points" in df.columns
+
     # Build team-centric view: two rows per game (one per team's perspective)
-    home_view = df[["home_team", "away_team", "game_datetime"]].copy()
-    home_view.columns = ["team", "opponent", "game_datetime"]
+    cols_needed = ["home_team", "away_team", "game_datetime", "week"]
+    if has_results:
+        cols_needed += ["home_points", "away_points"]
+    home_view = df[cols_needed].copy()
+    home_view = home_view.rename(columns={"home_team": "team", "away_team": "opponent"})
     home_view["original_idx"] = df.index
     home_view["is_home"] = True
 
-    away_view = df[["away_team", "home_team", "game_datetime"]].copy()
-    away_view.columns = ["team", "opponent", "game_datetime"]
+    away_view = df[cols_needed].copy()
+    away_view = away_view.rename(columns={"away_team": "team", "home_team": "opponent"})
     away_view["original_idx"] = df.index
     away_view["is_home"] = False
 
@@ -202,7 +205,39 @@ def precalculate_schedule_metadata(schedule_df: pd.DataFrame) -> pd.DataFrame:
     grouped = team_games.groupby("team")
     team_games["last_game_date"] = grouped["game_datetime"].shift(1)
     team_games["last_opponent"] = grouped["opponent"].shift(1)
+    team_games["last_game_week"] = grouped["week"].shift(1)
+    team_games["last_was_home"] = grouped["is_home"].shift(1)
     team_games["next_opponent"] = grouped["opponent"].shift(-1)
+    team_games["next_game_week"] = grouped["week"].shift(-1)
+
+    # Pre-compute "won last game" for letdown detection
+    if has_results:
+        # For each row, compute whether the team won THIS game
+        # (we'll shift this to get "won last game")
+        team_games["won_this_game"] = False
+        home_mask = team_games["is_home"]
+        team_games.loc[home_mask, "won_this_game"] = (
+            team_games.loc[home_mask, "home_points"] > team_games.loc[home_mask, "away_points"]
+        )
+        team_games.loc[~home_mask, "won_this_game"] = (
+            team_games.loc[~home_mask, "away_points"] > team_games.loc[~home_mask, "home_points"]
+        )
+        team_games["won_last_game"] = grouped["won_this_game"].shift(1)
+    else:
+        team_games["won_last_game"] = None
+
+    # Pre-compute rivalry flags for next opponent (used by lookahead)
+    team_games["next_is_rivalry"] = team_games.apply(
+        lambda r: is_rivalry_game(r["team"], r["next_opponent"])
+        if pd.notna(r["next_opponent"]) else False,
+        axis=1,
+    )
+    # Pre-compute rivalry flag for last opponent (used by letdown)
+    team_games["last_is_rivalry"] = team_games.apply(
+        lambda r: is_rivalry_game(r["team"], r["last_opponent"])
+        if pd.notna(r["last_opponent"]) else False,
+        axis=1,
+    )
 
     # Vectorized rest calculation
     team_games["days_rest"] = (
@@ -228,21 +263,61 @@ def precalculate_schedule_metadata(schedule_df: pd.DataFrame) -> pd.DataFrame:
     df["away_next_opponent"] = away_meta["next_opponent"]
     df["away_is_season_opener"] = away_meta["is_season_opener"]
 
-    # Build O(1) lookup dict: (team, game_datetime_str) -> metadata
+    # Build O(1) lookup dict: (team, game_datetime_str) -> full metadata
+    dt_str = df["game_datetime"].astype(str).values
+    home_teams = df["home_team"].values
+    away_teams = df["away_team"].values
+
+    # Extract all metadata columns as numpy arrays for fast dict construction
+    home_rest = df["home_days_rest"].astype(int).values
+    away_rest = df["away_days_rest"].astype(int).values
+    home_opener = df["home_is_season_opener"].astype(bool).values
+    away_opener = df["away_is_season_opener"].astype(bool).values
+    h_last_opp = home_meta.reindex(df.index)["last_opponent"].values
+    a_last_opp = away_meta.reindex(df.index)["last_opponent"].values
+    h_next_opp = home_meta.reindex(df.index)["next_opponent"].values
+    a_next_opp = away_meta.reindex(df.index)["next_opponent"].values
+    h_last_week = home_meta.reindex(df.index)["last_game_week"].values
+    a_last_week = away_meta.reindex(df.index)["last_game_week"].values
+    h_won_last = home_meta.reindex(df.index)["won_last_game"].values
+    a_won_last = away_meta.reindex(df.index)["won_last_game"].values
+    h_last_was_home = home_meta.reindex(df.index)["last_was_home"].values
+    a_last_was_home = away_meta.reindex(df.index)["last_was_home"].values
+    h_next_rival = home_meta.reindex(df.index)["next_is_rivalry"].values
+    a_next_rival = away_meta.reindex(df.index)["next_is_rivalry"].values
+    h_last_rival = home_meta.reindex(df.index)["last_is_rivalry"].values
+    a_last_rival = away_meta.reindex(df.index)["last_is_rivalry"].values
+    h_next_week = home_meta.reindex(df.index)["next_game_week"].values
+    a_next_week = away_meta.reindex(df.index)["next_game_week"].values
+    weeks = df["week"].values
+
     meta_lookup = {}
-    for idx, row in df.iterrows():
-        dt_str = str(row["game_datetime"])
-        meta_lookup[(row["home_team"], dt_str)] = {
-            "days_rest": int(row["home_days_rest"]),
-            "is_season_opener": bool(row["home_is_season_opener"]),
-            "last_opponent": row.get("home_last_opponent"),
-            "next_opponent": row.get("home_next_opponent"),
+    for i in range(len(df)):
+        meta_lookup[(home_teams[i], dt_str[i])] = {
+            "days_rest": int(home_rest[i]),
+            "is_season_opener": bool(home_opener[i]),
+            "last_opponent": h_last_opp[i],
+            "next_opponent": h_next_opp[i],
+            "last_game_week": h_last_week[i],
+            "won_last_game": h_won_last[i],
+            "was_away_last_game": not h_last_was_home[i] if pd.notna(h_last_was_home[i]) else None,
+            "next_is_rivalry": bool(h_next_rival[i]) if pd.notna(h_next_rival[i]) else False,
+            "last_is_rivalry": bool(h_last_rival[i]) if pd.notna(h_last_rival[i]) else False,
+            "next_game_week": h_next_week[i],
+            "week": int(weeks[i]),
         }
-        meta_lookup[(row["away_team"], dt_str)] = {
-            "days_rest": int(row["away_days_rest"]),
-            "is_season_opener": bool(row["away_is_season_opener"]),
-            "last_opponent": row.get("away_last_opponent"),
-            "next_opponent": row.get("away_next_opponent"),
+        meta_lookup[(away_teams[i], dt_str[i])] = {
+            "days_rest": int(away_rest[i]),
+            "is_season_opener": bool(away_opener[i]),
+            "last_opponent": a_last_opp[i],
+            "next_opponent": a_next_opp[i],
+            "last_game_week": a_last_week[i],
+            "won_last_game": a_won_last[i],
+            "was_away_last_game": not a_last_was_home[i] if pd.notna(a_last_was_home[i]) else None,
+            "next_is_rivalry": bool(a_next_rival[i]) if pd.notna(a_next_rival[i]) else False,
+            "last_is_rivalry": bool(a_last_rival[i]) if pd.notna(a_last_rival[i]) else False,
+            "next_game_week": a_next_week[i],
+            "week": int(weeks[i]),
         }
 
     df.attrs["schedule_meta"] = meta_lookup
@@ -568,6 +643,24 @@ class SituationalAdjuster:
     # Staleness threshold: letdown effect fades after this many weeks
     LETDOWN_STALENESS_WEEKS = 3
 
+    def _get_meta(
+        self,
+        team: str,
+        game_date: Optional[datetime],
+        schedule_df: pd.DataFrame,
+    ) -> Optional[dict]:
+        """Get pre-calculated metadata for a team-game from O(1) lookup.
+
+        Returns None if metadata is unavailable (triggers slow-path fallback).
+        """
+        meta = schedule_df.attrs.get("schedule_meta")
+        if meta is None or game_date is None:
+            return None
+        game_ts = pd.Timestamp(game_date)
+        if game_ts.tzinfo is not None:
+            game_ts = game_ts.tz_localize(None)
+        return meta.get((team, str(game_ts)))
+
     def check_letdown_spot(
         self,
         team: str,
@@ -576,6 +669,7 @@ class SituationalAdjuster:
         schedule_df: pd.DataFrame,
         rankings: Optional[dict[str, int]] = None,
         historical_rankings: Optional[HistoricalRankings] = None,
+        game_date: Optional[datetime] = None,
     ) -> bool:
         """Check if team is in a letdown spot.
 
@@ -605,6 +699,7 @@ class SituationalAdjuster:
             schedule_df: DataFrame with schedule and results
             rankings: Dict of team -> ranking for CURRENT week (used for opponent check)
             historical_rankings: HistoricalRankings object for week-by-week lookup
+            game_date: Date of current game (for O(1) metadata lookup)
 
         Returns:
             True if team is in letdown spot
@@ -612,31 +707,95 @@ class SituationalAdjuster:
         if current_week <= 1:
             return False
 
-        # Find the team's LAST PLAYED GAME (regardless of which week)
-        # This handles bye weeks - the letdown effect persists through a bye
+        # ---- Fast path: O(1) lookup from pre-calculated metadata ----
+        entry = self._get_meta(team, game_date, schedule_df)
+        if entry is not None and entry.get("last_game_week") is not None:
+            last_week_num = entry["last_game_week"]
+            # Handle NaN from shift
+            if pd.isna(last_week_num):
+                return False
+            last_week_num = int(last_week_num)
+
+            # Must be a previous week (matching slow path: week < current_week)
+            if last_week_num >= current_week:
+                return False
+
+            # Staleness check
+            weeks_since = current_week - last_week_num
+            if weeks_since > self.LETDOWN_STALENESS_WEEKS:
+                return False
+
+            # Must have won
+            won = entry.get("won_last_game")
+            if not won or pd.isna(won):
+                return False
+
+            last_opponent = entry.get("last_opponent")
+            if pd.isna(last_opponent):
+                return False
+
+            # Check for "Big Win" — rivalry OR ranked
+            was_big_win = False
+            big_win_reason = None
+
+            if entry.get("last_is_rivalry"):
+                was_big_win = True
+                big_win_reason = f"rivalry win vs {last_opponent}"
+
+            if not was_big_win:
+                if historical_rankings is not None and historical_rankings.has_week(last_week_num):
+                    last_opp_rank = historical_rankings.get_rank(last_opponent, last_week_num)
+                elif rankings is not None:
+                    last_opp_rank = rankings.get(last_opponent)
+                else:
+                    last_opp_rank = None
+
+                if last_opp_rank is not None and last_opp_rank <= 15:
+                    was_big_win = True
+                    big_win_reason = f"beat #{last_opp_rank} {last_opponent}"
+
+            if not was_big_win:
+                return False
+
+            # Current opponent must be unranked
+            if historical_rankings is not None and historical_rankings.has_week(current_week):
+                current_opp_rank = historical_rankings.get_rank(opponent, current_week)
+            elif rankings is not None:
+                current_opp_rank = rankings.get(opponent)
+            else:
+                current_opp_rank = None
+
+            is_letdown = current_opp_rank is None
+            if is_letdown:
+                if weeks_since > 1:
+                    logger.debug(
+                        f"Letdown spot detected: {team} {big_win_reason} "
+                        f"in week {last_week_num} ({weeks_since} weeks ago, persisted through bye), "
+                        f"now facing unranked {opponent}"
+                    )
+                else:
+                    logger.debug(
+                        f"Letdown spot detected: {team} {big_win_reason} "
+                        f"last week, now facing unranked {opponent}"
+                    )
+            return is_letdown
+
+        # ---- Slow path: full DataFrame filtering (fallback) ----
         team_games = schedule_df[
             ((schedule_df["home_team"] == team) | (schedule_df["away_team"] == team))
             & (schedule_df["week"] < current_week)
         ]
 
         if team_games.empty:
-            return False  # No previous games (start of season)
+            return False
 
-        # Get the most recent game by week number
         last_game = team_games.loc[team_games["week"].idxmax()]
         last_week_num = last_game["week"]
 
-        # Staleness check: If last game was more than LETDOWN_STALENESS_WEEKS ago,
-        # the emotional effect has faded (e.g., start of season, multiple byes)
         weeks_since_last_game = current_week - last_week_num
         if weeks_since_last_game > self.LETDOWN_STALENESS_WEEKS:
-            logger.debug(
-                f"{team} last played in week {last_week_num} ({weeks_since_last_game} weeks ago) - "
-                f"too stale for letdown effect"
-            )
             return False
 
-        # Determine if they won
         if last_game["home_team"] == team:
             won = last_game.get("home_points", 0) > last_game.get("away_points", 0)
             last_opponent = last_game["away_team"]
@@ -647,24 +806,18 @@ class SituationalAdjuster:
         if not won:
             return False
 
-        # Check for "Big Win" - either ranked opponent OR rivalry win
         was_big_win = False
         big_win_reason = None
 
-        # Criterion 1: Beat a rival (emotional peak regardless of ranking)
         if is_rivalry_game(team, last_opponent):
             was_big_win = True
             big_win_reason = f"rivalry win vs {last_opponent}"
 
-        # Criterion 2: Beat a top-15 team (use historical rankings)
         if not was_big_win:
             if historical_rankings is not None and historical_rankings.has_week(last_week_num):
                 last_opp_rank = historical_rankings.get_rank(last_opponent, last_week_num)
             elif rankings is not None:
                 last_opp_rank = rankings.get(last_opponent)
-                logger.debug(
-                    f"No historical rankings for week {last_week_num}, using current rankings"
-                )
             else:
                 last_opp_rank = None
 
@@ -675,7 +828,6 @@ class SituationalAdjuster:
         if not was_big_win:
             return False
 
-        # Check if current opponent is unranked (use current week rankings)
         if historical_rankings is not None and historical_rankings.has_week(current_week):
             current_opp_rank = historical_rankings.get_rank(opponent, current_week)
         elif rankings is not None:
@@ -685,7 +837,6 @@ class SituationalAdjuster:
 
         is_letdown = current_opp_rank is None
         if is_letdown:
-            # Include weeks_since info for transparency
             if weeks_since_last_game > 1:
                 logger.debug(
                     f"Letdown spot detected: {team} {big_win_reason} "
@@ -706,6 +857,7 @@ class SituationalAdjuster:
         schedule_df: pd.DataFrame,
         rankings: Optional[dict[str, int]] = None,
         historical_rankings: Optional[HistoricalRankings] = None,
+        game_date: Optional[datetime] = None,
     ) -> bool:
         """Check if team is in a look-ahead spot.
 
@@ -721,11 +873,45 @@ class SituationalAdjuster:
             schedule_df: DataFrame with schedule
             rankings: Dict of team -> ranking (current week)
             historical_rankings: HistoricalRankings object (optional)
+            game_date: Date of current game (for O(1) metadata lookup)
 
         Returns:
             True if team is in look-ahead spot
         """
-        # Check next week's game
+        # ---- Fast path: O(1) lookup from pre-calculated metadata ----
+        entry = self._get_meta(team, game_date, schedule_df)
+        if entry is not None:
+            next_opponent = entry.get("next_opponent")
+            if pd.isna(next_opponent) if next_opponent is not None else True:
+                return False
+
+            # Must be in the NEXT week (current_week + 1), not just any future game
+            # Slow path specifically filters schedule_df[week == current_week + 1]
+            next_game_week = entry.get("next_game_week")
+            if pd.isna(next_game_week) or int(next_game_week) != current_week + 1:
+                return False
+
+            # Rivalry check (pre-computed)
+            if entry.get("next_is_rivalry"):
+                logger.debug(f"Lookahead spot: {team} has rivalry vs {next_opponent} next week")
+                return True
+
+            # Ranked check (requires live rankings)
+            next_opp_rank = None
+            if historical_rankings is not None and historical_rankings.has_week(current_week):
+                next_opp_rank = historical_rankings.get_rank(next_opponent, current_week)
+            elif rankings:
+                next_opp_rank = rankings.get(next_opponent)
+
+            if next_opp_rank is not None and next_opp_rank <= 10:
+                logger.debug(
+                    f"Lookahead spot: {team} has #{next_opp_rank} {next_opponent} next week"
+                )
+                return True
+
+            return False
+
+        # ---- Slow path: full DataFrame filtering (fallback) ----
         next_week_num = current_week + 1
         next_week = schedule_df[schedule_df["week"] == next_week_num]
         team_games = next_week[
@@ -737,18 +923,15 @@ class SituationalAdjuster:
 
         next_game = team_games.iloc[0]
 
-        # Get next opponent
         if next_game["home_team"] == team:
             next_opponent = next_game["away_team"]
         else:
             next_opponent = next_game["home_team"]
 
-        # Check if it's a rivalry game
         if is_rivalry_game(team, next_opponent):
             logger.debug(f"Lookahead spot: {team} has rivalry vs {next_opponent} next week")
             return True
 
-        # Check if next opponent is top-10 (use current rankings - perception matters)
         next_opp_rank = None
         if historical_rankings is not None and historical_rankings.has_week(current_week):
             next_opp_rank = historical_rankings.get_rank(next_opponent, current_week)
@@ -785,6 +968,7 @@ class SituationalAdjuster:
         current_week: int,
         schedule_df: pd.DataFrame,
         is_home: bool,
+        game_date: Optional[datetime] = None,
     ) -> bool:
         """Check if team is playing their 2nd consecutive road game.
 
@@ -797,30 +981,43 @@ class SituationalAdjuster:
             current_week: Current week number
             schedule_df: DataFrame with schedule (must have week, home_team, away_team)
             is_home: Whether the team is playing at home in the current game
+            game_date: Date of current game (for O(1) metadata lookup)
 
         Returns:
             True if team is AWAY and their last played game was also AWAY
         """
-        # Only applies when team is currently away
         if is_home:
             return False
 
         if current_week <= 1:
             return False
 
-        # Find the team's last played game (regardless of which week)
+        # ---- Fast path: O(1) lookup from pre-calculated metadata ----
+        entry = self._get_meta(team, game_date, schedule_df)
+        if entry is not None:
+            # Verify last game was in a prior week (matching slow path: week < current_week)
+            last_wk = entry.get("last_game_week")
+            if last_wk is None or pd.isna(last_wk) or int(last_wk) >= current_week:
+                return False
+            was_away = entry.get("was_away_last_game")
+            if was_away is None or pd.isna(was_away):
+                return False
+            if was_away:
+                logger.debug(
+                    f"CONSECUTIVE ROAD: {team} is away for 2nd straight game"
+                )
+            return bool(was_away)
+
+        # ---- Slow path: full DataFrame filtering (fallback) ----
         team_games = schedule_df[
             ((schedule_df["home_team"] == team) | (schedule_df["away_team"] == team))
             & (schedule_df["week"] < current_week)
         ]
 
         if team_games.empty:
-            return False  # No previous games (season opener)
+            return False
 
-        # Get the most recent game by week number
         last_game = team_games.loc[team_games["week"].idxmax()]
-
-        # Check if team was away in their last game
         was_away_last_game = last_game["away_team"] == team
 
         if was_away_last_game:
@@ -877,7 +1074,8 @@ class SituationalAdjuster:
 
         # Letdown spot (uses historical rankings for previous opponent)
         in_letdown = self.check_letdown_spot(
-            team, current_week, opponent, schedule_df, rankings, historical_rankings
+            team, current_week, opponent, schedule_df, rankings, historical_rankings,
+            game_date=game_date,
         )
         if in_letdown:
             # "Sleepy road game" - letdown is worse when traveling
@@ -894,7 +1092,8 @@ class SituationalAdjuster:
 
         # Look-ahead spot (uses current rankings - perception matters)
         in_lookahead = self.check_lookahead_spot(
-            team, current_week, schedule_df, rankings, historical_rankings
+            team, current_week, schedule_df, rankings, historical_rankings,
+            game_date=game_date,
         )
         if in_lookahead:
             factors.lookahead_penalty = self.lookahead_penalty
@@ -916,7 +1115,8 @@ class SituationalAdjuster:
             logger.debug(f"{team} rivalry underdog boost: +{self.rivalry_boost}")
 
         # Consecutive road games (separate from letdown - pure travel fatigue)
-        if self.check_consecutive_road(team, current_week, schedule_df, team_is_home):
+        if self.check_consecutive_road(team, current_week, schedule_df, team_is_home,
+                                       game_date=game_date):
             factors.consecutive_road_penalty = self.consecutive_road_penalty
             logger.info(
                 f"CONSECUTIVE ROAD: {team} playing 2nd straight road game - "
