@@ -12,6 +12,13 @@
 - **Sub-Models:** `src/models/finishing_drives.py`, `src/models/special_teams.py`
 - **Backtest Engine:** `scripts/backtest.py` (The Validator)
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
+- **Full File Map:** `docs/PROJECT_MAP.md`
+
+## ✅ Audit Status (Complete as of 2026-02-05)
+- **Result:** 41/48 items fixed across P0-P3 + diagnostics. 7 deferred with documented blockers.
+- **Baseline:** Core MAE 12.49 | ATS 51.87% | 3+ Edge 53.1% | 5+ Edge 54.7%
+- **Archived:** All audit fixlists in `docs/Completed Audit Fixlists/`
+- **Deferred items** require external API research (CFBD structured fields, OddsAPI schema) or model recalibration (Finishing Drives scaling).
 
 ---
 
@@ -30,10 +37,10 @@
 # 🤝 Agent Collaboration Protocol
 
 ## 🛡️ Code Auditor (The Safety)
-- **Role:** Refactoring, fixing P0/P1 structural bugs, and enforcing data integrity.
-- **Constraints:** - Strictly enforce walk-forward chronology (`training_max_week < prediction_week`).
-    - Resolve postseason week-lumping issues.
-- **Gatekeeper:** Ensure all sub-model outputs (ST/Finishing Drives) are normalized to **PBTA Points Per Game**.
+- **Status:** Audit sweep complete (P0-P3). Now in maintenance mode.
+- **Role:** Enforce data integrity, walk-forward chronology, and code quality for new changes.
+- **Constraints:** Strictly enforce `training_max_week < prediction_week`. All sub-model outputs must be **PBTA Points Per Game**.
+- **On new code:** Run `/audit-logic` to check for regressions before merging.
 
 ## 📊 Quant Auditor (The Analyst)
 - **Role:** Weight optimization and MAE/ATS performance validation.
