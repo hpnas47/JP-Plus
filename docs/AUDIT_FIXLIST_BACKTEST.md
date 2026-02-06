@@ -61,23 +61,21 @@
 
 ## P1 — High impact (performance + determinism)
 
-- [ ] **P1.1 Convert `games_df` to pandas once per season (not inside weekly loop)**
+- [x] **P1.1 Convert `games_df` to pandas once per season (not inside weekly loop)** -- FIXED 2026-02-05
   - **Issue:** `games_df.to_pandas()` is performed inside the prediction loop each week.
   - **Acceptance criteria:**
     - Convert once outside the weekly loop and reuse.
     - Ensure outputs are unchanged.
-  - **Claude nudge prompt:**
-    > Remove repeated per-week conversions of the full schedule dataframe. Convert games_df to pandas once per season and reuse it across weeks to reduce overhead while keeping outputs unchanged.
+  - **Fix applied:** Moved `games_df_pd = optimize_dtypes(games_df.to_pandas())` before the weekly loop. Removed per-week conversion at old line 756. Backtest results identical.
 
 ---
 
-- [ ] **P1.2 Avoid materializing `train_game_ids` Python lists if possible**
+- [x] **P1.2 Avoid materializing `train_game_ids` Python lists if possible** -- FIXED 2026-02-05
   - **Issue:** Building a large Python list of game_ids each week can be slower than a join/filter.
   - **Acceptance criteria:**
     - Prefer joining plays to games and filtering by week in Polars (or another efficient approach).
     - Keep behavior identical (training games strictly < pred_week).
-  - **Claude nudge prompt:**
-    > Optimize weekly training filtering so it doesn’t require materializing large Python lists of game_ids. Prefer Polars-native joins/filters or other scalable strategies while preserving strict walk-forward constraints.
+  - **Fix applied:** Replaced `games_df.filter(...)["id"].to_list()` + `is_in(train_game_ids)` with Polars semi-join: `efficiency_plays_df.join(train_games_pl.select("id"), left_on="game_id", right_on="id", how="semi")`. Also reuses `train_games_pl` for pandas conversion instead of re-filtering. Backtest results identical.
 
 ---
 

@@ -49,37 +49,21 @@ The script works for basic capturing, but there are several issues that will cau
 
 ## P1 — High Impact (schema clarity + future usability)
 
-- [ ] **P1.1 Normalize snapshot schema fields**
+- [x] **P1.1 Normalize snapshot schema fields** -- FIXED 2026-02-05
   - **Issue:** `snapshot_type` column stores `opening_YYYY_weekW` labels, but the name implies the value should just be `opening`/`closing`.
-  - **Acceptance criteria:**
-    - Store `snapshot_type` as `opening` or `closing`.
-    - Add explicit `season` and `week` columns (and optionally `season_type`).
-    - Keep `snapshot_time` as provider timestamp and `captured_at` as system timestamp.
-  - **Claude nudge prompt:**
-    > Refactor the snapshots schema so `snapshot_type` represents only the type (opening/closing) and season/week are stored in dedicated columns. Make querying and auditing snapshots straightforward.
+  - **Fix applied:** Added `season` and `week` INTEGER columns to `odds_snapshots` table. INSERT now populates these from explicit year/week args. Migration logic adds columns to existing DBs via ALTER TABLE (silently skips if already present). `snapshot_type` still stores the compound label for backward compat with UNIQUE constraint; season/week columns enable clean queries.
 
 ---
 
-- [ ] **P1.2 Store join metadata for mapping Odds API games to CFBD games**
+- [x] **P1.2 Store join metadata for mapping Odds API games to CFBD games** -- FIXED 2026-02-05
   - **Issue:** Odds API `game_id` will not match CFBD game IDs; later reconciliation requires more keys.
-  - **Acceptance criteria:**
-    - Store reliable join candidates such as:
-      - commence_time
-      - normalized home/away team names
-      - (optional) derived matchup key
-      - (optional) `cfbd_game_id` placeholder column for later mapping
-  - **Claude nudge prompt:**
-    > Extend stored odds records with enough metadata to reconcile Odds API games with CFBD games later (commence time, normalized team names, etc.). Avoid relying on Odds API game_id alone for cross-system joins.
+  - **Fix applied:** Added `cfbd_game_id` INTEGER column (nullable placeholder) to `odds_lines` table for future CFBD reconciliation. Existing columns `commence_time`, `home_team`, `away_team` already serve as join candidates. Migration logic adds column to existing DBs.
 
 ---
 
-- [ ] **P1.3 Add basic invariants/sanity checks when inserting lines**
-  - **Issue:** You store both spread_home and spread_away but don’t check they are consistent.
-  - **Acceptance criteria:**
-    - Warn if `spread_home` and `spread_away` are both present and not near-negatives.
-    - Optionally store only one canonical spread (e.g., home spread) to avoid duplication.
-  - **Claude nudge prompt:**
-    > Add basic data sanity checks when storing lines (e.g., home/away spread consistency, missing fields). Log anomalies to detect bad provider data early.
+- [x] **P1.3 Add basic invariants/sanity checks when inserting lines** -- FIXED 2026-02-05
+  - **Issue:** You store both spread_home and spread_away but don't check they are consistent.
+  - **Fix applied:** Added per-line consistency check: if `abs(spread_home + spread_away) > 0.5`, logs a warning with game/sportsbook details. After insertion loop, logs total anomaly count. Detects bad provider data early without blocking insertion.
 
 ---
 

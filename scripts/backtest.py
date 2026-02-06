@@ -599,13 +599,16 @@ def walk_forward_predict(
     # Convert fbs_teams to list for Polars is_in()
     fbs_teams_list = list(fbs_teams)
 
-    for pred_week in range(start_week, max_week + 1):
-        # Training data: all plays from games before this week (Polars filtering - FAST)
-        train_game_ids = games_df.filter(pl.col("week") < pred_week)["id"].to_list()
+    # P1.1: Convert full schedule to pandas once (reused every week for SpreadGenerator)
+    games_df_pd = optimize_dtypes(games_df.to_pandas())
 
-        # Filter plays to training games AND FBS-only (Polars filtering - 26x faster than pandas)
-        train_plays_pl = efficiency_plays_df.filter(
-            pl.col("game_id").is_in(train_game_ids) &
+    for pred_week in range(start_week, max_week + 1):
+        # Training data: all plays from games before this week
+        # P1.2: Use Polars semi-join instead of materializing game_id list to Python
+        train_games_pl = games_df.filter(pl.col("week") < pred_week)
+        train_plays_pl = efficiency_plays_df.join(
+            train_games_pl.select("id"), left_on="game_id", right_on="id", how="semi"
+        ).filter(
             pl.col("offense").is_in(fbs_teams_list) &
             pl.col("defense").is_in(fbs_teams_list)
         )
@@ -617,7 +620,7 @@ def walk_forward_predict(
         # Convert to pandas for EFM (sklearn needs pandas/numpy)
         # P3.4: Apply optimized dtypes for memory efficiency
         train_plays_pd = optimize_dtypes(train_plays_pl.to_pandas())
-        train_games_pd = optimize_dtypes(games_df.filter(pl.col("week") < pred_week).to_pandas())
+        train_games_pd = optimize_dtypes(train_games_pl.to_pandas())
 
         # DATA LEAKAGE GUARD: Verify no future data in training set
         if "week" in train_plays_pd.columns:
@@ -750,10 +753,6 @@ def walk_forward_predict(
 
         # Predict this week's games (Polars iteration is faster)
         week_games = games_df.filter(pl.col("week") == pred_week)
-
-        # Convert games_df to pandas once for SpreadGenerator (it uses pandas internally)
-        # P3.4: Apply optimized dtypes for memory efficiency
-        games_df_pd = optimize_dtypes(games_df.to_pandas())
 
         for game in week_games.iter_rows(named=True):
             try:

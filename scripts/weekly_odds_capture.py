@@ -115,6 +115,8 @@ def init_database() -> sqlite3.Connection:
             snapshot_time TEXT NOT NULL,
             captured_at TEXT NOT NULL,
             credits_used INTEGER,
+            season INTEGER,
+            week INTEGER,
             UNIQUE(snapshot_type, snapshot_time)
         )
     """)
@@ -132,10 +134,22 @@ def init_database() -> sqlite3.Connection:
             price_away INTEGER,
             commence_time TEXT,
             last_update TEXT,
+            cfbd_game_id INTEGER,
             FOREIGN KEY (snapshot_id) REFERENCES odds_snapshots(id),
             UNIQUE(snapshot_id, game_id, sportsbook)
         )
     """)
+    # P1.1: Migrate existing tables — add new columns if missing
+    for col, coltype in [("season", "INTEGER"), ("week", "INTEGER")]:
+        try:
+            cursor.execute(f"ALTER TABLE odds_snapshots ADD COLUMN {col} {coltype}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    try:
+        cursor.execute("ALTER TABLE odds_lines ADD COLUMN cfbd_game_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_lines_game_id ON odds_lines(game_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_lines_teams ON odds_lines(home_team, away_team)")
     conn.commit()
@@ -188,21 +202,26 @@ def capture_odds(
 
     # Store snapshot
     # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve snapshot_id (avoids orphaned lines)
+    # P1.1: Store snapshot_type as just "opening"/"closing" with season/week in dedicated columns
     cursor = conn.cursor()
     snapshot_label = f"{snapshot_type}_{year}_week{week}"
 
     cursor.execute("""
         INSERT INTO odds_snapshots
-        (snapshot_type, snapshot_time, captured_at, credits_used)
-        VALUES (?, ?, ?, ?)
+        (snapshot_type, snapshot_time, captured_at, credits_used, season, week)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(snapshot_type, snapshot_time) DO UPDATE SET
             captured_at = excluded.captured_at,
-            credits_used = excluded.credits_used
+            credits_used = excluded.credits_used,
+            season = excluded.season,
+            week = excluded.week
     """, (
         snapshot_label,
         snapshot.timestamp.isoformat(),
         datetime.now().isoformat(),
         snapshot.credits_used,
+        year,
+        week,
     ))
 
     # P0.2: Retrieve the actual snapshot_id (lastrowid may be 0 on UPDATE)
@@ -215,8 +234,19 @@ def capture_odds(
     # Store lines
     # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve row identity
     games_seen = set()
+    spread_anomalies = 0
     for line in snapshot.lines:
         games_seen.add(line.game_id)
+
+        # P1.3: Spread consistency check (home + away should be near-zero)
+        if (line.spread_home is not None and line.spread_away is not None
+                and abs(line.spread_home + line.spread_away) > 0.5):
+            spread_anomalies += 1
+            logger.warning(
+                f"Spread anomaly: {line.home_team} vs {line.away_team} "
+                f"({line.sportsbook}): home={line.spread_home}, away={line.spread_away}, "
+                f"sum={line.spread_home + line.spread_away:.1f}"
+            )
         cursor.execute("""
             INSERT INTO odds_lines
             (snapshot_id, game_id, sportsbook, home_team, away_team,
@@ -246,6 +276,8 @@ def capture_odds(
     conn.commit()
 
     logger.info(f"Stored {len(snapshot.lines)} lines for {len(games_seen)} games")
+    if spread_anomalies > 0:
+        logger.warning(f"P1.3: {spread_anomalies} spread anomalies detected (home+away != 0)")
     logger.info(f"Credits remaining: {snapshot.credits_remaining}")
 
     return {

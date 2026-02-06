@@ -455,7 +455,10 @@ class PreseasonPriors:
     # Level-up discount factors
     PHYSICALITY_TAX = 0.75      # 25% discount for trench players G5→P4
     ATHLETICISM_DISCOUNT = 0.90  # 10% discount for skill players G5→P4
-    CONTINUITY_TAX = 0.90       # 11% penalty for losing incumbent (Option A calibration)
+    # P1.2: Continuity tax amplifies outgoing losses (dividing by < 1.0 makes losses bigger)
+    # E.g., if a team loses 5.0 of outgoing value, the effective loss is 5.0 / 0.90 = 5.56
+    # This reflects the hidden cost of replacing incumbents (scheme fit, leadership, etc.)
+    CONTINUITY_TAX = 0.90
 
     def _get_position_group(self, position: str) -> str:
         """Map a position to its position group.
@@ -653,7 +656,7 @@ class PreseasonPriors:
     def calculate_portal_impact(
         self,
         year: int,
-        portal_scale: float = 0.06,
+        portal_scale: float = 0.15,
         fbs_only: bool = True,
         impact_cap: float = 0.12,
     ) -> dict[str, float]:
@@ -665,7 +668,7 @@ class PreseasonPriors:
 
         Args:
             year: Season year (fetches transfers FOR this year)
-            portal_scale: How much to scale portal impact (default 0.06)
+            portal_scale: How much to scale portal impact (default 0.15, matches production caller)
             fbs_only: If True, only include FBS teams in results (default True)
             impact_cap: Maximum team-wide portal impact (default ±12%)
 
@@ -701,8 +704,19 @@ class PreseasonPriors:
                 f"({len(transfers_df)/original_count:.1%})"
             )
 
-        # Add position group column
-        transfers_df['pos_group'] = transfers_df['position'].apply(self._get_position_group)
+        # P1.1: Vectorized position group mapping (replaces per-row apply)
+        pos_to_group = {}
+        for group, positions in self.POSITION_GROUPS.items():
+            for pos in positions:
+                pos_to_group[pos] = group
+        transfers_df['pos_group'] = (
+            transfers_df['position']
+            .fillna('')
+            .str.upper()
+            .str.strip()
+            .map(pos_to_group)
+            .fillna('OTHER')
+        )
 
         # Calculate OUTGOING value (what team loses - no level discount, full value)
         # This is the "raw" value of the player leaving
@@ -740,7 +754,7 @@ class PreseasonPriors:
         # Calculate outgoing value per team (players who left)
         # Apply CONTINUITY_TAX: losing an incumbent hurts even if "replaced"
         outgoing_raw = transfers_df.groupby('origin')['outgoing_value'].sum()
-        outgoing = outgoing_raw / self.CONTINUITY_TAX  # Amplify loss (divide by 0.85 = ~18% boost)
+        outgoing = outgoing_raw / self.CONTINUITY_TAX  # Amplify loss (divide by 0.90 = ~11% boost)
 
         # Calculate incoming value per team (players who arrived)
         # Level-up discounts already applied in incoming_value
@@ -754,15 +768,14 @@ class PreseasonPriors:
             f"have destinations"
         )
 
-        # Log G5→P4 transfer count
+        # P1.1: Vectorized G5→P4 transfer count (replaces per-row apply)
         if team_conferences:
-            g5_to_p4 = incoming_df.apply(
-                lambda row: (
-                    not self._is_p4_team(row.get('origin'), team_conferences) and
-                    self._is_p4_team(row.get('destination'), team_conferences)
-                ),
-                axis=1
-            ).sum()
+            p4_set = self.P4_TEAMS | {
+                t for t, c in team_conferences.items() if c in self.P4_CONFERENCES
+            }
+            origin_is_p4 = incoming_df['origin'].isin(p4_set)
+            dest_is_p4 = incoming_df['destination'].isin(p4_set)
+            g5_to_p4 = int((~origin_is_p4 & dest_is_p4).sum())
             logger.info(f"G5→P4 transfers (discounted): {g5_to_p4}")
 
         # Calculate net impact for each team

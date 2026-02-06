@@ -55,33 +55,30 @@
 
 ## P1 — High impact (statistical stability / weekly consistency)
 
-- [ ] **P1.1 Add explicit identifiability stabilization (centering) for ridge coefficients**
+- [x] **P1.1 Add explicit identifiability stabilization (centering) for ridge coefficients** -- FIXED 2026-02-05
   - **Issue:** Offense/defense terms + intercept are partially confounded; ridge regularization helps but decomposition can drift.
   - **Acceptance criteria:**
     - Add explicit post-centering (or equivalent stabilization) so offense and defense coefficient sets are mean-zero (or otherwise constrained) and intercept retains league-average meaning.
     - Confirm coefficients are stable week-to-week in backtest diagnostics.
-  - **Claude nudge prompt:**
-    > Add an explicit identifiability/stabilization step to ridge opponent adjustment outputs (e.g., post-centering offense and defense coefficient sets) so decomposition and intercept interpretation remain stable across weeks.
+  - **Fix applied:** Added post-centering in `_ridge_adjust_metric()`. After ridge fit, offense/defense coefficient means are computed, subtracted to make coefs mean-zero, and absorbed into separate off_baseline/def_baseline. Mathematically neutral for spreads (differences invariant); stabilizes O/D decomposition. P0.1 invariant now validates centering drift is ~0.
 
 ---
 
-- [ ] **P1.2 `avg_isoppp` mean computation uses sentinel filtering**
+- [x] **P1.2 `avg_isoppp` mean computation uses sentinel filtering** -- FIXED 2026-02-05
   - **Issue:** Excluding values equal to `LEAGUE_AVG_ISOPPP` can drop real teams near average and bias the mean.
   - **Acceptance criteria:**
     - Compute `avg_isoppp` using a missingness-aware method (e.g., compute mean across all teams or across valid play-derived teams without relying on equality checks).
     - Weekly `avg_isoppp` should not jump due to sentinel collision.
-  - **Claude nudge prompt:**
-    > Remove sentinel-value filtering from IsoPPP league-average computation and replace with a safer missingness strategy. Ensure near-average teams are not excluded and weekly averages remain stable.
+  - **Fix applied:** Added `off_isoppp_real` and `def_isoppp_real` tracking sets in `_compute_raw_metrics()`. Teams are added to these sets when they have ≥10 successful plays with valid PPA. `avg_isoppp` now filters using `off_isoppp_real` set membership instead of `!= LEAGUE_AVG_ISOPPP` equality check. Near-average teams are no longer excluded.
 
 ---
 
-- [ ] **P1.3 Clarify turnover diagnostics semantics post P2.6**
+- [x] **P1.3 Clarify turnover diagnostics semantics post P2.6** -- FIXED 2026-02-05
   - **Issue:** `turnover_rating` is now embedded inside O/D but also normalized separately for diagnostics. Downstream code may assume it adds to overall.
   - **Acceptance criteria:**
     - Make it explicit in naming/docs that turnover_rating is diagnostic after O/D embedding.
     - Add a note or guard preventing misuse of turnover_rating as an additive component.
-  - **Claude nudge prompt:**
-    > Clarify turnover component semantics after the O/D split (ball security vs takeaways). Ensure diagnostic turnover_rating cannot be mistakenly treated as a separate additive component to overall.
+  - **Fix applied:** Updated `TeamEFMRating.turnover_rating` docstring to "DIAGNOSTIC ONLY: ball_security + takeaways (already embedded in O/D, NOT additive to overall)". Added guard comments at both `overall` computation sites (rating construction and normalization) explicitly noting turnover_rating is diagnostic-only and NOT additive.
 
 ---
 

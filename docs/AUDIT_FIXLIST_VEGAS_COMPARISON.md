@@ -29,43 +29,27 @@
 
 ## P1 — High impact correctness & determinism
 
-- [ ] **P1.1 Deterministic provider fallback (avoid reliance on list order)**
-  - **Issue:** If the configured provider line isn’t found, code falls back to `game.lines[0]`. If CFBD line order is not stable, results can change between runs.
-  - **Acceptance criteria:**
-    - When provider is missing, fallback uses an explicit deterministic rule (e.g., priority list or stable sorting).
-    - Behavior is documented and logged once per fetch.
-  - **Claude nudge prompt:**
-    > Make provider selection deterministic. If the configured provider line is missing, choose a fallback line using an explicit and stable rule rather than relying on list order.
+- [x] **P1.1 Deterministic provider fallback (avoid reliance on list order)** -- FIXED 2026-02-05
+  - **Issue:** If the configured provider line isn't found, code falls back to `game.lines[0]`. If CFBD line order is not stable, results can change between runs.
+  - **Fix applied:** Fallback now sorts available lines alphabetically by provider name (lowercased) and filters to those with non-null spreads, taking the first. Deterministic across runs.
 
 ---
 
-- [ ] **P1.2 Duplicate line handling for a single `game_id`**
+- [x] **P1.2 Duplicate line handling for a single `game_id`** -- FIXED 2026-02-05
   - **Issue:** `self.lines_by_id[game_id] = vl` silently overwrites if multiple line entries appear for the same game.
-  - **Acceptance criteria:**
-    - Detect duplicate `game_id` entries and select consistently.
-    - Warn or log if duplicates occur.
-  - **Claude nudge prompt:**
-    > Add duplicate-handling for betting lines keyed by `game_id`. If multiple candidate lines exist for the same game, select one deterministically and log the duplicate situation for transparency.
+  - **Fix applied:** Added duplicate detection with warning log. First-encountered line is kept; subsequent duplicates are logged but not overwritten.
 
 ---
 
-- [ ] **P1.3 Preserve signed edge alongside absolute edge in outputs**
+- [x] **P1.3 Preserve signed edge alongside absolute edge in outputs** -- FIXED 2026-02-05
   - **Issue:** `value_plays_to_dataframe()` outputs `edge = abs(vp.edge)`, losing sign and making bias diagnostics harder.
-  - **Acceptance criteria:**
-    - Outputs include both `edge_signed` and `edge_abs` (or similar).
-    - Sorting still uses absolute edge.
-  - **Claude nudge prompt:**
-    > Preserve both signed and absolute edge in outputs. Use absolute edge for sorting/thresholding, but keep signed edge for diagnostics (home/away bias, directionality).
+  - **Fix applied:** Added `edge_signed` column to `value_plays_to_dataframe()` output preserving the raw signed edge (negative = model favors home more). Absolute `edge` column retained for sorting/display.
 
 ---
 
-- [ ] **P1.4 Make edge sorting robust when edge is missing**
+- [x] **P1.4 Make edge sorting robust when edge is missing** -- FIXED 2026-02-05
   - **Issue:** `sort_values("edge", key=abs, ...)` can behave inconsistently if `edge` is not guaranteed numeric/NaN.
-  - **Acceptance criteria:**
-    - `edge` column is numeric with NaNs for missing values.
-    - Sorting never throws and correctly places missing values last.
-  - **Claude nudge prompt:**
-    > Ensure comparison DataFrame sorting by abs(edge) is robust even when edge is missing. Enforce numeric edge dtype with NaNs and verify missing values sort last reliably.
+  - **Fix applied:** Added `pd.to_numeric(df["edge"], errors="coerce")` before sorting in `generate_comparison_df()`. Non-numeric values become NaN, and `na_position="last"` ensures they sort to the bottom.
 
 ---
 

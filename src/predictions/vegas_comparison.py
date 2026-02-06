@@ -110,9 +110,13 @@ class VegasComparison:
                     provider_line = line
                     break
 
-            # Fall back to first available line
+            # P1.1: Deterministic provider fallback — sort by provider name for stability
             if provider_line is None and game.lines:
-                provider_line = game.lines[0]
+                sorted_lines = sorted(
+                    [l for l in game.lines if l.spread is not None],
+                    key=lambda l: (l.provider or "").lower()
+                )
+                provider_line = sorted_lines[0] if sorted_lines else None
 
             if provider_line is None:
                 continue
@@ -134,7 +138,14 @@ class VegasComparison:
             )
 
             vegas_lines.append(vl)
-            self.lines_by_id[vl.game_id] = vl  # Primary: by game_id
+            # P1.2: Warn on duplicate game_id, keep first encountered
+            if vl.game_id in self.lines_by_id:
+                logger.warning(
+                    f"Duplicate game_id {vl.game_id}: "
+                    f"{self.lines_by_id[vl.game_id].home_team} vs {vl.home_team}. Keeping first."
+                )
+            else:
+                self.lines_by_id[vl.game_id] = vl
             self.lines[(game.home_team, game.away_team)] = vl  # Fallback: by team names
 
         logger.info(f"Fetched {len(vegas_lines)} Vegas lines for {year} week {week}")
@@ -333,7 +344,10 @@ class VegasComparison:
             axis=1,
         )
 
-        # Sort by edge
+        # P1.4: Ensure edge is numeric (coerce non-numeric to NaN) before sorting
+        df["edge"] = pd.to_numeric(df["edge"], errors="coerce")
+
+        # Sort by absolute edge, NaN last
         df = df.sort_values("edge", key=abs, ascending=False, na_position="last")
 
         return df.reset_index(drop=True)
@@ -359,7 +373,8 @@ class VegasComparison:
                 "team": vp.home_team if vp.side == "HOME" else vp.away_team,
                 "model_spread": vp.model_spread,
                 "vegas_spread": vp.vegas_spread,
-                "edge": abs(vp.edge),
+                "edge": abs(vp.edge),  # Absolute edge for sorting/display
+                "edge_signed": vp.edge,  # P1.3: Signed edge for diagnostics (neg=home, pos=away)
                 "confidence": vp.confidence,
                 "analysis": vp.analysis,
             }

@@ -39,33 +39,24 @@ If this adjustment is applied to spreads, the current implementation can introdu
 
 ## P1 — High impact (reduces noise / improves measurement fidelity)
 
-- [ ] **P1.1 TD/FG/turnover detection must not rely on `play_type` containing “touchdown”**
+- [ ] **P1.1 TD/FG/turnover detection must not rely on `play_type` containing "touchdown"** -- DEFERRED
   - **Issue:** TD detection via `play_type` substring search is unreliable in CFBD; many scoring plays are encoded differently and TD indication may live in play text or score deltas.
   - **Acceptance criteria:**
     - TD/FG/turnover outcomes are detected using a reliable signal (drive result, scoring flags, score delta, or play_text parsing if needed).
     - Add validation that counted TDs roughly reconcile with actual scoring totals (within tolerance).
-  - **Claude nudge prompt:**
-    > Make scoring outcome detection robust. Avoid relying on `play_type` containing “touchdown.” Use a more reliable signal (drive result, scoring fields, score delta, or play text) and add validation checks that the counted outcomes reconcile with observed scoring totals within reasonable tolerance.
+  - **Status:** Attempted 2026-02-05. Adding `drive_id` + `scoring` to efficiency_plays enabled the finishing drives model (which was previously a no-op due to missing `drive_id`). This increased Core MAE from 12.43 to 12.52 (+0.09, exceeds 0.05 gate). **REJECTED by Quant Auditor.** Root cause: the finishing drives scaling formula (`(ppt - expected) * trips/10`) adds noise. Must recalibrate P2.1 scaling before enabling this code path.
 
 ---
 
-- [ ] **P1.2 `rz_failed` must represent failed *trips*, not failed 4th-down plays**
+- [x] **P1.2 `rz_failed` must represent failed *trips*, not failed 4th-down plays** -- FIXED by P0.1 (2026-02-05)
   - **Issue:** Current code passes `rz_failed=int(rz_failed_4th)` into `calculate_team_rating()`, which misrepresents failures (many failed trips end before 4th down).
-  - **Acceptance criteria:**
-    - A “failed trip” is a trip that entered the red zone and did not end in TD/FG.
-    - Failures are counted per trip/drive outcome.
-  - **Claude nudge prompt:**
-    > Ensure the “failed” category reflects failed red zone trips (drive outcomes without TD/FG) rather than counting failed 4th-down plays. Align `rz_failed` semantics with “trip outcomes.”
+  - **Fix:** P0.1 refactored to drive-level trip counting. `rz_failed` is now `trip_outcomes.count("FAILED")` — the count of RZ trips that did not end in TD, FG, or turnover. Semantics match acceptance criteria.
 
 ---
 
-- [ ] **P1.3 Goal-to-go calculation should be drive/opportunity-based (or removed if too noisy)**
+- [x] **P1.3 Goal-to-go calculation should be drive/opportunity-based (or removed if too noisy)** -- FIXED by P0.1 (2026-02-05)
   - **Issue:** GTG attempts estimated by `len(gtg_plays)//3` is arbitrary and style-dependent.
-  - **Acceptance criteria:**
-    - GTG opportunities and conversion rate are computed from real opportunities (drive-level or possession-level), OR
-    - GTG is removed/disabled in play-by-play mode if it cannot be computed reliably.
-  - **Claude nudge prompt:**
-    > Review goal-to-go computation for reliability. Replace arbitrary estimates with opportunity-based counting derived from drive/possession structure, or disable GTG if it cannot be measured accurately from available data.
+  - **Fix:** P0.1 refactored GTG to drive-level counting: `team_rz[gtg_mask].groupby(["game_id", "drive_id"])`. Each GTG trip is a distinct possession inside 10 yards. Arbitrary `//3` divisor removed.
 
 ---
 

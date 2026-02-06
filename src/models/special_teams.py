@@ -723,26 +723,16 @@ class SpecialTeamsModel:
             logger.debug("No kickoff plays found")
             return {}
 
-        # Detect touchbacks
-        def is_touchback(text, play_type):
-            if pd.isna(text):
-                return False
-            text_lower = str(text).lower()
-            # Touchback if explicitly stated or "for a touchback"
-            return 'touchback' in text_lower
-
-        # Parse return yards
-        def extract_return_yards(text):
-            if pd.isna(text):
-                return None
-            # "returned by X for Y yards" or "return for Y yards"
-            match = re.search(r'return(?:ed)?.*?(\d+)\s*(?:Yd|yard)', str(text), re.IGNORECASE)
-            return int(match.group(1)) if match else None
-
-        kickoff_plays["is_touchback"] = kickoff_plays.apply(
-            lambda r: is_touchback(r["play_text"], r["play_type"]), axis=1
+        # P1.3: Vectorized touchback detection (replaces row-wise apply)
+        kickoff_plays["is_touchback"] = kickoff_plays["play_text"].str.contains(
+            "touchback", case=False, na=False
         )
-        kickoff_plays["return_yards"] = kickoff_plays["play_text"].apply(extract_return_yards)
+
+        # P1.3: Vectorized return yards extraction
+        return_match = kickoff_plays["play_text"].str.extract(
+            r'return(?:ed)?.*?(\d+)\s*(?:Yd|yard)', flags=re.IGNORECASE
+        )
+        kickoff_plays["return_yards"] = pd.to_numeric(return_match[0], errors="coerce")
 
         # For non-touchbacks without parsed return yards, use average
         kickoff_plays.loc[
@@ -781,6 +771,7 @@ class SpecialTeamsModel:
                 estimated_games = games_played[team]
 
             # Per-game coverage rating (in points)
+            # Divisor dampens raw per-game value to prevent ST from dominating spreads
             kicks_per_game = total_kicks / estimated_games
             coverage_ratings[team] = (tb_bonus + return_saved) * kicks_per_game / 5.0
 
@@ -800,6 +791,7 @@ class SpecialTeamsModel:
                 estimated_games = games_played[team]
 
             # Per-game return rating (in points)
+            # Divisor dampens raw per-game value to prevent ST from dominating spreads
             returns_per_game = len(group) / estimated_games
             return_ratings[team] = return_value * returns_per_game / 3.0
 

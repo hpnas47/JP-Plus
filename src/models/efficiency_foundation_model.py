@@ -264,7 +264,7 @@ class TeamEFMRating:
     offensive_rating: float  # Higher = better offense
     defensive_rating: float  # Higher = better defense (fewer points allowed)
     special_teams_rating: float  # FG efficiency - DIAGNOSTIC ONLY, not in overall (P2.7)
-    turnover_rating: float  # Turnover margin contribution (higher = more takeaways)
+    turnover_rating: float  # DIAGNOSTIC ONLY: ball_security + takeaways (already embedded in O/D, NOT additive to overall)
 
     # Combined
     overall_rating: float
@@ -646,7 +646,8 @@ class EfficiencyFoundationModel:
             plays_df: Prepared plays DataFrame (must have 'weight' column)
 
         Returns:
-            Tuple of (off_sr, def_sr, off_isoppp, def_isoppp) dicts
+            Tuple of (off_sr, def_sr, off_isoppp, def_isoppp, off_isoppp_real, def_isoppp_real)
+            where *_real are sets of teams with play-derived (non-sentinel) IsoPPP values
         """
         agg_start = time.time()
 
@@ -688,6 +689,9 @@ class EfficiencyFoundationModel:
         # ===== ISOPPP (successful plays only, with valid PPA) =====
         off_isoppp = {}
         def_isoppp = {}
+        # P1.2: Track which teams have play-derived IsoPPP (not sentinel defaults)
+        off_isoppp_real = set()
+        def_isoppp_real = set()
 
         if "ppa" in plays_df.columns:
             # Filter to successful plays with valid PPA
@@ -708,6 +712,7 @@ class EfficiencyFoundationModel:
                     # Need at least 10 successful plays with valid PPA
                     if row["succ_count"] >= 10 and team in off_sr and off_grouped.loc[team, "play_count"] >= self.MIN_PLAYS:
                         off_isoppp[team] = row["weighted_ppa_sum"] / row["weight_sum"]
+                        off_isoppp_real.add(team)  # P1.2: real data
                     else:
                         off_isoppp[team] = self.LEAGUE_AVG_ISOPPP
 
@@ -722,6 +727,7 @@ class EfficiencyFoundationModel:
                     row = def_isoppp_grouped.loc[team]
                     if row["succ_count"] >= 10 and team in def_sr and def_grouped.loc[team, "play_count"] >= self.MIN_PLAYS:
                         def_isoppp[team] = row["weighted_ppa_sum"] / row["weight_sum"]
+                        def_isoppp_real.add(team)  # P1.2: real data
                     else:
                         def_isoppp[team] = self.LEAGUE_AVG_ISOPPP
 
@@ -746,7 +752,7 @@ class EfficiencyFoundationModel:
             f"{len(plays_df):,} plays"
         )
 
-        return off_sr, def_sr, off_isoppp, def_isoppp
+        return off_sr, def_sr, off_isoppp, def_isoppp, off_isoppp_real, def_isoppp_real
 
     def _ridge_adjust_metric(
         self,
@@ -965,46 +971,59 @@ class EfficiencyFoundationModel:
             f"{total_time*1000:.1f}ms total"
         )
 
+        # P1.1: Post-center ridge coefficients for identifiability
+        # Ridge regularization doesn't enforce sum-to-zero on coefficient groups.
+        # Without centering, mean(off_coefs) ≠ 0 and mean(def_coefs) ≠ 0, causing
+        # the intercept to NOT equal the true league average. Post-centering fixes
+        # this without changing spread predictions (differences are invariant).
+        off_coefs = team_coefficients[:n_teams]
+        def_coefs = team_coefficients[n_teams:2 * n_teams]
+
+        off_coef_mean = np.mean(off_coefs)
+        def_coef_mean = np.mean(def_coefs)
+
+        # Center coefficients to mean-zero and absorb means into intercept
+        off_coefs_centered = off_coefs - off_coef_mean
+        def_coefs_centered = def_coefs - def_coef_mean
+
+        # New baselines: off_baseline absorbs offense mean, def_baseline absorbs defense mean
+        off_baseline = intercept + off_coef_mean
+        def_baseline = intercept + def_coef_mean
+
+        if abs(off_coef_mean) > 0.0005 or abs(def_coef_mean) > 0.0005:
+            logger.debug(
+                f"  P1.1 post-centering ({metric_col}): "
+                f"off_mean_coef={off_coef_mean:.5f}, def_mean_coef={def_coef_mean:.5f}, "
+                f"raw_intercept={intercept:.4f} → off_base={off_baseline:.4f}, def_base={def_baseline:.4f}"
+            )
+
         off_adjusted = {}
         def_adjusted = {}
 
         for team, idx in team_to_idx.items():
-            # Offensive rating: intercept + off_coef (now neutral-field)
-            # Intercept = league average metric (e.g., ~0.42 for SR)
-            # Team coef = deviation from average (positive = better than average)
-            off_adjusted[team] = intercept + team_coefficients[idx]
-            # Defensive rating: intercept - def_coef (negative because good D has negative coef)
-            # Good defense has negative coef (reduces opponent success rate)
-            # So intercept - def_coef gives higher value for good defenses
-            def_adjusted[team] = intercept - team_coefficients[n_teams + idx]
+            # Offensive rating: baseline + centered coef
+            # After centering: mean(off_adjusted) = off_baseline exactly
+            off_adjusted[team] = off_baseline + off_coefs_centered[idx]
+            # Defensive rating: baseline - centered coef
+            # After centering: mean(def_adjusted) = def_baseline exactly
+            def_adjusted[team] = def_baseline - def_coefs_centered[idx]
 
-        # P0.1: Validate ridge baseline interpretation via invariants
-        # Mean of adjusted metrics should be close to intercept (league average)
-        # This confirms that team coefficients represent deviations from baseline
+        # P0.1 + P1.1: Validate ridge baseline (should now pass exactly)
         mean_off = np.mean(list(off_adjusted.values()))
         mean_def = np.mean(list(def_adjusted.values()))
 
-        # Log deviations from expected baseline
-        # For Success Rate: intercept ≈ 0.42, mean should match within ~0.01
-        # For IsoPPP: intercept ≈ 0.30, mean should match within ~0.02
-        off_baseline_error = abs(mean_off - intercept)
-        def_baseline_error = abs(mean_def - intercept)
-
         logger.debug(
             f"  Ridge baseline check ({metric_col}): "
-            f"intercept={intercept:.4f}, "
-            f"mean_off={mean_off:.4f} (Δ={off_baseline_error:.4f}), "
-            f"mean_def={mean_def:.4f} (Δ={def_baseline_error:.4f})"
+            f"off_baseline={off_baseline:.4f}, mean_off={mean_off:.4f} (Δ={abs(mean_off - off_baseline):.6f}), "
+            f"def_baseline={def_baseline:.4f}, mean_def={mean_def:.4f} (Δ={abs(mean_def - def_baseline):.6f})"
         )
 
-        # Warn if baseline drift is large (>5% of intercept magnitude)
-        max_acceptable_drift = abs(intercept) * 0.05 if intercept != 0 else 0.05
-        if off_baseline_error > max_acceptable_drift or def_baseline_error > max_acceptable_drift:
+        # Post-centering should make drift essentially zero (floating point only)
+        max_drift = max(abs(mean_off - off_baseline), abs(mean_def - def_baseline))
+        if max_drift > 1e-6:
             logger.warning(
-                f"Ridge baseline drift detected for {metric_col}: "
-                f"mean_off and mean_def should equal intercept±{max_acceptable_drift:.4f}, "
-                f"but deviations are off={off_baseline_error:.4f}, def={def_baseline_error:.4f}. "
-                f"This may indicate numerical instability or data issues."
+                f"Post-centering failed for {metric_col}: drift={max_drift:.8f}. "
+                f"This indicates a bug in the centering logic."
             )
 
         # =================================================================
@@ -1216,7 +1235,8 @@ class EfficiencyFoundationModel:
         logger.debug(f"Canonical team index: {len(self._canonical_teams)} teams")
 
         # Calculate raw metrics
-        raw_off_sr, raw_def_sr, raw_off_isoppp, raw_def_isoppp = \
+        raw_off_sr, raw_def_sr, raw_off_isoppp, raw_def_isoppp, \
+            off_isoppp_real, def_isoppp_real = \
             self._calculate_raw_metrics(prepared)
 
         # Opponent-adjust Success Rate via ridge regression
@@ -1268,7 +1288,11 @@ class EfficiencyFoundationModel:
         # Calculate league averages from adjusted values
         # P3.6: np.mean() is order-independent, no need to sort for determinism
         avg_sr = np.mean(list(adj_off_sr.values()))
-        valid_isoppp = [v for v in adj_off_isoppp.values() if v != self.LEAGUE_AVG_ISOPPP]
+        # P1.2: Use play-derived tracking sets instead of sentinel equality check.
+        # Old approach: exclude teams where adj_isoppp == LEAGUE_AVG_ISOPPP, which also
+        # excludes real teams that happen to be near-average. New approach: only include
+        # teams that had enough successful plays for a real IsoPPP computation.
+        valid_isoppp = [adj_off_isoppp[t] for t in off_isoppp_real if t in adj_off_isoppp]
         avg_isoppp = np.mean(valid_isoppp) if valid_isoppp else self.LEAGUE_AVG_ISOPPP
 
         # Calculate league average turnover rates for O/D split (P2.6)
@@ -1349,7 +1373,8 @@ class EfficiencyFoundationModel:
                 self.turnover_weight * def_to_pts
             )
 
-            # Overall rating = O + D (turnovers now inside O/D, not separate)
+            # Overall rating = O + D (P1.3: turnovers are inside O/D, NOT additive)
+            # turnover_rating is diagnostic only — do not add it to overall
             overall = offensive_rating + defensive_rating
 
             # Get sample sizes
@@ -1458,7 +1483,7 @@ class EfficiencyFoundationModel:
             new_efficiency = (rating.efficiency_rating - efficiency_mean) * scale
             new_explosiveness = (rating.explosiveness_rating - explosiveness_mean) * scale
 
-            # Overall = off + def (P2.6: turnovers now inside O/D, not separate)
+            # Overall = off + def (P1.3: turnover_rating is diagnostic, NOT additive)
             new_overall = new_offense + new_defense
 
             # Update the rating object

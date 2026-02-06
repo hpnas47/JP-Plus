@@ -22,6 +22,31 @@ Architecture:
 Final: total = env_score + mental + boosts, capped at ±7.0
 
 Global Cap: ±7.0 points to prevent unrealistic adjustments.
+
+Independence Assumptions:
+-------------------------
+HFA and Travel are intentionally NOT given interaction effects because they measure
+orthogonal phenomena:
+
+- **HFA** measures what the HOME team GAINS: crowd energy, venue familiarity,
+  favorable officiating tendencies. LSU gets its 4.0 pt HFA regardless of whether
+  the opponent traveled 200 miles or 2000 miles.
+
+- **Travel** measures what the AWAY team LOSES: jet lag, circadian disruption,
+  physical fatigue from travel. A 3-timezone trip hurts equally at LSU or Vanderbilt.
+
+- **Altitude** measures oxygen debt for visiting sea-level teams. Independent of
+  crowd noise or travel distance per se.
+
+These factors stack additively because they represent genuinely independent mechanisms.
+The environmental soft cap (5.0 pts, 60% excess) protects against over-prediction
+in extreme scenarios without artificially dampening independent effects.
+
+Interaction Effects (where double-counting IS a risk):
+- Travel × Consecutive Road: When travel >1.5 pts, consecutive road reduced 50%
+  (both measure physical fatigue from being away from home)
+- Travel × Altitude: When travel >1.5 pts, altitude reduced 30%
+  (stacking physical stressors on already-fatigued team; affects ~5 games/year)
 """
 
 import logging
@@ -176,7 +201,14 @@ class AdjustmentAggregator:
         result.raw_travel = abs(travel_breakdown.travel_penalty)
 
         # Altitude penalty (positive = favors home, away team at altitude disadvantage)
-        result.raw_altitude = abs(travel_breakdown.altitude_penalty)
+        altitude = abs(travel_breakdown.altitude_penalty)
+
+        # Travel/Altitude Interaction: When travel >1.5 pts, reduce altitude by 30%
+        # to prevent over-stacking physical stressors (affects ~5 games/year)
+        if result.raw_travel > 1.5 and altitude > 0:
+            altitude *= 0.7
+
+        result.raw_altitude = altitude
 
         # Rest advantage (positive = home has more rest, negative = home has less rest)
         # This includes both bye week advantage AND short week penalty

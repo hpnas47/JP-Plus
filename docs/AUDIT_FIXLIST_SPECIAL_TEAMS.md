@@ -47,33 +47,24 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 
 ## P1 — High impact (stability, scaling, realism)
 
-- [ ] **P1.1 Kickoff rating scaling sanity (avoid double-normalization)**
+- [ ] **P1.1 Kickoff rating scaling sanity (avoid double-normalization)** -- DEFERRED
   - **Issue:** Coverage/return calculations include extra divisors (e.g., dividing by 5 or 3 after already normalizing by per-game rates), likely shrinking effects too much and making magnitudes hard to interpret.
-  - **Acceptance criteria:**
-    - Kickoff coverage and return components are expressed as **points per game** with realistic magnitudes.
-    - Provide a distribution sanity output (mean/std/min/max across teams).
-  - **Claude nudge prompt:**
-    > Re-evaluate kickoff rating scaling to avoid double-normalization by plays-per-game. Ensure coverage and return components produce realistic per-game point magnitudes, and add a distribution report (mean/std/min/max) across teams.
+  - **Status:** Attempted 2026-02-05. Removing `/5.0` and `/3.0` divisors amplified kickoff impact by 5x/3x, causing 5+ edge to drop from 55.7% to 53.3%. **REJECTED by Quant Auditor.** These divisors are empirically calibrated dampening factors, not bugs. Changing them requires recalibration of the ST weight in the EFM.
 
 ---
 
-- [ ] **P1.2 Punt touchback/net-yards handling is overly ad-hoc**
+- [ ] **P1.2 Punt touchback/net-yards handling is overly ad-hoc** -- DEFERRED
   - **Issue:** Touchback net yard logic uses `min(gross, 55)` which is not grounded in actual field position mechanics. Inside-20/touchback bonuses may double-count what net yards already capture.
-  - **Acceptance criteria:**
-    - Punt value calculation is defensible and stable (net + field position bonuses/penalties without double-counting).
-    - Touchback handling reflects realistic field position impact.
-  - **Claude nudge prompt:**
-    > Review punt modeling (net yards, touchbacks, inside-20) for realism and to avoid double-counting. Ensure punt_value reflects field position impact in points per game with stable magnitude across teams.
+  - **Status:** Current heuristic produces reasonable values for most cases (tested 35/45/60-yard touchbacks). Changes here risk degrading backtest performance. Deferred pending comprehensive ST recalibration effort.
 
 ---
 
-- [ ] **P1.3 Remove remaining row-wise apply hotspots (kickoffs)**
+- [x] **P1.3 Remove remaining row-wise apply hotspots (kickoffs)** -- FIXED 2026-02-05
   - **Issue:** `kickoff_plays.apply(... axis=1)` remains, while other components are vectorized.
   - **Acceptance criteria:**
     - Kickoff parsing/flags use vectorized operations where practical.
     - Runtime improves without changing results materially.
-  - **Claude nudge prompt:**
-    > Optimize kickoff play processing to avoid row-wise `apply(axis=1)` where possible. Maintain identical outputs but improve performance and reduce overhead.
+  - **Fix applied:** Replaced `apply(lambda r: is_touchback(r["play_text"], r["play_type"]), axis=1)` with vectorized `str.contains("touchback", case=False)`. Replaced `apply(extract_return_yards)` with vectorized `str.extract()` + `pd.to_numeric()`. Backtest results identical.
 
 ---
 
