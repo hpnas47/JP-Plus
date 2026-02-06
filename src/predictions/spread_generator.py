@@ -552,9 +552,10 @@ class SpreadGenerator:
         )
 
         # Finishing drives differential (red zone efficiency)
-        components.finishing_drives = self.finishing_drives.get_matchup_differential(
-            home_team, away_team
-        )
+        # NOTE: FD is shelved at 0.0 weight pending structural redesign (dynamic baseline)
+        # Infrastructure preserved: drive_id pipeline, per-game normalization, ±1.5pt cap
+        # Still computed for diagnostic purposes, but zeroed out before spread calculation
+        components.finishing_drives = 0.0  # self.finishing_drives.get_matchup_differential(home_team, away_team)
 
         # FCS adjustment (when FBS plays FCS)
         components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
