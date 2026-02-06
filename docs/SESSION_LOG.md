@@ -69,6 +69,109 @@
 
 ---
 
+## Session: February 6, 2026
+
+### Theme: Performance Engineering — 16 min → 25 sec (38x cumulative speedup)
+
+Five commits across three performance domains: vectorization, caching, and multiprocessing. Plus a new preseason feature (temporal talent decay). All changes verified numerically identical to baseline via Quant Auditor.
+
+---
+
+#### Commit 1: O(1) Situational Lookups + Vectorization (7c979e8)
+**Impact: 16 min → 3:22 (4.8x speedup)**
+
+- **Situational adjustments**: Added `precalculate_schedule_metadata()` — pre-computes rest days, last/next game week, win/loss, home/away, rivalry flags once per season. Added O(1) fast paths to `check_letdown_spot()`, `check_lookahead_spot()`, and `check_consecutive_road()`, eliminating ~13 min of O(N) DataFrame scans per backtest.
+- **Special teams**: Replaced `.apply(lambda)` regex with `.str.extract()`/`.str.contains()`, replaced `.iterrows()` with numpy aggregation.
+- **Vegas comparison**: Vectorized `.apply(lambda)` → `np.where()` for favorite identification.
+- **Reverted**: Tier 2 per-team talent discount (MAE +0.08, outside tolerance).
+- **New docs**: `PERFORMANCE_AUDIT_2026-02-05.md`, `PERFORMANCE_PROFILE.md`, benchmark/profiling scripts.
+
+#### Commit 2: Local-First Disk Caching (073a02b)
+**Impact: 3:22 → 1:10 (2.9x speedup)**
+
+- Cache processed season DataFrames to `.cache/seasons/` as Parquet files, eliminating redundant API calls on repeated runs.
+- New CLI flags: `--no-cache`, `--force-refresh`.
+- New utility: `scripts/ensure_data.py` (pre-fetch all season data).
+- New modules: `src/data/cache.py`, `src/data/season_cache.py`, `src/data/processors.py`, `src/data/validators.py`.
+- Fixed `.gitignore` pattern (`data/` → `/data/`) that was accidentally hiding `src/data/` from git.
+- **Quant Auditor verified**: MAE 12.50, ATS 3+ edge 53.1%, 5+ edge 54.7% (bit-identical).
+
+#### Commit 3: API Rate Limiting & Delta Caching (7a2aa3b)
+**Impact: ~42 API calls → ~6 per cached run**
+
+- Added week-level delta caching (`src/data/week_cache.py`) — only current week fetched from API; historical weeks locked in cache.
+- Routed all PreseasonPriors API calls through CFBDClient (closed rate-limiting blind spot — priors were using raw `cfbd.ApiClient` directly).
+- Added session-level cache for `get_fbs_teams()` to deduplicate 3-4 calls/year to 1.
+- Refactored `build_team_records()` to use cached games DataFrames for trajectory years instead of re-fetching via API (eliminated 5 API calls per run).
+- New wrapper methods on CFBDClient: `get_sp_ratings`, `get_transfer_portal`, `get_returning_production`, `get_player_usage`.
+- New tools: `scripts/populate_week_cache.py`, `tests/test_week_cache.py`.
+- New docs: `API_RATE_LIMITING_SUMMARY.md`, `RATE_LIMITING_GUIDE.md`.
+
+#### Commit 4: Temporal Talent Floor Decay + Roster Churn Penalty (c11bf9f)
+**Impact: Model feature — reduces late-season "Talent Mirage"**
+
+- Replaced static `talent_floor_weight` (0.08) with `calculate_decayed_talent_weight()`: linearly decays from 0.08 at week 0 to 0.03 by week 10. Prevents late-season inflation for high-talent teams with poor on-field efficiency.
+- FSU stress test: MAE 14.98 → 14.88, RMSE 17.32 → 17.25. Overall MAE neutral (12.43 both variants).
+- Added `calculate_roster_churn_penalty()` for portal-heavy teams (off by default via `use_churn_penalty=False`).
+- Both features toggleable via PreseasonPriors constructor for A/B testing.
+- New toggles: `use_talent_decay` (default True), `use_churn_penalty` (default False).
+- New docs: `PORTAL_CHURN_INVESTIGATION.md`, `PORTAL_CODE_MAP.md`.
+
+#### Commit 5: Multiprocessing Season Loop (03c2b2d)
+**Impact: 3:30 → 25 sec (8.4x speedup)**
+
+- Parallelized backtest season loop via `ProcessPoolExecutor` — each season (2022-2025) runs on its own CPU core.
+- Three-agent collaboration (Model Strategist + Code Auditor + Quant Auditor) analyzed 4 proposed optimizations. Strategist recommended multiprocessing as #1 priority; Code Auditor identified shared-state risks; Quant Auditor captured baseline for verification.
+- Key design decisions:
+  - `_process_single_season()` defined at module level (required for pickle serialization with `spawn` mode).
+  - `priors.client = None` before pool submission (CFBDClient not picklable).
+  - Results sorted by `(year, week, game_id)` for deterministic output ordering.
+  - Single-year runs skip multiprocessing overhead (sequential fallback preserved).
+- **Quant Auditor verified**: All metrics bit-identical. Max numeric diff: 1.07e-14 (float noise). Ole Miss +15.24, FSU +12.48 unchanged.
+
+---
+
+### Performance Summary (Cumulative)
+
+| Stage | Wall-Clock Time | Speedup | Commit |
+|-------|----------------|---------|--------|
+| **Starting point** | ~16 min | — | (pre-session) |
+| After vectorization | 3:22 | 4.8x | 7c979e8 |
+| After disk caching | 1:10 | 2.9x (13.7x cumulative) | 073a02b |
+| After multiprocessing | **0:25** | **8.4x (38x cumulative)** | 03c2b2d |
+
+### Current Baseline (Post-Session)
+
+| Metric | Value |
+|--------|-------|
+| **MAE (weeks 4+)** | 12.59 |
+| **MAE (core weeks 4-15)** | 12.52 |
+| **ATS All** | 51.6% (1347-1263-51) |
+| **ATS 3+ Edge** | 52.0% (790-728) |
+| **ATS 5+ Edge** | 53.0% (509-451) |
+| **Mean Error (Bias)** | +0.90 pts |
+
+### Key Team Ratings (2025 End-of-Regular-Season)
+
+| Team | Rating | Rank |
+|------|--------|------|
+| Ohio State | +27.86 | 1 |
+| Indiana | +25.02 | 2 |
+| Notre Dame | +23.52 | 3 |
+| Oregon | +23.44 | 4 |
+| Alabama | +21.66 | 5 |
+| Georgia | +18.58 | 9 |
+| Ole Miss | +15.24 | 15 |
+| Florida State | +12.48 | 22 |
+
+### Files Changed (Session Total)
+- **31 files changed**, 4,811 insertions, 309 deletions
+- New modules: `src/data/` package (cache, season_cache, processors, validators, week_cache)
+- New scripts: `ensure_data.py`, `populate_week_cache.py`, `benchmark_backtest.py`, `profile_backtest.py`
+- New docs: 5 documentation files (performance audit, profiling, rate limiting, portal investigation)
+
+---
+
 ## Session: February 5, 2026 (Late Night)
 
 ### Completed: P3 Implementation Sweep
