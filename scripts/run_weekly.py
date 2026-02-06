@@ -98,6 +98,11 @@ def parse_args():
         action="store_true",
         help="Skip Excel/HTML report generation (faster for testing/scripting)",
     )
+    parser.add_argument(
+        "--use-delta-cache",
+        action="store_true",
+        help="Use week-level delta caching (only fetch current week from API, load historical from cache)",
+    )
     return parser.parse_args()
 
 

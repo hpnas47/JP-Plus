@@ -22,14 +22,15 @@ Key features:
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import cfbd
 import numpy as np
 import pandas as pd
 
-from config.settings import get_settings
 from config.teams import TRIPLE_OPTION_TEAMS
+
+if TYPE_CHECKING:
+    from src.api.cfbd_client import CFBDClient
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,7 @@ class PreseasonPriors:
 
     def __init__(
         self,
+        client: "CFBDClient",
         prior_year_weight: float = 0.6,
         talent_weight: float = 0.4,
         regression_factor: float = 0.3,
@@ -228,21 +230,15 @@ class PreseasonPriors:
         """Initialize preseason priors calculator.
 
         Args:
+            client: CFBDClient instance for API access
             prior_year_weight: Weight for previous year's rating (0-1)
             talent_weight: Weight for talent composite (0-1)
             regression_factor: How much to regress prior ratings toward mean (0-1)
         """
+        self.client = client
         self.prior_year_weight = prior_year_weight
         self.talent_weight = talent_weight
         self.regression_factor = regression_factor
-
-        settings = get_settings()
-        self.configuration = cfbd.Configuration()
-        self.configuration.access_token = settings.cfbd_api_key
-
-        self.ratings_api = cfbd.RatingsApi(cfbd.ApiClient(self.configuration))
-        self.teams_api = cfbd.TeamsApi(cfbd.ApiClient(self.configuration))
-        self.players_api = cfbd.PlayersApi(cfbd.ApiClient(self.configuration))
 
         self.preseason_ratings: dict[str, PreseasonRating] = {}
 
@@ -257,7 +253,7 @@ class PreseasonPriors:
         """
         prior_year = year - 1
         try:
-            sp_ratings = self.ratings_api.get_sp(year=prior_year)
+            sp_ratings = self.client.get_sp_ratings(year=prior_year)
             ratings = {}
             for team in sp_ratings:
                 if team.rating is not None:
@@ -278,7 +274,7 @@ class PreseasonPriors:
             Dictionary mapping team name to talent score
         """
         try:
-            talent = self.teams_api.get_talent(year=year)
+            talent = self.client.get_team_talent(year=year)
             scores = {}
             for team in talent:
                 scores[team.team] = team.talent
@@ -298,7 +294,7 @@ class PreseasonPriors:
             Dictionary mapping team name to percent_ppa (0-1 scale)
         """
         try:
-            rp_data = self.players_api.get_returning_production(year=year)
+            rp_data = self.client.get_returning_production(year=year)
             returning = {}
             for team in rp_data:
                 if team.percent_ppa is not None:
@@ -319,7 +315,7 @@ class PreseasonPriors:
             DataFrame with transfer portal entries
         """
         try:
-            transfers = self.players_api.get_transfer_portal(year=year)
+            transfers = self.client.get_transfer_portal(year=year)
             data = []
             for t in transfers:
                 # Handle nested objects - origin/destination can be str or object
@@ -364,7 +360,7 @@ class PreseasonPriors:
             DataFrame with player usage data
         """
         try:
-            usage = self.players_api.get_player_usage(year=year)
+            usage = self.client.get_player_usage(year=year)
             data = []
             for u in usage:
                 ppa = u.usage.overall if hasattr(u.usage, 'overall') else None
@@ -619,6 +615,8 @@ class PreseasonPriors:
     def fetch_fbs_teams(self, year: int) -> set[str]:
         """Fetch the set of FBS team names for a given year.
 
+        Uses session-level cache via CFBDClient.
+
         Args:
             year: Season year
 
@@ -626,7 +624,7 @@ class PreseasonPriors:
             Set of FBS team names
         """
         try:
-            teams = self.teams_api.get_fbs_teams(year=year)
+            teams = self.client.get_fbs_teams(year=year)
             fbs_set = {t.school for t in teams}
             logger.debug(f"Fetched {len(fbs_set)} FBS teams for {year}")
             return fbs_set
@@ -641,6 +639,8 @@ class PreseasonPriors:
         which correctly handles realignment (e.g., USC/UCLA to Big Ten in 2024,
         Texas/Oklahoma to SEC in 2024).
 
+        Uses session-level cache via CFBDClient.
+
         Args:
             year: Season year (conference affiliations as of this year)
 
@@ -651,7 +651,7 @@ class PreseasonPriors:
             # P2.1 FIX: Use get_fbs_teams with year parameter to get
             # year-appropriate conference affiliations instead of get_teams()
             # which returns current (potentially future) affiliations
-            teams = self.teams_api.get_fbs_teams(year=year)
+            teams = self.client.get_fbs_teams(year=year)
             conf_map = {}
             for t in teams:
                 if t.school and t.conference:

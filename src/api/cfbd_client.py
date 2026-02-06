@@ -53,10 +53,14 @@ class CFBDClient:
         self._stats_api: Optional[cfbd.StatsApi] = None
         self._ratings_api: Optional[cfbd.RatingsApi] = None
         self._rankings_api: Optional[cfbd.RankingsApi] = None
+        self._players_api: Optional[cfbd.PlayersApi] = None
 
         # Retry settings
         self.max_retries = settings.max_retries
         self.retry_base_delay = 1.0  # seconds for rate limit retries
+
+        # Session-level cache for frequently called endpoints
+        self._fbs_teams_cache: dict[int, list] = {}  # year -> teams list
 
     @property
     def games_api(self) -> cfbd.GamesApi:
@@ -105,6 +109,12 @@ class CFBDClient:
         if self._rankings_api is None:
             self._rankings_api = cfbd.RankingsApi(cfbd.ApiClient(self.configuration))
         return self._rankings_api
+
+    @property
+    def players_api(self) -> cfbd.PlayersApi:
+        if self._players_api is None:
+            self._players_api = cfbd.PlayersApi(cfbd.ApiClient(self.configuration))
+        return self._players_api
 
     def _call_with_retry(self, func: callable, *args, **kwargs) -> Any:
         """Execute API call with exponential backoff retry on rate limits."""
@@ -307,11 +317,33 @@ class CFBDClient:
         return self._call_with_retry(self.games_api.get_drives, **kwargs)
 
     def get_fbs_teams(self, year: Optional[int] = None) -> list:
-        """Get list of FBS teams."""
+        """Get list of FBS teams.
+
+        Uses session-level caching to avoid redundant API calls.
+        Same (year) within a session returns cached result.
+
+        Args:
+            year: Season year (None for current teams)
+
+        Returns:
+            List of team objects
+        """
+        # Use year as cache key (None for current season)
+        cache_key = year if year is not None else -1
+
+        if cache_key in self._fbs_teams_cache:
+            logger.debug(f"Cache hit: get_fbs_teams(year={year})")
+            return self._fbs_teams_cache[cache_key]
+
         kwargs = {}
         if year is not None:
             kwargs["year"] = year
-        return self._call_with_retry(self.teams_api.get_fbs_teams, **kwargs)
+
+        result = self._call_with_retry(self.teams_api.get_fbs_teams, **kwargs)
+        self._fbs_teams_cache[cache_key] = result
+        logger.debug(f"Cache miss: get_fbs_teams(year={year}), cached {len(result)} teams")
+
+        return result
 
     def get_team_records(self, year: int, team: Optional[str] = None) -> list:
         """Get team records for a season."""
@@ -422,10 +454,6 @@ class CFBDClient:
         logger.warning(f"Timed out waiting for {year} week {week} data")
         return False
 
-    def get_sp_ratings(self, year: int) -> list:
-        """Get SP+ ratings for teams."""
-        return self._call_with_retry(self.ratings_api.get_sp, year=year)
-
     def get_fpi_ratings(self, year: int) -> list:
         """Get ESPN FPI ratings for teams."""
         return self._call_with_retry(self.ratings_api.get_fpi, year=year)
@@ -454,15 +482,6 @@ class CFBDClient:
     def get_team_talent(self, year: int) -> list:
         """Get team talent composite rankings."""
         return self._call_with_retry(self.teams_api.get_talent, year=year)
-
-    def get_returning_production(self, year: int, team: Optional[str] = None) -> list:
-        """Get returning production metrics."""
-        kwargs = {"year": year}
-        if team is not None:
-            kwargs["team"] = team
-        return self._call_with_retry(
-            self.stats_api.get_player_returning_production, **kwargs
-        )
 
     def get_havoc_stats(
         self,
@@ -545,3 +564,53 @@ class CFBDClient:
             kwargs["game_id"] = game_id
 
         return self._call_with_retry(self.games_api.get_weather, **kwargs)
+
+    def get_sp_ratings(self, year: int) -> list:
+        """Get SP+ ratings for a given year.
+
+        Args:
+            year: Season year
+
+        Returns:
+            List of SP+ rating objects
+        """
+        return self._call_with_retry(self.ratings_api.get_sp, year=year)
+
+    def get_transfer_portal(self, year: int) -> list:
+        """Get transfer portal entries for a given year.
+
+        Args:
+            year: Season year (transfers FOR this year)
+
+        Returns:
+            List of transfer portal entry objects
+        """
+        return self._call_with_retry(self.players_api.get_transfer_portal, year=year)
+
+    def get_player_usage(self, year: int) -> list:
+        """Get player usage stats (includes PPA) for a given year.
+
+        Args:
+            year: Season year
+
+        Returns:
+            List of player usage objects
+        """
+        return self._call_with_retry(self.players_api.get_player_usage, year=year)
+
+    def get_returning_production(self, year: int, team: Optional[str] = None) -> list:
+        """Get returning production metrics for a given year.
+
+        Args:
+            year: Season year
+            team: Filter by team (optional)
+
+        Returns:
+            List of returning production objects
+        """
+        kwargs = {"year": year}
+        if team is not None:
+            kwargs["team"] = team
+        return self._call_with_retry(
+            self.players_api.get_returning_production, **kwargs
+        )

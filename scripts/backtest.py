@@ -45,41 +45,64 @@ import pandas as pd
 import polars as pl
 
 
-def build_team_records(client: CFBDClient, years: list[int]) -> dict[str, dict[int, tuple[int, int]]]:
+def build_team_records(
+    client: CFBDClient,
+    years: list[int],
+    season_data: dict | None = None,
+) -> dict[str, dict[int, tuple[int, int]]]:
     """Build team win-loss records for trajectory calculation.
+
+    Uses cached games DataFrames from season_data when available,
+    falling back to API calls only for years not in the cache.
 
     Args:
         client: CFBD API client
         years: List of years to fetch records for
+        season_data: Optional dict from fetch_all_season_data(), keyed by year.
+                     Each value is a tuple where index 0 is a Polars games DataFrame.
 
     Returns:
         Dict mapping team -> {year: (wins, losses)}
     """
     records = {}
+
     for year in years:
+        # Try cached games DataFrame first (index 0 in the season_data tuple)
+        if season_data is not None and year in season_data:
+            games_df = season_data[year][0]  # Polars DataFrame
+            # Filter to regular season (weeks 1-15) with completed scores
+            regular = games_df.filter(
+                (pl.col("week") <= 15)
+                & pl.col("home_points").is_not_null()
+                & pl.col("away_points").is_not_null()
+            )
+            for row in regular.iter_rows(named=True):
+                home_won = row["home_points"] > row["away_points"]
+                for team, is_home in [(row["home_team"], True), (row["away_team"], False)]:
+                    if team not in records:
+                        records[team] = {}
+                    if year not in records[team]:
+                        records[team][year] = (0, 0)
+                    w, l = records[team][year]
+                    won = home_won if is_home else not home_won
+                    records[team][year] = (w + int(won), l + int(not won))
+            continue
+
+        # Fallback: fetch from API for years not in cache
         try:
             games = client.get_games(year=year, season_type="regular")
             for game in games:
                 if game.home_points is None or game.away_points is None:
                     continue
-
                 home_won = game.home_points > game.away_points
-
-                # Home team
-                if game.home_team not in records:
-                    records[game.home_team] = {}
-                if year not in records[game.home_team]:
-                    records[game.home_team][year] = (0, 0)
-                w, l = records[game.home_team][year]
-                records[game.home_team][year] = (w + (1 if home_won else 0), l + (0 if home_won else 1))
-
-                # Away team
-                if game.away_team not in records:
-                    records[game.away_team] = {}
-                if year not in records[game.away_team]:
-                    records[game.away_team][year] = (0, 0)
-                w, l = records[game.away_team][year]
-                records[game.away_team][year] = (w + (0 if home_won else 1), l + (1 if home_won else 0))
+                for team, is_home in [(game.home_team, True), (game.away_team, False)]:
+                    if team not in records:
+                        records[team] = {}
+                    if year not in records[team]:
+                        records[team][year] = (0, 0)
+                    w, l = records[team][year]
+                    won = home_won if is_home else not home_won
+                    records[team][year] = (w + int(won), l + int(not won))
         except Exception as e:
             logger.warning(f"Could not fetch games for {year}: {e}")
 
@@ -1443,6 +1466,356 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
         print()
 
 
+def fetch_week_data_delta(
+    client: CFBDClient,
+    year: int,
+    target_week: int,
+    use_cache: bool = True,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Fetch data for a single week, using cache for historical weeks.
+
+    This enables delta loading where only the current week needs to be fetched
+    from the API, while all previous weeks are loaded from disk cache.
+
+    Args:
+        client: CFBD API client
+        year: Season year
+        target_week: Week number to fetch (1-16)
+        use_cache: Whether to use week-level cache
+
+    Returns:
+        Tuple of (games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df)
+        for the target week only
+    """
+    from src.data.week_cache import WeekDataCache
+
+    week_cache = WeekDataCache()
+
+    # Try to load from week cache first
+    if use_cache:
+        games_df = week_cache.load_week(year, target_week, "games")
+        betting_df = week_cache.load_week(year, target_week, "betting")
+        efficiency_plays_df = week_cache.load_week(year, target_week, "efficiency_plays")
+        turnover_plays_df = week_cache.load_week(year, target_week, "turnovers")
+        st_plays_df = week_cache.load_week(year, target_week, "st_plays")
+
+        if all(
+            df is not None
+            for df in [games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df]
+        ):
+            logger.info(f"Using cached data for {year} week {target_week}")
+            return games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df
+
+    # Fetch from API
+    logger.info(f"Fetching {year} week {target_week} from API")
+
+    # Fetch games for this week only
+    games = []
+    try:
+        week_games = client.get_games(year, target_week)
+        for game in week_games:
+            if game.home_points is None:
+                continue
+            games.append({
+                "id": game.id,
+                "year": year,
+                "week": target_week,
+                "start_date": game.start_date,
+                "home_team": game.home_team,
+                "away_team": game.away_team,
+                "home_points": game.home_points,
+                "away_points": game.away_points,
+                "neutral_site": game.neutral_site or False,
+            })
+    except Exception as e:
+        logger.warning(f"Failed to fetch games for {year} week {target_week}: {e}")
+
+    games_df = pl.DataFrame(games)
+
+    # Fetch betting lines for this week
+    betting = []
+    preferred_providers = ["DraftKings", "ESPN Bet", "Bovada"]
+
+    try:
+        lines = client.get_betting_lines(year, week=target_week, season_type="regular")
+        for game_lines in lines:
+            if not game_lines.lines:
+                continue
+
+            # Find preferred provider line
+            selected_line = None
+            for provider in preferred_providers:
+                for line in game_lines.lines:
+                    if line.provider and line.provider == provider:
+                        selected_line = line
+                        break
+                if selected_line:
+                    break
+
+            # Fall back to first available
+            if selected_line is None:
+                selected_line = game_lines.lines[0] if game_lines.lines else None
+
+            if selected_line and selected_line.spread is not None:
+                betting.append({
+                    "game_id": game_lines.id,
+                    "home_team": game_lines.home_team,
+                    "away_team": game_lines.away_team,
+                    "spread_close": selected_line.spread,
+                    "spread_open": selected_line.spread_open if selected_line.spread_open is not None else selected_line.spread,
+                    "over_under": selected_line.over_under,
+                    "provider": selected_line.provider,
+                })
+    except Exception as e:
+        logger.warning(f"Failed to fetch betting lines for {year} week {target_week}: {e}")
+
+    betting_df = pl.DataFrame(betting)
+
+    # Fetch plays for this week
+    efficiency_plays = []
+    turnover_plays = []
+    st_plays = []
+
+    try:
+        plays = client.get_plays(year, target_week)
+        for play in plays:
+            play_type = play.play_type or ""
+
+            # Turnovers
+            if play_type in TURNOVER_PLAY_TYPES:
+                turnover_plays.append({
+                    "week": target_week,
+                    "game_id": play.game_id,
+                    "offense": play.offense,
+                    "defense": play.defense,
+                    "play_type": play_type,
+                })
+
+            # Special teams
+            if any(st in play_type for st in ["Field Goal", "Punt", "Kickoff"]):
+                st_plays.append({
+                    "week": target_week,
+                    "game_id": play.game_id,
+                    "offense": play.offense,
+                    "defense": play.defense,
+                    "play_type": play_type,
+                    "play_text": play.play_text,
+                })
+
+            # Efficiency plays
+            if (play.ppa is not None and
+                play.down is not None and
+                play_type in SCRIMMAGE_PLAY_TYPES and
+                play.distance is not None and play.distance >= 0):
+                efficiency_plays.append({
+                    "week": target_week,
+                    "game_id": play.game_id,
+                    "down": play.down,
+                    "distance": play.distance,
+                    "yards_gained": play.yards_gained or 0,
+                    "play_type": play_type,
+                    "play_text": play.play_text,
+                    "offense": play.offense,
+                    "defense": play.defense,
+                    "period": play.period,
+                    "ppa": play.ppa,
+                    "yards_to_goal": play.yards_to_goal,
+                    "offense_score": play.offense_score or 0,
+                    "defense_score": play.defense_score or 0,
+                    "home_team": play.home,
+                })
+    except Exception as e:
+        logger.warning(f"Failed to fetch plays for {year} week {target_week}: {e}")
+
+    efficiency_plays_df = pl.DataFrame(efficiency_plays)
+    turnover_plays_df = pl.DataFrame(turnover_plays)
+    st_plays_df = pl.DataFrame(st_plays)
+
+    # Validate home_team in efficiency plays
+    if len(efficiency_plays_df) > 0 and len(games_df) > 0:
+        game_home = games_df.select([
+            pl.col("id").alias("game_id"),
+            pl.col("home_team").alias("validated_home_team"),
+        ])
+        efficiency_plays_df = efficiency_plays_df.join(
+            game_home, on="game_id", how="left"
+        )
+        efficiency_plays_df = efficiency_plays_df.with_columns(
+            pl.col("validated_home_team").alias("home_team")
+        ).drop("validated_home_team")
+
+    # Save to week cache
+    if use_cache:
+        week_cache.save_week(year, target_week, "games", games_df)
+        week_cache.save_week(year, target_week, "betting", betting_df)
+        week_cache.save_week(year, target_week, "efficiency_plays", efficiency_plays_df)
+        week_cache.save_week(year, target_week, "turnovers", turnover_plays_df)
+        week_cache.save_week(year, target_week, "st_plays", st_plays_df)
+
+    return games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df
+
+
+def fetch_season_data_with_delta(
+    client: CFBDClient,
+    year: int,
+    current_week: Optional[int] = None,
+    use_cache: bool = True,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Fetch season data using delta loading strategy.
+
+    If current_week is provided, only fetches that week from API and loads
+    all previous weeks from cache. If cache is incomplete, falls back to
+    full season fetch.
+
+    Args:
+        client: CFBD API client
+        year: Season year
+        current_week: Current week number (if None, fetches full season)
+        use_cache: Whether to use week-level cache
+
+    Returns:
+        Tuple of (games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df)
+        for weeks 1 through current_week
+    """
+    from src.data.week_cache import WeekDataCache
+
+    # If no current week specified, use full season fetch
+    if current_week is None:
+        logger.info(f"No current_week specified, fetching full season for {year}")
+        games_df, betting_df = fetch_season_data(client, year)
+        _, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
+
+        # Apply postseason remapping
+        if len(games_df) > 0:
+            game_week_map = games_df.select([
+                pl.col("id").alias("game_id"),
+                pl.col("week").alias("game_week"),
+            ])
+            efficiency_plays_df = _remap_play_weeks(efficiency_plays_df, game_week_map)
+            turnover_plays_df = _remap_play_weeks(turnover_plays_df, game_week_map)
+            st_plays_df = _remap_play_weeks(st_plays_df, game_week_map)
+
+        # Validate home_team
+        if len(efficiency_plays_df) > 0 and len(games_df) > 0:
+            game_home = games_df.select([
+                pl.col("id").alias("game_id"),
+                pl.col("home_team").alias("validated_home_team"),
+            ])
+            efficiency_plays_df = efficiency_plays_df.join(
+                game_home, on="game_id", how="left"
+            )
+            efficiency_plays_df = efficiency_plays_df.with_columns(
+                pl.col("validated_home_team").alias("home_team")
+            ).drop("validated_home_team")
+
+        return games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df
+
+    # Delta loading: load weeks 1 to current_week-1 from cache, fetch current_week
+    week_cache = WeekDataCache()
+
+    # Check if we have all historical weeks cached
+    historical_weeks = range(1, current_week)
+    all_cached = all(
+        week_cache.has_cached_week(year, week, "games", use_cache)
+        for week in historical_weeks
+    )
+
+    if not all_cached and use_cache:
+        logger.info(
+            f"Week cache incomplete for {year} weeks 1-{current_week-1}, "
+            "falling back to full season fetch"
+        )
+        # Fall back to full season fetch and populate cache
+        games_df, betting_df = fetch_season_data(client, year)
+        _, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
+
+        # Apply postseason remapping
+        if len(games_df) > 0:
+            game_week_map = games_df.select([
+                pl.col("id").alias("game_id"),
+                pl.col("week").alias("game_week"),
+            ])
+            efficiency_plays_df = _remap_play_weeks(efficiency_plays_df, game_week_map)
+            turnover_plays_df = _remap_play_weeks(turnover_plays_df, game_week_map)
+            st_plays_df = _remap_play_weeks(st_plays_df, game_week_map)
+
+        # Validate home_team
+        if len(efficiency_plays_df) > 0 and len(games_df) > 0:
+            game_home = games_df.select([
+                pl.col("id").alias("game_id"),
+                pl.col("home_team").alias("validated_home_team"),
+            ])
+            efficiency_plays_df = efficiency_plays_df.join(
+                game_home, on="game_id", how="left"
+            )
+            efficiency_plays_df = efficiency_plays_df.with_columns(
+                pl.col("validated_home_team").alias("home_team")
+            ).drop("validated_home_team")
+
+        # Save each week to cache for future delta loads
+        if use_cache:
+            for week in range(1, 16):
+                week_games = games_df.filter(pl.col("week") == week)
+                if len(week_games) > 0:
+                    week_betting = betting_df.filter(
+                        pl.col("game_id").is_in(week_games["id"])
+                    )
+                    week_efficiency = efficiency_plays_df.filter(pl.col("week") == week)
+                    week_turnovers = turnover_plays_df.filter(pl.col("week") == week)
+                    week_st = st_plays_df.filter(pl.col("week") == week)
+
+                    week_cache.save_week(year, week, "games", week_games)
+                    week_cache.save_week(year, week, "betting", week_betting)
+                    week_cache.save_week(year, week, "efficiency_plays", week_efficiency)
+                    week_cache.save_week(year, week, "turnovers", week_turnovers)
+                    week_cache.save_week(year, week, "st_plays", week_st)
+
+        return games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df
+
+    # Load historical weeks from cache
+    logger.info(f"Loading {year} weeks 1-{current_week-1} from cache")
+    historical_dfs = {
+        "games": [],
+        "betting": [],
+        "efficiency_plays": [],
+        "turnovers": [],
+        "st_plays": [],
+    }
+
+    for week in historical_weeks:
+        for data_type in historical_dfs.keys():
+            df = week_cache.load_week(year, week, data_type)
+            if df is not None:
+                historical_dfs[data_type].append(df)
+
+    # Fetch current week from API
+    logger.info(f"Fetching {year} week {current_week} from API (delta load)")
+    current_games, current_betting, current_efficiency, current_turnovers, current_st = (
+        fetch_week_data_delta(client, year, current_week, use_cache)
+    )
+
+    # Combine historical + current week
+    def safe_concat(dfs_list: list[pl.DataFrame]) -> pl.DataFrame:
+        """Safely concatenate Polars DataFrames."""
+        valid_dfs = [df for df in dfs_list if len(df) > 0]
+        if not valid_dfs:
+            return pl.DataFrame()
+        return pl.concat(valid_dfs)
+
+    games_df = safe_concat(historical_dfs["games"] + [current_games])
+    betting_df = safe_concat(historical_dfs["betting"] + [current_betting])
+    efficiency_plays_df = safe_concat(historical_dfs["efficiency_plays"] + [current_efficiency])
+    turnover_plays_df = safe_concat(historical_dfs["turnovers"] + [current_turnovers])
+    st_plays_df = safe_concat(historical_dfs["st_plays"] + [current_st])
+
+    logger.info(
+        f"Delta load complete: {len(games_df)} games, "
+        f"{len(efficiency_plays_df)} efficiency plays through week {current_week}"
+    )
+
+    return games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df
+
+
 def fetch_all_season_data(
     years: list[int],
     use_priors: bool = True,
@@ -1619,7 +1992,7 @@ def fetch_all_season_data(
         priors = None
         if use_priors:
             try:
-                priors = PreseasonPriors()
+                priors = PreseasonPriors(client)
                 priors.calculate_preseason_ratings(
                     year,
                     use_portal=use_portal,
@@ -1706,9 +2079,21 @@ def run_backtest(
         )
 
     # Build team records for trajectory calculation (need ~4 years before earliest year)
+    # Pre-cache trajectory years not already in season_data to avoid extra API calls
     client = CFBDClient()
     trajectory_years = list(range(min(years) - 4, max(years) + 1))
-    team_records = build_team_records(client, trajectory_years)
+    uncached_traj_years = [y for y in trajectory_years if y not in season_data]
+    if uncached_traj_years:
+        traj_data = fetch_all_season_data(
+            uncached_traj_years,
+            use_priors=False,  # Only need games, not priors
+            use_cache=use_season_cache,
+            force_refresh=force_refresh,
+        )
+        # Merge into season_data so build_team_records can use cached DataFrames
+        season_data.update(traj_data)
+        logger.info(f"Pre-cached {len(uncached_traj_years)} trajectory years from disk: {uncached_traj_years}")
+    team_records = build_team_records(client, trajectory_years, season_data=season_data)
     logger.info(f"Built team records for trajectory ({len(team_records)} teams, years {trajectory_years[0]}-{trajectory_years[-1]})")
 
     all_predictions = []
