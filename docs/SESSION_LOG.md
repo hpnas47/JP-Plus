@@ -69,6 +69,68 @@
 
 ---
 
+## Session: February 5, 2026 (Night)
+
+### Completed: P2 Implementation Sweep
+
+Scanned all 7 `AUDIT_FIXLIST_*.md` files, identified 16 unfixed P2 items across 7 files. Implemented with Quant Auditor backtest gate (0.01 MAE tolerance). 12 accepted, 4 deferred. Two batches.
+
+#### Batch 1: Backtest + Weekly Odds + EFM (6/6 accepted)
+
+- **Backtest P2.1 — Week coverage sanity checks**: Separated regular-season (1-15) from postseason (16+) in coverage checks. Missing-week warnings now specify "regular-season." Postseason pseudo-week counts reported separately.
+- **Backtest P2.2 — Postseason play coverage diagnostics**: Enhanced P0.2 check to include total play count and avg plays/game. Warns if avg < 80 plays/game.
+- **Weekly Odds P2.1 — Stable preview grouping**: Preview groups by `game_id` when available, falls back to `(home_team, away_team)` tuple.
+- **Weekly Odds P2.3 — UTC timestamps**: `captured_at` uses `datetime.now(timezone.utc)`. Provider timestamps preserved as-is (already UTC).
+- **EFM P2.1 — SettingWithCopy safety**: Added `.copy()` after `df[keep_mask]`. Added column assertion post-preprocessing. Added NaN guard before ridge `.fit()`.
+- **EFM P2.2 — Cache garbage-time thresholds**: Module-level `_GT_THRESHOLDS` tuple. `is_garbage_time_vectorized()` reads Settings once on first call.
+
+#### Batch 2: Vegas + Special Teams + Priors + Finishing Drives (6/6 accepted)
+
+- **Vegas P2.1 — Opener diagnostics**: `fetch_lines()` logs spread_open coverage % and movement rate. Warns if < 50% have openers.
+- **Vegas P2.2 — game_id in get_line_movement()**: Added optional `game_id` parameter, passed through to `get_line()`. Consistent with rest of module.
+- **Special Teams P2.1 — Parse coverage diagnostics**: FG distance, punt gross yards, kickoff return yards (non-TB) parse rates logged. Warns if < 80%.
+- **Special Teams P2.3 — Public API clarity**: Added `is_complete: bool` to `SpecialTeamsRating`. FG-only ratings = `False`, full ST = `True`. Guard in `get_matchup_differential()`.
+- **Preseason Priors P2.2 — Name consistency diagnostics**: Reports SP+ teams missing from talent and returning production datasets (first 10 names listed).
+- **Finishing Drives P2.2 — Fallback pathway hierarchy**: Documented PRIMARY > SECONDARY > TERTIARY in all 3 method docstrings. Debug-level pathway logging.
+
+#### Deferred P2 Items (4)
+
+| Item | Reason |
+|------|--------|
+| Weekly Odds P2.2 (additional markets) | Schema change, requires OddsAPI research |
+| Preseason Priors P2.1 (conference-by-year) | Requires historical conference data by year |
+| Finishing Drives P2.1 (overall_rating scaling) | Known risky from P1 rejection (MAE +0.09) |
+| Special Teams P2.2 (structured fields) | Requires CFBD API field research |
+
+### Quant Auditor Decision Gate Results
+
+| Batch | MAE Delta | ATS Delta | 5+ Edge Delta | Verdict |
+|-------|-----------|-----------|---------------|---------|
+| Batch 1 (Backtest+Odds+EFM) | 0.00 | 0.00% | 0.0% | PASS |
+| Batch 2 (Vegas+ST+Priors+FD) | 0.00 | 0.00% | 0.0% | PASS |
+
+### Baseline (Post-P2 Sweep — unchanged from post-P1)
+
+| Metric | 2024-2025 | 4-Year (2022-2025) |
+|--------|-----------|-------------------|
+| Core MAE | 12.43 | 12.49 |
+| Core ATS (close) | 51.33% | 51.87% |
+| Core 3+ edge | 53.5% | 53.1% |
+| Core 5+ edge | 55.7% | 54.7% |
+
+**Key takeaway:** All 12 accepted P2 changes are pure refactors — diagnostics, logging, copy safety, timestamp normalization. Zero MAE movement across both batches. P2 sweep complete — 12/16 fixed, 4 deferred pending external research or recalibration.
+
+### Audit Sweep Progress (All Priorities)
+
+| Priority | Total | Fixed | Deferred/Rejected | Remaining |
+|----------|-------|-------|-------------------|-----------|
+| P0 | 11 | 11 | 0 | 0 |
+| P1 | 18 | 15 | 3 | 0 |
+| P2 | 16 | 12 | 4 | 0 |
+| **Total** | **45** | **38** | **7** | **0** |
+
+---
+
 ## Session: February 5, 2026 (Late Evening)
 
 ### Completed: P1 Implementation Sweep
