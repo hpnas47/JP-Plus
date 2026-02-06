@@ -236,16 +236,15 @@ Five commits across three performance domains: vectorization, caching, and multi
 | After disk caching | 1:10 | 2.9x (13.7x cumulative) | 073a02b |
 | After multiprocessing | **0:25** | **8.4x (38x cumulative)** | 03c2b2d |
 
-### Current Baseline (Post-Session)
+### Baseline (Post-Performance-Session, `--start-week 4`)
 
-| Metric | Value |
-|--------|-------|
-| **MAE (weeks 4+)** | 12.59 |
-| **MAE (core weeks 4-15)** | 12.52 |
-| **ATS All** | 51.6% (1347-1263-51) |
-| **ATS 3+ Edge** | 52.0% (790-728) |
-| **ATS 5+ Edge** | 53.0% (509-451) |
-| **Mean Error (Bias)** | +0.90 pts |
+| Metric | Standard (Wks 4+) | Core (Wks 4–15) |
+|--------|-------------------|-----------------|
+| **MAE** | 12.59 | **12.52** |
+| **ATS All** | 51.6% (1347-1263-51) | 52.0% |
+| **ATS 3+ Edge** | 52.0% (790-728) | 52.3% (738-672) |
+| **ATS 5+ Edge** | 53.0% (509-451) | 53.5% (474-412) |
+| **Mean Error** | +0.90 pts | — |
 
 ### Key Team Ratings (2025 End-of-Regular-Season)
 
@@ -293,10 +292,12 @@ Final sweep focused on system legibility and long-term maintainability. Docstrin
 | Batch 1 (Docstrings+Types+Logging+Docs) | 0.00 | PASS |
 | Batch 2 (EFM P3.1+D.1) | 0.00 | PASS |
 
-### Baseline (Post-P3 Sweep — unchanged)
+### Baseline (Post-P3 Sweep — as measured 2026-02-05, before perf/FD sessions)
 
-| Metric | 2024-2025 | 4-Year (2022-2025) |
-|--------|-----------|-------------------|
+*Note: These values reflect the codebase at this point in time. Current production baseline is in the Feb 6 Evening session.*
+
+| Metric | 2024-2025 (Wks 4–15) | 4-Year (Wks 4–15) |
+|--------|----------------------|--------------------|
 | Core MAE | 12.43 | 12.49 |
 | Core ATS (close) | 51.33% | 51.87% |
 | Core 3+ edge | 53.5% | 53.1% |
@@ -357,10 +358,10 @@ Scanned all 7 `AUDIT_FIXLIST_*.md` files, identified 16 unfixed P2 items across 
 | Batch 1 (Backtest+Odds+EFM) | 0.00 | 0.00% | 0.0% | PASS |
 | Batch 2 (Vegas+ST+Priors+FD) | 0.00 | 0.00% | 0.0% | PASS |
 
-### Baseline (Post-P2 Sweep — unchanged from post-P1)
+### Baseline (Post-P2 Sweep — as measured 2026-02-05, before perf/FD sessions)
 
-| Metric | 2024-2025 | 4-Year (2022-2025) |
-|--------|-----------|-------------------|
+| Metric | 2024-2025 (Wks 4–15) | 4-Year (Wks 4–15) |
+|--------|----------------------|--------------------|
 | Core MAE | 12.43 | 12.49 |
 | Core ATS (close) | 51.33% | 51.87% |
 | Core 3+ edge | 53.5% | 53.1% |
@@ -439,10 +440,10 @@ Scanned all 8 `AUDIT_FIXLIST_*.md` files, identified 18 unfixed P1 items across 
 | Preseason P1.1-P1.3 | 0.00 | 0.00% | 0.0% | PASS |
 | Odds Capture P1.1-P1.3 | N/A | N/A | N/A | PASS (no backtest impact) |
 
-### Baseline (Post-P1 Sweep — unchanged from post-P0)
+### Baseline (Post-P1 Sweep — as measured 2026-02-04, before perf/FD sessions)
 
-| Metric | 2024-2025 | 4-Year (2022-2025) |
-|--------|-----------|-------------------|
+| Metric | 2024-2025 (Wks 4–15) | 4-Year (Wks 4–15) |
+|--------|----------------------|--------------------|
 | Core MAE | 12.43 | 12.49 |
 | Core ATS (close) | 51.33% | 51.87% |
 | Core 3+ edge | 53.5% | 53.1% |

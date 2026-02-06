@@ -1,6 +1,6 @@
 # JP+ Power Ratings Model - Architecture & Documentation
 
-**Last Updated:** February 5, 2026 (P0 Audit Fixes + Backtest Refresh)
+**Last Updated:** February 6, 2026 (FD Investigation + RZ Ridge Integration)
 
 ## Overview
 
@@ -19,17 +19,19 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar. Model tra
 
 ### Performance by Season Phase
 
-| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge |
-|-------|-------|-------|-----|--------------|-------|---------|---------|
-| **Calibration** | 1-3 | 597 | 14.79 | 7.57 | 47.3% | 48.0% | 48.4% |
-| **Core** | 4-15 | 2,485 | 12.55 | 4.47 | 52.0% | 51.9% | 53.2% |
-| **Postseason** | 16+ | 176 | 13.48 | 5.41 | 44.5% | 46.1% | 46.7% |
-| **Full Season** | All | 3,273 | 13.02 | 5.09 | 50.7% | 50.8% | 51.6% |
+*All metrics from walk-forward backtest across 2022–2025 (4 seasons). Verified 2026-02-06.*
+
+| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge | Mean CLV |
+|-------|-------|-------|-----|--------------|-------|---------|---------|----------|
+| **Calibration** | 1–3 | 597 | 14.95 | 7.89 | 47.1% | 48.2% | 48.0% | -0.30 |
+| **Core** | 4–15 | 2,485 | 12.52 | 4.42 | 52.0% | 52.3% | 53.5% | -0.12 |
+| **Postseason** | 16+ | 176 | 13.40 | 5.28 | 46.2% | 48.1% | 47.3% | -0.41 |
+| **Full Season** | All | 3,258 | 13.03 | 5.10 | 50.8% | 51.2% | 51.7% | -0.27 |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone with 52.0% ATS and 53.2% at 5+ point edge
-- **Postseason (Weeks 16+)**: Bowl games struggle (44.5% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
+- **Core (Weeks 4-15)**: Profitable zone with 52.0% ATS and 53.5% at 5+ point edge
+- **Postseason (Weeks 16+)**: Bowl games struggle (46.2% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 *MAE vs closing measures distance to the efficient closing line—a cleaner engine quality metric than MAE vs actual.*
 
@@ -39,44 +41,47 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 
 #### Against The Spread (ATS)
 
-| Edge Filter | vs Closing Line | vs Opening Line |
-|-------------|-----------------|-----------------|
-| **All picks** | 1274-1163-48 (52.2%) | ~52.8% |
-| **3+ pt edge** | 748-692 (51.9%) | 811-666 (54.9%) |
-| **5+ pt edge** | 478-421 (53.2%) | 520-391 (57.1%) |
+*Core season only (Weeks 4–15, 2,485 games, 2022–2025). Verified 2026-02-06.*
 
-**Key insight:** Opening line performance (57.1% at 5+ edge) significantly exceeds closing line (53.2%), indicating the model captures value that the market prices out by game time. Early-week betting recommended.
+| Edge Filter | vs Closing Line |
+|-------------|-----------------|
+| **All picks** | 52.0% |
+| **3+ pt edge** | 738-672 (52.3%) |
+| **5+ pt edge** | 474-412 (53.5%) |
+
+**Key insight:** 5+ point edge performance (53.5%) is the model's highest-conviction signal. These represent ~886 games where the model disagrees with Vegas by 5+ points.
 
 #### Closing Line Value (CLV)
 
+*Standard run (Weeks 4+, 2,665 games with lines, 2022–2025). Verified 2026-02-06.*
+
 CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
 
-| Edge Filter | Mean CLV | CLV > 0 | ATS % |
-|-------------|----------|---------|-------|
-| **All picks** | +0.52 | 41.1% | 51.4% |
-| **3+ pt edge** | +0.68 | 42.0% | 53.3% |
-| **5+ pt edge** | +0.89 | 43.6% | 54.8% |
-| **7+ pt edge** | +1.03 | 43.1% | 55.9% |
+| Edge Filter | N | Mean CLV | CLV > 0 | ATS % |
+|-------------|---|----------|---------|-------|
+| **All picks** | 2,661 | -0.14 | 34.0% | 51.6% |
+| **3+ pt edge** | 1,547 | -0.27 | 32.6% | 52.0% |
+| **5+ pt edge** | 979 | -0.32 | 30.5% | 53.0% |
+| **7+ pt edge** | 535 | -0.47 | 27.9% | 53.6% |
 
-*CLV and ATS % above are full-season (all phases). Core-only mean CLV is +0.68, indicating stronger edge during weeks 4-15.*
-
-**Interpretation:** At 5+ point edge, the market moves **toward** our prediction by 0.89 points on average. This validates the edge is real—we're not just finding noise, we're finding value that sharps eventually agree with.
+**Interpretation:** CLV is slightly negative, indicating the market does not consistently move toward our predictions. However, ATS performance at higher edge thresholds (53.6% at 7+ pts) demonstrates the model still finds actionable disagreements with the market.
 
 ### Results by Year
 
-| Year | Games | MAE | RMSE | ATS (Close) | 3+ (Close) | 5+ (Close) | ATS (Open) | 3+ (Open) | 5+ (Open) |
-|------|-------|-----|------|-------------|------------|------------|------------|-----------|-----------|
-| 2022 | 605 | 12.76 | 16.38 | 51.2% | 51.9% | 51.5% | 51.4% | 53.3% | 55.6% |
-| 2023 | 611 | 12.36 | 15.60 | 53.2% | 53.4% | 56.4% | 52.5% | 56.6% | 59.5% |
-| 2024 | 631 | 12.67 | 15.76 | 51.5% | 50.4% | 54.4% | 53.6% | 52.7% | 54.5% |
-| 2025 | 638 | 12.16 | 15.43 | 53.2% | 57.0% | 55.7% | 53.5% | 57.2% | 59.1% |
+*Core season only (Weeks 4–15). Verified 2026-02-06.*
+
+| Year | Games | MAE | RMSE |
+|------|-------|-----|------|
+| 2022 | 606 | 12.83 | 16.48 |
+| 2023 | 614 | 12.39 | 15.65 |
+| 2024 | 631 | 12.72 | 15.79 |
+| 2025 | 638 | 12.18 | 15.44 |
+| **All** | **2,489** | **12.53** | **15.84** |
 
 **Notes:**
-- Results by Year shows Core season (Weeks 4-15) performance only
-- 2022 had fewer opening lines available (96% coverage vs 100% in 2024-2025)
-- Best performance in 2023 and 2025 seasons
-- Model shows consistent improvement in MAE over time (12.76 → 12.16)
-- Opening line edge is consistently higher than closing line edge across all years
+- Core season (Weeks 4-15) only — excludes calibration (weeks 1-3) and postseason
+- Best MAE performance in 2025 (12.18) and 2023 (12.39)
+- MAE improves as more seasons of data become available for prior calibration
 
 **2025 Top 25** (end-of-season including CFP):
 
@@ -919,7 +924,7 @@ from src.models.efficiency_foundation_model import (
 - [ ] Improve situational adjustment calibration
 
 ### Medium Priority
-- [x] **Multi-year backtesting to validate stability** - ✅ DONE. Walk-forward backtest across 2022-2025 (4 seasons, 2,485 games weeks 4-15). Consistent performance: MAE 12.55, ATS 52.0% overall, 53.2% at 5+ edge. Opening line performance (57.0% at 5+ edge) indicates model captures value that market prices out.
+- [x] **Multi-year backtesting to validate stability** - ✅ DONE. Walk-forward backtest across 2022-2025 (4 seasons). See "Backtest Performance" section at top of file for current metrics.
 - [x] **Weather impact modeling** - ✅ DONE. Added `WeatherAdjuster` class that fetches weather data from CFBD API and calculates totals adjustments based on wind (>10 mph: -0.3 pts/mph), temperature (<40°F: -0.15 pts/degree), and precipitation (>0.02 in: -3.0 pts). Indoor games receive no adjustment. Ready for totals prediction integration.
 - [x] **Expand special teams beyond FG** - ✅ DONE. Added punt and kickoff ratings to complete ST model. All components expressed as PBTA (Points Better Than Average) per game. Punt rating: net yards vs expected (40 yds) converted to points + inside-20/touchback adjustments. Kickoff rating: coverage (touchback rate, return yards allowed) + returns (return yards gained). Overall = FG + Punt + Kickoff. FBS distribution: mean ~0, std ~1.0, 95% within ±2 pts/game.
 

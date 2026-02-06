@@ -14,11 +14,20 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Audit Status (Complete as of 2026-02-05)
-- **Result:** 41/48 items fixed across P0-P3 + diagnostics. 7 deferred with documented blockers.
-- **Baseline:** Core MAE 12.49 | ATS 51.87% | 3+ Edge 53.1% | 5+ Edge 54.7%
-- **Archived:** All audit fixlists in `docs/Completed Audit Fixlists/`
-- **Deferred items** require external API research (CFBD structured fields, OddsAPI schema) or model recalibration (Finishing Drives scaling).
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-06)
+
+| Slice | Weeks | Games | MAE | ATS |
+|-------|-------|-------|-----|-----|
+| **Full (`--start-week 1`)** | 1–Post | 3,258 | 13.03 | 50.8% |
+| Phase 1 (Calibration) | 1–3 | 597 | 14.95 | 47.1% |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.52** | **52.0%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.40 | 46.2% |
+| **Standard (`--start-week 4`)** | 4–Post | 2,665 | 12.59 | 51.6% |
+| 3+ Edge (Core) | 4–15 | 1,410 | — | 52.3% (738-672) |
+| 5+ Edge (Core) | 4–15 | 886 | — | 53.5% (474-412) |
+
+- **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
+- **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
 
 ---
 
@@ -59,9 +68,9 @@
 
 ## 📊 Quant Auditor (The Analyst)
 - **Role:** Weight optimization, MAE/ATS validation, and **redundancy detection**.
-- **Success Metrics:**
+- **Success Metrics (Core Phase, Weeks 4–15, 2,485 games):**
     - **MAE Baseline:** 12.52 (Strict Tolerance: +0.02).
-    - **ATS Target:** > 52.3%.
+    - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 53.5%.
 - **Redundancy Protocol:** For any new signal, you must report the **Correlation Coefficient** against existing PPA/IsoPPP metrics.
 - **Validation Slices (Mandatory):**
     - **EFM/In-Season:** `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.

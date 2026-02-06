@@ -66,51 +66,44 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 Walk-forward backtest across 4 seasons. Model trained only on data available at prediction time—no future leakage.
 
+*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-06.*
+
 | Phase | Weeks | Games | MAE | ATS % | 5+ Edge |
 |-------|-------|-------|-----|-------|---------|
-| Calibration | 1-3 | 597 | 14.75 | 47.1% | 48.7% |
-| **Core** | 4-15 | 2,485 | 12.54 | 52.0% | **53.2%** |
-| Postseason | 16+ | 176 | 13.41 | 45.1% | 48.7% |
+| Calibration | 1–3 | 597 | 14.95 | 47.1% | 48.0% |
+| **Core** | **4–15** | **2,485** | **12.52** | **52.0%** | **53.5%** |
+| Postseason | 16+ | 176 | 13.40 | 46.2% | 47.3% |
 
 **The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
 
-### Core Season ATS by Edge (Weeks 4-15)
+### Core Season ATS by Edge (Weeks 4–15, 2,485 games)
 
-| Edge | vs Closing Line | vs Opening Line |
-|------|-----------------|-----------------|
-| All picks | 51.0% (1238-1190) | 53.1% (1277-1130) |
-| 3+ pts | 51.8% (727-676) | **54.6%** (783-651) |
-| 5+ pts | 53.2% (454-400) | **57.0%** (516-389) |
-
-**Why opening lines are easier to beat:** Opening lines contain more inefficiencies. By closing, sharp money has moved lines toward true value. JP+ captures some of the same information that sharps use. At 5+ point edge, we hit 57% vs opening lines.
+| Edge | vs Closing Line |
+|------|-----------------|
+| All picks | 52.0% |
+| 3+ pts | 738-672 (52.3%) |
+| 5+ pts | 474-412 (53.5%) |
 
 ### Closing Line Value (CLV)
 
-CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
+*Standard run (Weeks 4+, 2,665 games). CLV measures how the market moves after we identify an edge.*
 
-| Edge Filter | Mean CLV | CLV > 0 | ATS % |
-|-------------|----------|---------|-------|
-| **All picks** | +0.52 | 41.1% | 51.4% |
-| **3+ pt edge** | +0.68 | 42.0% | 53.3% |
-| **5+ pt edge** | +0.89 | 43.6% | 54.8% |
-| **7+ pt edge** | +1.03 | 43.1% | 55.9% |
+| Edge Filter | N | Mean CLV | CLV > 0 | ATS % |
+|-------------|---|----------|---------|-------|
+| **All picks** | 2,661 | -0.14 | 34.0% | 51.6% |
+| **3+ pt edge** | 1,547 | -0.27 | 32.6% | 52.0% |
+| **5+ pt edge** | 979 | -0.32 | 30.5% | 53.0% |
+| **7+ pt edge** | 535 | -0.47 | 27.9% | 53.6% |
 
-At 5+ point edge, the market moves **toward** our prediction by 0.89 points on average. This validates the edge is real—we're finding value that sharps eventually agree with.
-
-### 2025 Season Results
+### 2025 Season Results (Core, Weeks 4–15)
 
 | Metric | Value |
 |--------|-------|
-| Games (Core) | 638 |
-| MAE | 12.16 |
-| ATS (Close) | 53.2% |
-| 3+ Edge (Close) | 57.0% |
-| 5+ Edge (Close) | 55.7% |
-| ATS (Open) | 53.5% |
-| 3+ Edge (Open) | 57.2% |
-| 5+ Edge (Open) | **59.1%** |
+| Games | 638 |
+| MAE | 12.18 |
+| RMSE | 15.44 |
 
-2025 was JP+'s best year: lowest MAE (12.16) and highest 5+ edge vs opening lines (59.1%).
+2025 was JP+'s best year by MAE (12.18), improving from 12.83 in 2022.
 
 ### Reality Check
 
