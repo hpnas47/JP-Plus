@@ -36,8 +36,12 @@ class FinishingDrivesModel:
     # Expected values (FBS averages)
     EXPECTED_RZ_TD_RATE = 0.58  # ~58% of RZ trips end in TD
     EXPECTED_RZ_SCORING_RATE = 0.85  # ~85% score something
-    EXPECTED_POINTS_PER_TRIP = 4.8  # Average points per RZ trip
+    EXPECTED_POINTS_PER_TRIP = 4.8  # Average points per RZ trip (empirical basis: ~5 pts/trip for top teams, ~4 for bottom)
     EXPECTED_GOAL_TO_GO = 0.65  # 65% TD rate in goal-to-go
+
+    # PBTA scaling: maximum matchup differential from FD component
+    # Caps total swing to ±1.5 points to prevent overwhelming EFM signal
+    MAX_MATCHUP_DIFFERENTIAL = 1.5  # points
 
     # Point values for conversion
     TD_POINTS = 7.0  # Including typical PAT
@@ -68,6 +72,7 @@ class FinishingDrivesModel:
         rz_failed: int,  # Downs/other
         goal_to_go_tds: Optional[int] = None,
         goal_to_go_attempts: Optional[int] = None,
+        games_played: Optional[int] = None,
     ) -> FinishingDrivesRating:
         """Calculate finishing drives rating for a team.
 
@@ -79,6 +84,7 @@ class FinishingDrivesModel:
             rz_failed: Other failed red zone trips (4th down stops, etc.)
             goal_to_go_tds: TDs in goal-to-go situations (optional)
             goal_to_go_attempts: Total goal-to-go attempts (optional)
+            games_played: Number of games played (optional, used to normalize per-game)
 
         Returns:
             FinishingDrivesRating for the team
@@ -130,9 +136,20 @@ class FinishingDrivesModel:
             # Estimate from RZ TD rate
             goal_to_go_rate = min(rz_td_rate + 0.05, 1.0)
 
-        # Overall rating: points above expected per trip
+        # Overall rating: points above expected, normalized to per-game basis
+        # Formula: (points_per_trip - expected) * avg_trips_per_game
+        # This keeps the rating in PBTA units (points per game)
         expected_points = self.EXPECTED_POINTS_PER_TRIP
-        overall = (points_per_trip - expected_points) * (total_rz_trips / 10.0)
+
+        # Normalize RZ trips to per-game basis to prevent cumulative inflation
+        if games_played and games_played > 0:
+            avg_rz_trips_per_game = total_rz_trips / games_played
+        else:
+            # Fallback: estimate ~2.5 RZ trips per game (FBS average)
+            # This prevents division by zero and maintains backwards compatibility
+            avg_rz_trips_per_game = total_rz_trips / max(1, total_rz_trips // 2.5)
+
+        overall = (points_per_trip - expected_points) * avg_rz_trips_per_game
 
         rating = FinishingDrivesRating(
             team=team,
@@ -205,6 +222,9 @@ class FinishingDrivesModel:
         )
         gtg_attempts = len(goal_to_go)
 
+        # Derive games_played from unique game_ids
+        games_played = team_drives["game_id"].nunique() if "game_id" in team_drives.columns else None
+
         return self.calculate_team_rating(
             team=team,
             rz_touchdowns=rz_tds,
@@ -213,6 +233,7 @@ class FinishingDrivesModel:
             rz_failed=rz_failed,
             goal_to_go_tds=gtg_tds,
             goal_to_go_attempts=gtg_attempts,
+            games_played=games_played,
         )
 
     def calculate_from_game_stats(
@@ -251,29 +272,32 @@ class FinishingDrivesModel:
             rz_attempts += away_games["away_rz_attempts"].fillna(0).sum()
             rz_tds += away_games["away_rz_tds"].fillna(0).sum()
 
+        # Derive games_played
+        games_played = len(home_games) + len(away_games)
+
         if rz_attempts == 0:
             # Use scoring as proxy (VECTORIZED)
             total_points = (
                 home_games["home_points"].sum() +
                 away_games["away_points"].sum()
             )
-            total_games = len(home_games) + len(away_games)
 
-            if total_games == 0:
-                return self.calculate_team_rating(team, 0, 0, 0, 0)
+            if games_played == 0:
+                return self.calculate_team_rating(team, 0, 0, 0, 0, games_played=0)
 
             # Estimate RZ trips from total scoring
-            avg_points = total_points / total_games
+            avg_points = total_points / games_played
             estimated_rz_trips = avg_points / self.EXPECTED_POINTS_PER_TRIP
             estimated_tds = int(estimated_rz_trips * self.EXPECTED_RZ_TD_RATE)
             estimated_fgs = int(estimated_rz_trips * 0.25)
 
             return self.calculate_team_rating(
                 team=team,
-                rz_touchdowns=estimated_tds * total_games,
-                rz_field_goals=estimated_fgs * total_games,
-                rz_turnovers=int(estimated_rz_trips * 0.08 * total_games),
-                rz_failed=int(estimated_rz_trips * 0.07 * total_games),
+                rz_touchdowns=estimated_tds * games_played,
+                rz_field_goals=estimated_fgs * games_played,
+                rz_turnovers=int(estimated_rz_trips * 0.08 * games_played),
+                rz_failed=int(estimated_rz_trips * 0.07 * games_played),
+                games_played=games_played,
             )
 
         # Calculate from actual RZ data
@@ -287,6 +311,7 @@ class FinishingDrivesModel:
             rz_field_goals=max(0, rz_fgs),
             rz_turnovers=max(0, rz_turnovers),
             rz_failed=max(0, rz_failed),
+            games_played=games_played,
         )
 
     def get_rating(self, team: str) -> Optional[FinishingDrivesRating]:
@@ -305,12 +330,15 @@ class FinishingDrivesModel:
     ) -> float:
         """Get finishing drives point differential in a matchup.
 
+        Applies magnitude cap to prevent FD component from overwhelming EFM signal.
+        Maximum swing is ±MAX_MATCHUP_DIFFERENTIAL points.
+
         Args:
             team_a: First team
             team_b: Second team
 
         Returns:
-            Expected point advantage for team_a from finishing drives
+            Expected point advantage for team_a from finishing drives (capped)
         """
         rating_a = self.team_ratings.get(team_a)
         rating_b = self.team_ratings.get(team_b)
@@ -318,7 +346,10 @@ class FinishingDrivesModel:
         overall_a = rating_a.overall_rating if rating_a else 0.0
         overall_b = rating_b.overall_rating if rating_b else 0.0
 
-        return overall_a - overall_b
+        differential = overall_a - overall_b
+
+        # Apply magnitude cap to prevent overwhelming EFM signal
+        return np.clip(differential, -self.MAX_MATCHUP_DIFFERENTIAL, self.MAX_MATCHUP_DIFFERENTIAL)
 
     def calculate_all_from_plays(
         self, plays_df: pd.DataFrame, max_week: int | None = None
@@ -433,6 +464,10 @@ class FinishingDrivesModel:
                 gtg_tds = 0
                 gtg_attempts = 0
 
+            # Derive games_played from unique game_ids in team's plays
+            # This ensures per-game normalization for PBTA calculation
+            games_played = team_rz["game_id"].nunique()
+
             self.calculate_team_rating(
                 team=team,
                 rz_touchdowns=int(rz_tds),
@@ -441,6 +476,7 @@ class FinishingDrivesModel:
                 rz_failed=int(rz_failed),
                 goal_to_go_tds=int(gtg_tds),
                 goal_to_go_attempts=int(gtg_attempts),
+                games_played=games_played,
             )
 
         # P3.9: Debug level for per-week logging
