@@ -36,7 +36,7 @@ class FinishingDrivesModel:
     # Expected values (FBS averages)
     EXPECTED_RZ_TD_RATE = 0.58  # ~58% of RZ trips end in TD
     EXPECTED_RZ_SCORING_RATE = 0.85  # ~85% score something
-    EXPECTED_POINTS_PER_TRIP = 4.8  # Average points per RZ trip (empirical basis: ~5 pts/trip for top teams, ~4 for bottom)
+    EXPECTED_POINTS_PER_TRIP = 4.05  # Average points per RZ trip (empirical FBS mean: ~4.0-4.1 pts/trip)
     EXPECTED_GOAL_TO_GO = 0.65  # 65% TD rate in goal-to-go
 
     # PBTA scaling: maximum matchup differential from FD component
