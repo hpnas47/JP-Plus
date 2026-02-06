@@ -14,7 +14,9 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -2010,6 +2012,81 @@ def fetch_all_season_data(
     return season_data
 
 
+def _process_single_season(
+    year: int,
+    season_tuple: tuple,
+    team_records: dict,
+    start_week: int,
+    end_week: Optional[int],
+    hfa_value: float,
+    prior_weight: int,
+    ridge_alpha: float,
+    efficiency_weight: float,
+    explosiveness_weight: float,
+    turnover_weight: float,
+    garbage_time_weight: float,
+    asymmetric_garbage: bool,
+    fcs_penalty_elite: float,
+    fcs_penalty_standard: float,
+    use_opening_line: bool,
+) -> tuple:
+    """Process a single season in a worker process for parallel backtesting.
+
+    Top-level function required for pickle serialization with ProcessPoolExecutor.
+    Each spawned worker gets its own module-level state (ridge cache, GT thresholds).
+    """
+    # Configure logging in worker process (spawn mode starts with no handlers)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    # Each worker starts with a fresh ridge cache
+    clear_ridge_cache()
+
+    # Unpack season data
+    if len(season_tuple) == 9:
+        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
+    else:
+        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
+        historical_rankings = None
+
+    # Walk-forward predictions
+    predictions = walk_forward_predict(
+        games_df,
+        efficiency_plays_df,
+        fbs_teams,
+        start_week,
+        end_week=end_week,
+        preseason_priors=priors,
+        hfa_value=hfa_value,
+        prior_weight=prior_weight,
+        ridge_alpha=ridge_alpha,
+        efficiency_weight=efficiency_weight,
+        explosiveness_weight=explosiveness_weight,
+        turnover_weight=turnover_weight,
+        garbage_time_weight=garbage_time_weight,
+        asymmetric_garbage=asymmetric_garbage,
+        team_records=team_records,
+        year=year,
+        fcs_penalty_elite=fcs_penalty_elite,
+        fcs_penalty_standard=fcs_penalty_standard,
+        st_plays_df=st_plays_df,
+        historical_rankings=historical_rankings,
+    )
+
+    # Calculate ATS
+    ats_results = None
+    if len(betting_df) > 0:
+        ats_results = calculate_ats_results(predictions, betting_df, use_opening_line)
+
+    # Year MAE for logging
+    year_df = pd.DataFrame(predictions)
+    year_mae = year_df["abs_error"].mean() if not year_df.empty else None
+
+    return year, predictions, ats_results, year_mae
+
+
 def run_backtest(
     years: list[int],
     start_week: int = 1,
@@ -2099,67 +2176,87 @@ def run_backtest(
     all_predictions = []
     all_ats = []
 
+    # Strip non-picklable client references from priors for multiprocessing
+    # (client is only used during data fetching, which is already complete)
     for year in years:
-        # P3.9: Per-year progress at debug level for quiet runs
-        logger.debug(f"Backtesting {year} season...")
-
-        # Unpack season data (historical_rankings added for letdown spot detection)
         season_tuple = season_data[year]
-        if len(season_tuple) == 9:
-            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
-        else:
-            # Backward compatibility for old 8-tuple format
-            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
-            historical_rankings = None
+        if len(season_tuple) >= 5:
+            priors = season_tuple[4]
+            if priors is not None and hasattr(priors, "client"):
+                priors.client = None
 
-        # Walk-forward predictions using EFM
-        predictions = walk_forward_predict(
-            games_df,
-            efficiency_plays_df,
-            fbs_teams,
-            start_week,
-            end_week=end_week,
-            preseason_priors=priors,
-            hfa_value=hfa_value,
-            prior_weight=prior_weight,
-            ridge_alpha=ridge_alpha,
-            efficiency_weight=efficiency_weight,
-            explosiveness_weight=explosiveness_weight,
-            turnover_weight=turnover_weight,
-            garbage_time_weight=garbage_time_weight,
-            asymmetric_garbage=asymmetric_garbage,
-            team_records=team_records,
-            year=year,
-            fcs_penalty_elite=fcs_penalty_elite,
-            fcs_penalty_standard=fcs_penalty_standard,
-            st_plays_df=st_plays_df,
-            historical_rankings=historical_rankings,
-        )
-        all_predictions.extend(predictions)
+    # Common kwargs for _process_single_season
+    season_kwargs = dict(
+        team_records=team_records,
+        start_week=start_week,
+        end_week=end_week,
+        hfa_value=hfa_value,
+        prior_weight=prior_weight,
+        ridge_alpha=ridge_alpha,
+        efficiency_weight=efficiency_weight,
+        explosiveness_weight=explosiveness_weight,
+        turnover_weight=turnover_weight,
+        garbage_time_weight=garbage_time_weight,
+        asymmetric_garbage=asymmetric_garbage,
+        fcs_penalty_elite=fcs_penalty_elite,
+        fcs_penalty_standard=fcs_penalty_standard,
+        use_opening_line=use_opening_line,
+    )
 
-        # Calculate ATS
-        if len(betting_df) > 0:
-            ats_results = calculate_ats_results(predictions, betting_df, use_opening_line)
-            all_ats.append(ats_results)
+    if len(years) > 1:
+        # Parallel execution: each season runs in its own process
+        n_workers = min(len(years), os.cpu_count() or 4)
+        logger.info(f"Running {len(years)} seasons in parallel ({n_workers} workers)")
 
-        # Year metrics (P3.9: debug level for quiet runs)
-        year_df = pd.DataFrame(predictions)
-        if not year_df.empty:
-            logger.debug(f"{year} MAE: {year_df['abs_error'].mean():.2f}")
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_single_season,
+                    year=year,
+                    season_tuple=season_data[year],
+                    **season_kwargs,
+                ): year
+                for year in years
+            }
+
+            for future in futures:
+                try:
+                    year_val, predictions, ats_results, year_mae = future.result()
+                    all_predictions.extend(predictions)
+                    if ats_results is not None:
+                        all_ats.append(ats_results)
+                    if year_mae is not None:
+                        logger.debug(f"{year_val} MAE: {year_mae:.2f}")
+                except Exception as e:
+                    failed_year = futures[future]
+                    logger.error(f"Season {failed_year} failed: {e}")
+                    raise
+    else:
+        # Single year: sequential execution (no multiprocessing overhead)
+        for year in years:
+            logger.debug(f"Backtesting {year} season...")
+            year_val, predictions, ats_results, year_mae = _process_single_season(
+                year=year,
+                season_tuple=season_data[year],
+                **season_kwargs,
+            )
+            all_predictions.extend(predictions)
+            if ats_results is not None:
+                all_ats.append(ats_results)
+            if year_mae is not None:
+                logger.debug(f"{year_val} MAE: {year_mae:.2f}")
+
+    # Sort predictions for deterministic output across parallel/sequential runs
+    all_predictions.sort(key=lambda p: (p["year"], p["week"], p["game_id"]))
 
     # Combine results
     predictions_df = pd.DataFrame(all_predictions)
     ats_df = pd.concat(all_ats, ignore_index=True) if all_ats else None
+    if ats_df is not None:
+        ats_df = ats_df.sort_values(["year", "week", "game_id"]).reset_index(drop=True)
 
     # Calculate overall metrics
     metrics = calculate_metrics(predictions_df, ats_df)
-
-    # Log ridge adjustment cache statistics (P3.9: debug level for quiet runs)
-    cache_stats = get_ridge_cache_stats()
-    logger.debug(
-        f"Ridge cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
-        f"{cache_stats['size']} entries (hit rate: {cache_stats['hit_rate']:.1%})"
-    )
 
     return {
         "predictions": predictions_df,
