@@ -158,6 +158,103 @@ class SituationalFactors:
         )
 
 
+def precalculate_schedule_metadata(schedule_df: pd.DataFrame) -> pd.DataFrame:
+    """Pre-calculate rest days and schedule context for all team-games.
+
+    Runs once before the simulation loop. Uses vectorized groupby/shift
+    instead of per-game O(N) filtering, eliminating repeated date parsing
+    and DataFrame scans from the inner loop.
+
+    Adds columns:
+        home_days_rest, away_days_rest: Days since each team's last game
+        home_last_opponent, away_last_opponent: Previous opponent
+        home_next_opponent, away_next_opponent: Next opponent
+        home_is_season_opener, away_is_season_opener: No prior games flag
+        game_datetime: Parsed, tz-naive datetime (reusable)
+
+    Also stores an O(1) lookup dict in df.attrs['schedule_meta'] keyed
+    by (team, game_datetime_str) for instant per-game access.
+    """
+    df = schedule_df.copy()
+
+    if "start_date" not in df.columns:
+        logger.warning("precalculate_schedule_metadata: no start_date column, skipping")
+        return df
+
+    # Parse dates once (the expensive operation we're eliminating from the loop)
+    df["game_datetime"] = pd.to_datetime(df["start_date"], utc=True).dt.tz_localize(None)
+
+    # Build team-centric view: two rows per game (one per team's perspective)
+    home_view = df[["home_team", "away_team", "game_datetime"]].copy()
+    home_view.columns = ["team", "opponent", "game_datetime"]
+    home_view["original_idx"] = df.index
+    home_view["is_home"] = True
+
+    away_view = df[["away_team", "home_team", "game_datetime"]].copy()
+    away_view.columns = ["team", "opponent", "game_datetime"]
+    away_view["original_idx"] = df.index
+    away_view["is_home"] = False
+
+    team_games = pd.concat([home_view, away_view], ignore_index=True)
+    team_games = team_games.sort_values(["team", "game_datetime"])
+
+    # Vectorized shift: O(N) total instead of O(N) per game
+    grouped = team_games.groupby("team")
+    team_games["last_game_date"] = grouped["game_datetime"].shift(1)
+    team_games["last_opponent"] = grouped["opponent"].shift(1)
+    team_games["next_opponent"] = grouped["opponent"].shift(-1)
+
+    # Vectorized rest calculation
+    team_games["days_rest"] = (
+        team_games["game_datetime"] - team_games["last_game_date"]
+    ).dt.days
+    team_games["is_season_opener"] = team_games["last_game_date"].isna()
+
+    # Season openers get NORMAL_REST (7) - no false rest advantage
+    team_games["days_rest"] = team_games["days_rest"].fillna(7).astype(int)
+    team_games["days_rest"] = team_games["days_rest"].clip(lower=1)
+
+    # Split back into home/away and merge onto original schedule
+    home_meta = team_games[team_games["is_home"]].set_index("original_idx")
+    away_meta = team_games[~team_games["is_home"]].set_index("original_idx")
+
+    df["home_days_rest"] = home_meta["days_rest"]
+    df["home_last_opponent"] = home_meta["last_opponent"]
+    df["home_next_opponent"] = home_meta["next_opponent"]
+    df["home_is_season_opener"] = home_meta["is_season_opener"]
+
+    df["away_days_rest"] = away_meta["days_rest"]
+    df["away_last_opponent"] = away_meta["last_opponent"]
+    df["away_next_opponent"] = away_meta["next_opponent"]
+    df["away_is_season_opener"] = away_meta["is_season_opener"]
+
+    # Build O(1) lookup dict: (team, game_datetime_str) -> metadata
+    meta_lookup = {}
+    for idx, row in df.iterrows():
+        dt_str = str(row["game_datetime"])
+        meta_lookup[(row["home_team"], dt_str)] = {
+            "days_rest": int(row["home_days_rest"]),
+            "is_season_opener": bool(row["home_is_season_opener"]),
+            "last_opponent": row.get("home_last_opponent"),
+            "next_opponent": row.get("home_next_opponent"),
+        }
+        meta_lookup[(row["away_team"], dt_str)] = {
+            "days_rest": int(row["away_days_rest"]),
+            "is_season_opener": bool(row["away_is_season_opener"]),
+            "last_opponent": row.get("away_last_opponent"),
+            "next_opponent": row.get("away_next_opponent"),
+        }
+
+    df.attrs["schedule_meta"] = meta_lookup
+
+    logger.info(
+        f"Pre-calculated schedule metadata: {len(df)} games, "
+        f"{len(meta_lookup)} lookup entries"
+    )
+
+    return df
+
+
 class SituationalAdjuster:
     """
     Calculate situational adjustments for matchups.
@@ -290,7 +387,17 @@ class SituationalAdjuster:
         Returns:
             Days since last game (NORMAL_REST for season openers to avoid false rest advantage)
         """
-        # Find team's previous games
+        # Fast path: O(1) lookup from pre-calculated metadata
+        meta = schedule_df.attrs.get("schedule_meta")
+        if meta is not None:
+            game_ts = pd.Timestamp(game_date)
+            if game_ts.tzinfo is not None:
+                game_ts = game_ts.tz_localize(None)
+            entry = meta.get((team, str(game_ts)))
+            if entry is not None:
+                return entry["days_rest"]
+
+        # Slow path: full DataFrame filtering (fallback when metadata unavailable)
         team_games = schedule_df[
             (schedule_df["home_team"] == team) | (schedule_df["away_team"] == team)
         ].copy()
@@ -342,6 +449,17 @@ class SituationalAdjuster:
         Used to detect the 'Opener vs. Played' game shape spot where the
         team with game experience has a rust/readiness advantage.
         """
+        # Fast path: O(1) lookup from pre-calculated metadata
+        meta = schedule_df.attrs.get("schedule_meta")
+        if meta is not None:
+            game_ts = pd.Timestamp(game_date)
+            if game_ts.tzinfo is not None:
+                game_ts = game_ts.tz_localize(None)
+            entry = meta.get((team, str(game_ts)))
+            if entry is not None:
+                return entry["is_season_opener"]
+
+        # Slow path: full DataFrame filtering
         team_games = schedule_df[
             (schedule_df["home_team"] == team) | (schedule_df["away_team"] == team)
         ]

@@ -8,6 +8,7 @@ late-season games (weeks 11+, bowls) but is acceptable given the small sample.
 """
 
 import logging
+from functools import lru_cache
 from typing import Optional
 
 from geopy.distance import geodesic
@@ -22,6 +23,25 @@ from config.teams import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=None)
+def _cached_geodesic_distance(team_a: str, team_b: str) -> Optional[float]:
+    """Cached geodesic distance between two teams' venues (miles).
+
+    Module-level cache ensures distances are computed once per team pair
+    across the entire backtest run, eliminating repeated geodesic calls.
+    """
+    loc_a = safe_get_location(team_a)
+    loc_b = safe_get_location(team_b)
+
+    if loc_a is None or loc_b is None:
+        return None
+
+    point_a = (loc_a["lat"], loc_a["lon"])
+    point_b = (loc_b["lat"], loc_b["lon"])
+
+    return geodesic(point_a, point_b).miles
 
 
 class TravelAdjuster:
@@ -62,7 +82,8 @@ class TravelAdjuster:
     ) -> Optional[float]:
         """Get distance between two teams' home venues in miles.
 
-        Uses team name normalization (P2.13) to handle CFBD naming variations.
+        Delegates to module-level cached function to avoid repeated geodesic
+        calculations for the same team pair across the backtest loop.
 
         Args:
             team_a: First team
@@ -71,17 +92,7 @@ class TravelAdjuster:
         Returns:
             Distance in miles or None if location data unavailable
         """
-        # P2.13: Use normalized lookups
-        loc_a = safe_get_location(team_a)
-        loc_b = safe_get_location(team_b)
-
-        if loc_a is None or loc_b is None:
-            return None
-
-        point_a = (loc_a["lat"], loc_a["lon"])
-        point_b = (loc_b["lat"], loc_b["lon"])
-
-        return geodesic(point_a, point_b).miles
+        return _cached_geodesic_distance(team_a, team_b)
 
     def get_timezone_adjustment(
         self,

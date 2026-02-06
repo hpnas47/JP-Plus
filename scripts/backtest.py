@@ -34,7 +34,7 @@ from src.models.efficiency_foundation_model import (
 )
 from src.models.preseason_priors import PreseasonPriors
 from src.adjustments.home_field import HomeFieldAdvantage
-from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
+from src.adjustments.situational import SituationalAdjuster, HistoricalRankings, precalculate_schedule_metadata
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.models.finishing_drives import FinishingDrivesModel
@@ -601,6 +601,8 @@ def walk_forward_predict(
 
     # P1.1: Convert full schedule to pandas once (reused every week for SpreadGenerator)
     games_df_pd = optimize_dtypes(games_df.to_pandas())
+    # Pre-calculate rest days + schedule metadata (vectorized, runs once)
+    games_df_pd = precalculate_schedule_metadata(games_df_pd)
 
     for pred_week in range(start_week, max_week + 1):
         # Training data: all plays from games before this week
