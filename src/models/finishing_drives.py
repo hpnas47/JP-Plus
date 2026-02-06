@@ -36,7 +36,7 @@ class FinishingDrivesModel:
     # Expected values (FBS averages)
     EXPECTED_RZ_TD_RATE = 0.58  # ~58% of RZ trips end in TD
     EXPECTED_RZ_SCORING_RATE = 0.85  # ~85% score something
-    EXPECTED_POINTS_PER_TRIP = 4.05  # Average points per RZ trip (empirical FBS mean: ~4.0-4.1 pts/trip)
+    EXPECTED_POINTS_PER_TRIP = 4.05  # Fallback constant (used only if dynamic mean unavailable)
     EXPECTED_GOAL_TO_GO = 0.65  # 65% TD rate in goal-to-go
 
     # PBTA scaling: maximum matchup differential from FD component
@@ -62,6 +62,7 @@ class FinishingDrivesModel:
         self.team_ratings: dict[str, FinishingDrivesRating] = {}
         self.regress_to_mean = regress_to_mean
         self.prior_strength = prior_strength or self.PRIOR_RZ_TRIPS
+        self._seasonal_mean_ppt: Optional[float] = None  # Dynamic baseline computed from training data
 
     def calculate_team_rating(
         self,
@@ -136,20 +137,14 @@ class FinishingDrivesModel:
             # Estimate from RZ TD rate
             goal_to_go_rate = min(rz_td_rate + 0.05, 1.0)
 
-        # Overall rating: points above expected, normalized to per-game basis
-        # Formula: (points_per_trip - expected) * avg_trips_per_game
-        # This keeps the rating in PBTA units (points per game)
-        expected_points = self.EXPECTED_POINTS_PER_TRIP
+        # Overall rating: raw difference from dynamic seasonal mean (PBTA units: points per trip)
+        # Formula: points_per_trip - seasonal_mean_ppt
+        # No multiplier needed — this directly measures efficiency deviation
+        # Dynamic baseline prevents systematic bias from year-to-year PPT variation (3.25-3.78)
 
-        # Normalize RZ trips to per-game basis to prevent cumulative inflation
-        if games_played and games_played > 0:
-            avg_rz_trips_per_game = total_rz_trips / games_played
-        else:
-            # Fallback: estimate ~2.5 RZ trips per game (FBS average)
-            # This prevents division by zero and maintains backwards compatibility
-            avg_rz_trips_per_game = total_rz_trips / max(1, total_rz_trips // 2.5)
-
-        overall = (points_per_trip - expected_points) * avg_rz_trips_per_game
+        # Use dynamic seasonal mean if available, otherwise fall back to constant
+        baseline_ppt = self._seasonal_mean_ppt if self._seasonal_mean_ppt is not None else self.EXPECTED_POINTS_PER_TRIP
+        overall = points_per_trip - baseline_ppt
 
         rating = FinishingDrivesRating(
             team=team,
@@ -477,6 +472,33 @@ class FinishingDrivesModel:
                 goal_to_go_tds=int(gtg_tds),
                 goal_to_go_attempts=int(gtg_attempts),
                 games_played=games_played,
+            )
+
+        # DYNAMIC BASELINE: Compute FBS-wide mean PPT from all teams in training window
+        # This prevents systematic bias from year-to-year PPT variation (empirical range: 3.25-3.78)
+        # Walk-forward chronology guaranteed: backtest engine filters plays to weeks < prediction_week
+        # before calling this method, so this mean only uses prior data.
+        if self.team_ratings:
+            ppt_values = [rating.points_per_trip for rating in self.team_ratings.values()]
+            self._seasonal_mean_ppt = float(np.mean(ppt_values))
+
+            # Recalculate all overall ratings using dynamic baseline
+            for team, rating in self.team_ratings.items():
+                new_overall = rating.points_per_trip - self._seasonal_mean_ppt
+                # Create updated rating with new overall score
+                updated_rating = FinishingDrivesRating(
+                    team=rating.team,
+                    red_zone_td_rate=rating.red_zone_td_rate,
+                    red_zone_scoring_rate=rating.red_zone_scoring_rate,
+                    points_per_trip=rating.points_per_trip,
+                    goal_to_go_conversion=rating.goal_to_go_conversion,
+                    overall_rating=new_overall,
+                )
+                self.team_ratings[team] = updated_rating
+
+            logger.info(
+                f"Finishing drives: computed dynamic baseline PPT = {self._seasonal_mean_ppt:.3f} "
+                f"from {len(self.team_ratings)} teams"
             )
 
         # P3.9: Debug level for per-week logging
