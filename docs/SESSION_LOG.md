@@ -69,6 +69,89 @@
 
 ---
 
+## Session: February 5, 2026 (Late Evening)
+
+### Completed: P1 Implementation Sweep
+
+Scanned all 8 `AUDIT_FIXLIST_*.md` files, identified 18 unfixed P1 items across 7 files (EFM P1s already cleared). Implemented with Quant Auditor backtest gate after each file. 15 accepted, 3 rejected/deferred.
+
+#### EFM P1s (3/3 accepted)
+
+- **P1.1 — Post-center ridge coefficients**: After ridge fit, offense/defense coefficient means are subtracted to make coefs mean-zero, absorbed into separate baselines. Mathematically neutral for spreads (differences invariant); stabilizes O/D decomposition.
+- **P1.2 — Set-based IsoPPP filtering**: Added `off_isoppp_real`/`def_isoppp_real` tracking sets in `_compute_raw_metrics()`. Teams added when they have >=10 successful plays. `avg_isoppp` now uses set membership instead of `!= LEAGUE_AVG_ISOPPP` equality check. Near-average teams no longer excluded.
+- **P1.3 — Turnover diagnostics clarification**: Updated `TeamEFMRating.turnover_rating` docstring to "DIAGNOSTIC ONLY" and added guard comments at both `overall` computation sites.
+
+#### Backtest P1s (2/2 accepted)
+
+- **P1.1 — games_df pandas conversion once**: Moved `games_df.to_pandas()` before the weekly prediction loop (was converting full schedule every week).
+- **P1.2 — Semi-join replaces game_id list**: Replaced `games_df.filter(...)["id"].to_list()` + `is_in()` with Polars semi-join. Also reuses `train_games_pl` for pandas conversion.
+
+#### Special Teams P1s (1/3 — 1 accepted, 2 deferred)
+
+- **P1.3 — Vectorized kickoff parsing** (accepted): Replaced `apply(lambda r: is_touchback(...), axis=1)` with `str.contains("touchback")`. Replaced `apply(extract_return_yards)` with `str.extract()` + `pd.to_numeric()`.
+- **P1.1 — Kickoff scaling** (REJECTED): Removing `/5.0` and `/3.0` divisors amplified kickoff impact 5x/3x, causing 5+ edge to drop 55.7% to 53.3%. Divisors are empirically calibrated dampening factors.
+- **P1.2 — Punt touchback handling** (DEFERRED): Current heuristic produces reasonable values. Requires comprehensive ST recalibration.
+
+#### Preseason Priors P1s (3/3 accepted)
+
+- **P1.1 — Vectorized portal impact**: Position group mapping via reverse lookup dict + `.map()`. G5-to-P4 transfer count via set membership + boolean ops.
+- **P1.2 — Continuity tax clarity**: Added explanatory comment on `CONTINUITY_TAX` constant showing amplification math. Fixed incorrect comment ("0.85" to "0.90").
+- **P1.3 — portal_scale default**: Changed internal default from 0.06 to 0.15 to match production caller.
+
+#### Vegas Comparison P1s (4/4 accepted)
+
+- **P1.1 — Deterministic provider fallback**: Sorts lines alphabetically by provider name, filters to non-null spreads.
+- **P1.2 — Duplicate game_id detection**: Logs warning when duplicate game_id encountered; keeps first-seen line.
+- **P1.3 — Signed edge preserved**: Added `edge_signed` column to `value_plays_to_dataframe()` output.
+- **P1.4 — Robust edge sorting**: Added `pd.to_numeric(df["edge"], errors="coerce")` before `sort_values()`.
+
+#### Weekly Odds Capture P1s (3/3 accepted)
+
+- **P1.1 — Schema normalization**: Added `season` and `week` INTEGER columns to `odds_snapshots`. Migration logic for existing DBs.
+- **P1.2 — Join metadata**: Added `cfbd_game_id` INTEGER placeholder column to `odds_lines`.
+- **P1.3 — Spread consistency check**: Per-line check that `abs(spread_home + spread_away) <= 0.5`. Logs anomalies.
+
+#### Finishing Drives P1s (2 fixed by P0.1, 1 deferred)
+
+- **P1.2/P1.3**: Already fixed by P0.1 drive-level refactor (trip-based rz_failed, drive-based GTG counting).
+- **P1.1** (REJECTED): Adding `drive_id` + `scoring` to efficiency_plays enabled a previously-dead finishing drives code path. Core MAE increased from 12.43 to 12.52 (+0.09). Root cause: finishing drives scaling formula adds noise. Requires P2.1 scaling recalibration before enabling.
+
+### Quant Auditor Decision Gate Results
+
+| Change | MAE Delta | ATS Delta | 5+ Edge Delta | Verdict |
+|--------|-----------|-----------|---------------|---------|
+| EFM P1.1+P1.2 | 0.00 | 0.00% | 0.0% | PASS |
+| Backtest P1.1+P1.2 | 0.00 | 0.00% | 0.0% | PASS |
+| Finishing Drives P1.1 | **+0.09** | +0.88% | -2.1% | **REJECT** |
+| ST P1.3 vectorization | 0.00 | 0.00% | 0.0% | PASS |
+| ST P1.1 kickoff scaling | +0.03 | +0.40% | **-2.4%** | **REJECT** |
+| Vegas P1.1-P1.4 | 0.00 | 0.00% | 0.0% | PASS |
+| Preseason P1.1-P1.3 | 0.00 | 0.00% | 0.0% | PASS |
+| Odds Capture P1.1-P1.3 | N/A | N/A | N/A | PASS (no backtest impact) |
+
+### Baseline (Post-P1 Sweep — unchanged from post-P0)
+
+| Metric | 2024-2025 | 4-Year (2022-2025) |
+|--------|-----------|-------------------|
+| Core MAE | 12.43 | 12.49 |
+| Core ATS (close) | 51.33% | 51.87% |
+| Core 3+ edge | 53.5% | 53.1% |
+| Core 5+ edge | 55.7% | 54.7% |
+
+**Key takeaway:** All accepted P1 changes are mathematically neutral or performance-only. Backtest results identical across all years. Three changes rejected for degrading high-confidence picks (5+ edge). P1 sweep complete — 0 unfixed P1 items remain except the 3 deferred items requiring deeper recalibration.
+
+### Files Modified
+- `src/models/efficiency_foundation_model.py` — post-centering, set-based IsoPPP, turnover docs
+- `scripts/backtest.py` — pandas conversion once, semi-join, drive_id/scoring reverted
+- `src/models/special_teams.py` — vectorized kickoff parsing
+- `src/models/preseason_priors.py` — vectorized portal, continuity tax, portal_scale default
+- `src/predictions/vegas_comparison.py` — deterministic fallback, dedup, signed edge, robust sort
+- `scripts/weekly_odds_capture.py` — schema columns, cfbd_game_id, spread check
+- `src/adjustments/aggregator.py` — independence assumptions documentation
+- All 7 `docs/AUDIT_FIXLIST_*.md` files — P1 items marked fixed/deferred
+
+---
+
 ## Session: February 5, 2026 (Evening)
 
 ### Completed: Full P0 Reconciliation
