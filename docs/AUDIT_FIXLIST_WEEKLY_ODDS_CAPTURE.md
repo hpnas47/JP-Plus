@@ -75,11 +75,10 @@ The script works for basic capturing, but there are several issues that will cau
 
 ---
 
-- [ ] **P2.2 Store additional markets if available (totals, moneyline)**
-  - **Issue:** Future model evaluation may need totals and ML, but schema doesn’t store them.
+- [ ] **P2.2 Store additional markets if available (totals, moneyline)** -- DEFERRED
+  - **Issue:** Future model evaluation may need totals and ML, but schema doesn't store them.
   - **Acceptance criteria:** If OddsAPI returns these markets, store them with prices.
-  - **Claude nudge prompt:**
-    > If OddsAPI provides totals and moneylines, extend the schema to store them now. This improves long-term usefulness and allows more complete market comparisons.
+  - **Status:** Deferred 2026-02-05. Requires OddsAPI schema research and SQLite migration to add totals/moneyline columns. Low urgency — current spread-only pipeline is functional.
 
 ---
 

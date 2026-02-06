@@ -76,13 +76,12 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 
 ---
 
-- [ ] **P2.2 Prefer structured fields over play_text parsing when available**
+- [ ] **P2.2 Prefer structured fields over play_text parsing when available** -- DEFERRED
   - **Issue:** Regex parsing is inherently brittle; if CFBD provides structured distance/return fields, use them.
   - **Acceptance criteria:**
     - Use structured fields when present, fall back to play_text parsing otherwise.
     - Document precedence and log which path is used.
-  - **Claude nudge prompt:**
-    > Where possible, prefer structured play fields (distance, return yards, touchback indicators) over regex parsing of play_text. Keep play_text parsing as a fallback and log which data path is used.
+  - **Status:** Deferred 2026-02-05. Requires CFBD API field audit to determine which structured fields (distance, return yards, touchback flags) are reliably populated. Current regex parse coverage is >80% (P2.1 diagnostics confirm), so urgency is low.
 
 ---
 

@@ -75,13 +75,12 @@ This module is feature-rich (asymmetric regression, coaching change, portal impa
 
 ## P2 — Robustness & historical correctness
 
-- [ ] **P2.1 Conference-by-year semantics for P4/G5 classification**
-  - **Issue:** Portal “level-up discount” uses conference data that may reflect current alignment rather than the season being modeled (realignment years).
+- [ ] **P2.1 Conference-by-year semantics for P4/G5 classification** -- DEFERRED
+  - **Issue:** Portal "level-up discount" uses conference data that may reflect current alignment rather than the season being modeled (realignment years).
   - **Acceptance criteria:**
     - If possible, use conference affiliation appropriate for the modeled year.
     - If not possible, document the approximation and add warnings for known realignment seasons/teams.
-  - **Claude nudge prompt:**
-    > Review conference and P4/G5 classification used for portal level-up discounts. Ensure classification aligns with the modeled season year (especially across realignment). If exact-year affiliation isn’t available, document and guard against mismatches.
+  - **Status:** Deferred 2026-02-05. Requires historical conference affiliation data by year from CFBD API. Current P4/G5 classification uses static lists which are correct for 2024-2025 but may misclassify teams in 2022-2023 realignment transition years (e.g., USC/UCLA, Colorado, Texas, Oklahoma).
 
 ---
 

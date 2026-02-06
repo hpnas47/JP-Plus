@@ -62,13 +62,12 @@ If this adjustment is applied to spreads, the current implementation can introdu
 
 ## P2 — Calibration & stability improvements (important for spreads)
 
-- [ ] **P2.1 Revisit `overall_rating` scaling to ensure stable magnitude**
+- [ ] **P2.1 Revisit `overall_rating` scaling to ensure stable magnitude** -- DEFERRED
   - **Issue:** `overall = (points_per_trip - expected_points) * (total_rz_trips / 10.0)` makes adjustment magnitude depend on trip count. If trips are noisy, magnitude becomes noisy.
   - **Acceptance criteria:**
     - `overall_rating` has a stable, interpretable scale.
     - Add diagnostics for typical ranges and identify outliers.
-  - **Claude nudge prompt:**
-    > Re-evaluate the scaling of finishing drives `overall_rating` so that the adjustment magnitude is stable and interpretable. Add diagnostics that report the distribution of trips and overall ratings, and ensure outliers are explainable.
+  - **Status:** Deferred 2026-02-05. P1.1 attempt to enable finishing drives raised Core MAE from 12.43 to 12.52 (+0.09, rejected by Quant Auditor). Scaling recalibration is blocked until P1.1 is resolved. Requires end-to-end FD weight recalibration in the EFM.
 
 ---
 
