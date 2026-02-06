@@ -38,6 +38,7 @@ class ValuePlay:
     side: str  # "HOME" or "AWAY"
     confidence: str
     analysis: str
+    game_id: Optional[int] = None  # P0.2: CFBD game_id for reliable joins
 
 
 class VegasComparison:
@@ -209,6 +210,7 @@ class VegasComparison:
         edge = (-prediction.spread) - vegas.spread
 
         return {
+            "game_id": vegas.game_id,  # P0.2: include for reliable joins
             "home_team": prediction.home_team,
             "away_team": prediction.away_team,
             "model_spread": prediction.spread,
@@ -270,6 +272,7 @@ class VegasComparison:
                 side=side,
                 confidence=comparison["confidence"],
                 analysis=analysis,
+                game_id=getattr(pred, 'game_id', None),  # P0.2: carry game_id
             )
 
             value_plays.append(vp)
@@ -349,6 +352,7 @@ class VegasComparison:
         """
         data = [
             {
+                "game_id": vp.game_id,  # P0.2: include for reliable joins
                 "home_team": vp.home_team,
                 "away_team": vp.away_team,
                 "side": vp.side,

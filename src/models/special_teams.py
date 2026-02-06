@@ -223,6 +223,10 @@ class SpecialTeamsModel:
     ) -> SpecialTeamsRating:
         """Calculate comprehensive special teams rating for a team.
 
+        Note: This is a secondary pathway. The primary production pathway is
+        calculate_all_st_ratings_from_plays() which aggregates from play-by-play data.
+        This method is kept for run_weekly.py compatibility.
+
         Args:
             team: Team name
             fg_attempts: Field goal attempt data
@@ -233,25 +237,35 @@ class SpecialTeamsModel:
         Returns:
             SpecialTeamsRating for the team
         """
-        # P0.1: All component methods now return per-event ratings in POINTS
-        # We need to normalize to per-GAME ratings
-        fg_rating_per_attempt = self.calculate_fg_paar(fg_attempts or [])
+        # Component methods return different scales:
+        #   calculate_fg_paar()       → TOTAL points added across all attempts
+        #   calculate_punt_rating()   → PER-PUNT average (already averaged internally)
+        #   calculate_kickoff_rating()→ PER-KICKOFF average (already averaged internally)
+        fg_total_paar = self.calculate_fg_paar(fg_attempts or [])
         punt_rating_per_punt = self.calculate_punt_rating(punts or [])
         kick_rating_per_kick = self.calculate_kickoff_rating(
             kickoffs or [], kickoff_returns or []
         )
 
-        # P0.1: Convert per-event to per-GAME (PBTA points per game)
-        # Typical game has ~3 FG attempts, ~5 punts, ~5 kickoffs
-        num_fg = len(fg_attempts) if fg_attempts else 3
-        num_punts = len(punts) if punts else 5
-        num_kicks = len(kickoffs) if kickoffs else 5
+        # P0.2: Normalize to per-GAME (PBTA points per game)
+        # FG: total → divide by estimated games (using ~3 FG/game)
+        num_fg = len(fg_attempts) if fg_attempts else 0
+        estimated_games_fg = max(1, num_fg / 3.0)
+        fg_rating = fg_total_paar / estimated_games_fg if num_fg > 0 else 0.0
 
-        fg_rating = (fg_rating_per_attempt / max(1, num_fg)) * 3.0  # Scale to ~3 FG/game
-        punt_rating = (punt_rating_per_punt / max(1, num_punts)) * 5.0  # Scale to ~5 punts/game
-        kick_rating = (kick_rating_per_kick / max(1, num_kicks)) * 5.0  # Scale to ~5 kicks/game
+        # Punt: per-punt average → multiply by punts per game (~5/game)
+        num_punts = len(punts) if punts else 0
+        estimated_games_punt = max(1, num_punts / 5.0)
+        punts_per_game = num_punts / estimated_games_punt if num_punts > 0 else 5.0
+        punt_rating = punt_rating_per_punt * punts_per_game if num_punts > 0 else 0.0
 
-        # P0.1: Overall is SUM of per-game components (all in PBTA points/game)
+        # Kickoff: per-kickoff average → multiply by kickoffs per game (~5/game)
+        num_kicks = len(kickoffs) if kickoffs else 0
+        estimated_games_kick = max(1, num_kicks / 5.0)
+        kicks_per_game = num_kicks / estimated_games_kick if num_kicks > 0 else 5.0
+        kick_rating = kick_rating_per_kick * kicks_per_game if num_kicks > 0 else 0.0
+
+        # Overall is SUM of per-game components (all in PBTA points/game)
         overall = fg_rating + punt_rating + kick_rating
 
         rating = SpecialTeamsRating(
@@ -272,7 +286,11 @@ class SpecialTeamsModel:
     ) -> SpecialTeamsRating:
         """Calculate special teams rating from aggregated game statistics.
 
-        This is a simplified calculation when detailed play-by-play isn't available.
+        P0.3: This is a FALLBACK pathway for when play-by-play data is unavailable
+        (e.g., run_weekly.py). It produces approximate PBTA pts/game but lacks
+        kickoff data entirely. Prefer calculate_all_st_ratings_from_plays() when possible.
+
+        All outputs are in PBTA points/game (FG + punt). Kickoff defaults to 0.
 
         Args:
             team: Team name
@@ -281,6 +299,7 @@ class SpecialTeamsModel:
         Returns:
             SpecialTeamsRating for the team
         """
+        logger.debug(f"ST fallback: using game-stats path for {team} (no play-by-play)")
         # Filter to team's games
         home_games = games_df[games_df["home_team"] == team]
         away_games = games_df[games_df["away_team"] == team]

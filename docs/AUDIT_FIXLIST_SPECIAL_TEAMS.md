@@ -28,22 +28,20 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 
 ---
 
-- [ ] **P0.2 Deprecate or fix `calculate_team_rating()` (currently inconsistent)**
+- [x] **P0.2 Deprecate or fix `calculate_team_rating()` (currently inconsistent)** -- FIXED 2026-02-05
   - **Issue:** `calculate_team_rating()` combines values that are not on the same scale and attempts to normalize via hardcoded divisors.
   - **Acceptance criteria:**
-    - Either remove/deprecate this method from production usage, or rewrite it so its output matches the “PBTA points per game” definition.
+    - Either remove/deprecate this method from production usage, or rewrite it so its output matches the "PBTA points per game" definition.
     - If kept, it must be numerically consistent with the play-by-play aggregation pipeline.
-  - **Claude nudge prompt:**
-    > Review `calculate_team_rating()` and either (a) deprecate it in favor of the play-by-play aggregation pipeline, or (b) make it produce true PBTA points-per-game consistent with the rest of the model.
+  - **Fix applied:** Fixed double-normalization bug: punt/kickoff components (per-event averages) were incorrectly divided by event count before scaling. Now FG divides total by estimated games, punt/kickoff multiply per-event average by events-per-game. Added docstring noting `calculate_all_st_ratings_from_plays()` is the primary production pathway.
 
 ---
 
-- [ ] **P0.3 Deprecate or fix `calculate_from_game_stats()` (mixed units)**
+- [x] **P0.3 Deprecate or fix `calculate_from_game_stats()` (mixed units)** -- FIXED 2026-02-05
   - **Issue:** Punt rating uses gross yards vs expected (yards) while FG rating is points; `overall` becomes mixed.
   - **Acceptance criteria:**
     - Either mark this as non-production and do not use it for spreads, or convert punt component to points consistently before summing.
-  - **Claude nudge prompt:**
-    > Audit `calculate_from_game_stats()` for unit correctness. Ensure it does not mix yards with points in the returned `overall_rating`. If it cannot be made accurate, treat it as a fallback-only path and prevent it from being used for spread adjustments.
+  - **Fix applied:** P0.1 already converted punt yards→points via YARDS_TO_POINTS. Now explicitly documented as FALLBACK pathway (no play-by-play). Added debug logging when fallback is used. Kickoff defaults to 0 (no data). All outputs verified as PBTA pts/game.
 
 ---
 

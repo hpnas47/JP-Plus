@@ -28,13 +28,12 @@ If this adjustment is applied to spreads, the current implementation can introdu
 
 ---
 
-- [ ] **P0.2 Remove fabricated minimums that create fake opportunities**
+- [x] **P0.2 Remove fabricated minimums that create fake opportunities** -- FIXED 2026-02-05
   - **Issue:** `max(1, rz_failed_4th)` and `max(1, len(gtg_plays)//3)` create fake trips/attempts.
   - **Acceptance criteria:**
     - If a team has 0 RZ trips or 0 GTG situations, totals remain 0 and regression handles small samples.
     - No forced minimum counts.
-  - **Claude nudge prompt:**
-    > Remove or replace any forced-minimum hacks (e.g., `max(1, ...)`) that fabricate red zone trips or goal-to-go attempts. Ensure teams with zero opportunities stay at zero and the Bayesian prior handles small sample stability.
+  - **Fix applied:** P0.1 refactor already removed all `max(1, ...)` hacks by switching to drive-level trip counting. Fixed residual bug: `rz_failed_4th` (undefined after P0.1) replaced with `rz_failed` (correctly counted per-trip failures). Teams with 0 RZ trips return expected-value defaults; Bayesian prior handles small samples.
 
 ---
 

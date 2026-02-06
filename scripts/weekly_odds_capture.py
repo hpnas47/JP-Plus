@@ -103,6 +103,9 @@ def init_database() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
 
+    # P0.3: Enable foreign key enforcement (off by default in SQLite)
+    conn.execute("PRAGMA foreign_keys = ON")
+
     # Ensure tables exist
     cursor = conn.cursor()
     cursor.execute("""
@@ -143,6 +146,8 @@ def capture_odds(
     client: OddsAPIClient,
     conn: sqlite3.Connection,
     snapshot_type: str,
+    year: int | None = None,
+    week: int | None = None,
 ) -> dict:
     """Capture current odds and store them.
 
@@ -150,11 +155,21 @@ def capture_odds(
         client: Odds API client
         conn: Database connection
         snapshot_type: 'opening' or 'closing'
+        year: Explicit season year (preferred over heuristic)
+        week: Explicit week number (preferred over heuristic)
 
     Returns:
         Summary dict
     """
-    year, week = get_current_week()
+    # P0.1: Prefer explicit year/week, fall back to heuristic with warning
+    if year is not None and week is not None:
+        logger.info(f"Using explicit year={year}, week={week}")
+    else:
+        year, week = get_current_week()
+        logger.warning(
+            f"P0.1: Using heuristic week estimation (year={year}, week={week}). "
+            "For reliable labeling, use --year and --week arguments."
+        )
 
     logger.info(f"Capturing {snapshot_type} lines for {year} week {week}...")
 
@@ -172,31 +187,48 @@ def capture_odds(
         }
 
     # Store snapshot
+    # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve snapshot_id (avoids orphaned lines)
     cursor = conn.cursor()
     snapshot_label = f"{snapshot_type}_{year}_week{week}"
 
     cursor.execute("""
-        INSERT OR REPLACE INTO odds_snapshots
+        INSERT INTO odds_snapshots
         (snapshot_type, snapshot_time, captured_at, credits_used)
         VALUES (?, ?, ?, ?)
+        ON CONFLICT(snapshot_type, snapshot_time) DO UPDATE SET
+            captured_at = excluded.captured_at,
+            credits_used = excluded.credits_used
     """, (
         snapshot_label,
         snapshot.timestamp.isoformat(),
         datetime.now().isoformat(),
         snapshot.credits_used,
     ))
-    snapshot_id = cursor.lastrowid
+
+    # P0.2: Retrieve the actual snapshot_id (lastrowid may be 0 on UPDATE)
+    cursor.execute(
+        "SELECT id FROM odds_snapshots WHERE snapshot_type = ? AND snapshot_time = ?",
+        (snapshot_label, snapshot.timestamp.isoformat())
+    )
+    snapshot_id = cursor.fetchone()[0]
 
     # Store lines
+    # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve row identity
     games_seen = set()
     for line in snapshot.lines:
         games_seen.add(line.game_id)
         cursor.execute("""
-            INSERT OR REPLACE INTO odds_lines
+            INSERT INTO odds_lines
             (snapshot_id, game_id, sportsbook, home_team, away_team,
              spread_home, spread_away, price_home, price_away,
              commence_time, last_update)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_id, game_id, sportsbook) DO UPDATE SET
+                spread_home = excluded.spread_home,
+                spread_away = excluded.spread_away,
+                price_home = excluded.price_home,
+                price_away = excluded.price_away,
+                last_update = excluded.last_update
         """, (
             snapshot_id,
             line.game_id,
@@ -226,9 +258,10 @@ def capture_odds(
     }
 
 
-def preview_odds(client: OddsAPIClient) -> None:
+def preview_odds(client: OddsAPIClient, year: int | None = None, week: int | None = None) -> None:
     """Preview available odds without storing (still uses 1 credit)."""
-    year, week = get_current_week()
+    if year is None or week is None:
+        year, week = get_current_week()
 
     print(f"\nPreviewing NCAAF odds for {year} week {week}...")
     print("(This will use 1 credit)\n")
@@ -274,6 +307,11 @@ def main():
                       help="Preview available odds")
     parser.add_argument("--api-key", type=str,
                        help="Odds API key (or set ODDS_API_KEY)")
+    # P0.1: Explicit year/week for reliable labeling
+    parser.add_argument("--year", type=int, default=None,
+                       help="Season year (recommended over auto-detection)")
+    parser.add_argument("--week", type=int, default=None,
+                       help="Week number (recommended over auto-detection)")
 
     args = parser.parse_args()
 
@@ -285,11 +323,11 @@ def main():
     client = OddsAPIClient(api_key=api_key)
 
     if args.preview:
-        preview_odds(client)
+        preview_odds(client, year=args.year, week=args.week)
     else:
         conn = init_database()
         snapshot_type = "opening" if args.opening else "closing"
-        result = capture_odds(client, conn, snapshot_type)
+        result = capture_odds(client, conn, snapshot_type, year=args.year, week=args.week)
         conn.close()
 
         print(f"\n{snapshot_type.title()} lines captured:")

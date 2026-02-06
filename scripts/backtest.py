@@ -398,64 +398,74 @@ def fetch_season_plays(
             logger.warning(f"Failed to fetch plays for {year} week {week}: {e}")
             continue  # Continue to next week instead of breaking
 
-    # Fetch postseason plays (bowl games and playoffs)
-    try:
-        postseason_plays = client.get_plays(year, week=1, season_type="postseason")
-        postseason_play_count = 0
-        for play in postseason_plays:
-            play_type = play.play_type or ""
+    # P0.2: Fetch postseason plays - try multiple weeks for robustness
+    # CFBD labels all postseason plays as week=1, but we try weeks 1-5
+    # to guard against API behavior changes.
+    postseason_play_count = 0
+    postseason_game_ids_with_plays = set()
+    for ps_week in range(1, 6):
+        try:
+            postseason_plays = client.get_plays(year, week=ps_week, season_type="postseason")
+            if not postseason_plays:
+                break  # No more postseason weeks
+            for play in postseason_plays:
+                play_type = play.play_type or ""
 
-            # Collect turnover plays
-            if play_type in TURNOVER_PLAY_TYPES:
-                turnover_plays.append({
-                    "week": 16,  # Map to week 16 for consistency
-                    "game_id": play.game_id,
-                    "offense": play.offense,
-                    "defense": play.defense,
-                    "play_type": play_type,
-                })
+                # Collect turnover plays
+                if play_type in TURNOVER_PLAY_TYPES:
+                    turnover_plays.append({
+                        "week": 16,  # Map to week 16 for consistency
+                        "game_id": play.game_id,
+                        "offense": play.offense,
+                        "defense": play.defense,
+                        "play_type": play_type,
+                    })
 
-            # Collect special teams plays
-            if any(st in play_type for st in ["Field Goal", "Punt", "Kickoff"]):
-                st_plays.append({
-                    "week": 16,
-                    "game_id": play.game_id,
-                    "offense": play.offense,
-                    "defense": play.defense,
-                    "play_type": play_type,
-                    "play_text": play.play_text,
-                })
+                # Collect special teams plays
+                if any(st in play_type for st in ["Field Goal", "Punt", "Kickoff"]):
+                    st_plays.append({
+                        "week": 16,
+                        "game_id": play.game_id,
+                        "offense": play.offense,
+                        "defense": play.defense,
+                        "play_type": play_type,
+                        "play_text": play.play_text,
+                    })
 
-            # Collect scrimmage plays with PPA
-            if (play.ppa is not None and
-                play.down is not None and
-                play_type in SCRIMMAGE_PLAY_TYPES and
-                play.distance is not None and play.distance >= 0):
-                efficiency_plays.append({
-                    "week": 16,
-                    "game_id": play.game_id,
-                    "down": play.down,
-                    "distance": play.distance,
-                    "yards_gained": play.yards_gained or 0,
-                    "play_type": play_type,
-                    "play_text": play.play_text,
-                    "offense": play.offense,
-                    "defense": play.defense,
-                    "period": play.period,
-                    "ppa": play.ppa,
-                    "yards_to_goal": play.yards_to_goal,
-                    "offense_score": play.offense_score or 0,
-                    "defense_score": play.defense_score or 0,
-                    "home_team": play.home,
-                })
-                postseason_play_count += 1
+                # Collect scrimmage plays with PPA
+                if (play.ppa is not None and
+                    play.down is not None and
+                    play_type in SCRIMMAGE_PLAY_TYPES and
+                    play.distance is not None and play.distance >= 0):
+                    efficiency_plays.append({
+                        "week": 16,
+                        "game_id": play.game_id,
+                        "down": play.down,
+                        "distance": play.distance,
+                        "yards_gained": play.yards_gained or 0,
+                        "play_type": play_type,
+                        "play_text": play.play_text,
+                        "offense": play.offense,
+                        "defense": play.defense,
+                        "period": play.period,
+                        "ppa": play.ppa,
+                        "yards_to_goal": play.yards_to_goal,
+                        "offense_score": play.offense_score or 0,
+                        "defense_score": play.defense_score or 0,
+                        "home_team": play.home,
+                    })
+                    postseason_play_count += 1
+                    postseason_game_ids_with_plays.add(play.game_id)
+        except Exception as e:
+            logger.warning(f"Failed to fetch postseason plays for {year} week {ps_week}: {e}")
+            break
 
-        if postseason_play_count > 0:
-            successful_weeks.append(16)
-            # P3.9: Debug level for quiet runs
-            logger.debug(f"Fetched {postseason_play_count} postseason efficiency plays for {year}")
-    except Exception as e:
-        logger.warning(f"Failed to fetch postseason plays for {year}: {e}")
+    if postseason_play_count > 0:
+        successful_weeks.append(16)
+        logger.debug(
+            f"Fetched {postseason_play_count} postseason efficiency plays "
+            f"across {len(postseason_game_ids_with_plays)} games for {year}"
+        )
 
     # Log fetch summary
     if failed_weeks:
@@ -1508,6 +1518,32 @@ def fetch_all_season_data(
             )
         else:
             logger.debug(f"Data completeness check for {year}: all weeks 1-15 present")
+
+        # P0.2: Postseason play coverage check
+        # Compare postseason games (from games_df) to games with efficiency plays
+        if len(games_df) > 0 and len(efficiency_plays_df) > 0:
+            postseason_game_ids = set(
+                games_df.filter(pl.col("week") >= 16)["id"].to_list()
+            )
+            postseason_play_game_ids = set(
+                efficiency_plays_df.filter(pl.col("week") >= 16)["game_id"].unique().to_list()
+            )
+            if postseason_game_ids:
+                missing_play_games = postseason_game_ids - postseason_play_game_ids
+                coverage_pct = (
+                    len(postseason_play_game_ids & postseason_game_ids) / len(postseason_game_ids) * 100
+                )
+                if missing_play_games:
+                    logger.warning(
+                        f"P0.2: Postseason play coverage {coverage_pct:.0f}% "
+                        f"({len(postseason_game_ids) - len(missing_play_games)}/{len(postseason_game_ids)} games) "
+                        f"for {year}"
+                    )
+                else:
+                    logger.debug(
+                        f"P0.2: Postseason play coverage 100% "
+                        f"({len(postseason_game_ids)} games) for {year}"
+                    )
 
         # Fetch FBS teams for EFM filtering
         fbs_teams_list = client.get_fbs_teams(year)

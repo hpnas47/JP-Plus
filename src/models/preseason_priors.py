@@ -97,7 +97,7 @@ COACHING_CHANGES = {
         "USC": "Lincoln Riley",         # Oklahoma success
         "Miami": "Mario Cristobal",     # Oregon success
         "Florida": "Billy Napier",      # Louisiana success
-        "Oregon": "Dan Lanning",        # First HC but elite DC - borderline
+        # P0.3: Dan Lanning removed - first-time HC (in FIRST_TIME_HCS), no prior HC record
         "Texas Tech": "Joey McGuire",   # First P5 HC but had HC experience
     },
     2023: {
@@ -201,7 +201,8 @@ class PreseasonRating:
 
     team: str
     prior_rating: float  # Previous year's rating (or talent-based estimate)
-    talent_score: float  # Recruiting talent composite
+    talent_score: float  # Recruiting talent composite (raw API value, ~500-1000)
+    talent_rating_normalized: float  # P0.1: Talent on SP+ rating scale (z-score * 12)
     returning_ppa: float  # Percentage of PPA returning (0-1)
     combined_rating: float  # Blended preseason rating
     confidence: float  # How confident we are in this prior (0-1)
@@ -976,6 +977,82 @@ class PreseasonPriors:
 
         return prior_weight, talent_weight, forget_factor, coach_name or ""
 
+    def _validate_data_quality(
+        self,
+        prior_sp: dict[str, float],
+        talent: dict[str, float],
+        talent_normalized: dict[str, float],
+        returning_prod: dict[str, float],
+        portal_impact: dict[str, float],
+    ) -> None:
+        """P0.2: Validate dataset intersections and rank direction assumptions.
+
+        Checks:
+        - Dataset intersection sizes (how many teams have each data source)
+        - Talent score direction (higher raw score = better, known elites should rank high)
+        - SP+ direction (higher rating = better)
+        """
+        # Log dataset intersection sizes
+        sp_teams = set(prior_sp.keys())
+        talent_teams = set(talent.keys())
+        ret_teams = set(returning_prod.keys())
+        portal_teams = set(portal_impact.keys())
+
+        logger.info(
+            f"P0.2 data coverage: SP+={len(sp_teams)}, talent={len(talent_teams)}, "
+            f"returning={len(ret_teams)}, portal={len(portal_teams)}"
+        )
+        logger.debug(
+            f"  SP+ ∩ talent: {len(sp_teams & talent_teams)}, "
+            f"SP+ ∩ returning: {len(sp_teams & ret_teams)}, "
+            f"all four: {len(sp_teams & talent_teams & ret_teams & portal_teams)}"
+        )
+
+        # Validate talent direction: known elite programs should have high raw scores
+        # Higher talent score = better recruiting = should rank near top
+        elite_programs = ["Alabama", "Georgia", "Ohio State", "Texas", "LSU"]
+        if talent:
+            talent_sorted = sorted(talent.items(), key=lambda x: -x[1])
+            top_20_teams = {t for t, _ in talent_sorted[:20]}
+            elite_in_top20 = [t for t in elite_programs if t in top_20_teams]
+            elite_present = [t for t in elite_programs if t in talent]
+
+            if elite_present and len(elite_in_top20) < len(elite_present) // 2:
+                logger.warning(
+                    f"P0.2 RANK DIRECTION CHECK FAILED: Only {len(elite_in_top20)}/{len(elite_present)} "
+                    f"elite programs in talent top-20. Talent scoring may be inverted!"
+                )
+            else:
+                logger.debug(
+                    f"P0.2 rank direction OK: {len(elite_in_top20)}/{len(elite_present)} "
+                    f"elite programs in talent top-20"
+                )
+
+        # Validate SP+ direction: same elite programs should have positive ratings
+        if prior_sp:
+            elite_sp = {t: prior_sp[t] for t in elite_programs if t in prior_sp}
+            positive_count = sum(1 for v in elite_sp.values() if v > 0)
+            if elite_sp and positive_count < len(elite_sp) // 2:
+                logger.warning(
+                    f"P0.2 SP+ DIRECTION CHECK FAILED: Only {positive_count}/{len(elite_sp)} "
+                    f"elite programs have positive SP+ ratings. Rating scale may be inverted!"
+                )
+            else:
+                logger.debug(
+                    f"P0.2 SP+ direction OK: {positive_count}/{len(elite_sp)} "
+                    f"elite programs positive"
+                )
+
+        # Validate normalized talent is consistent with raw talent direction
+        if talent_normalized and talent:
+            # Top raw talent team should also be top normalized
+            top_raw = max(talent, key=talent.get)
+            top_norm = max(talent_normalized, key=talent_normalized.get)
+            if top_raw != top_norm:
+                logger.warning(
+                    f"P0.2: Top raw talent ({top_raw}) != top normalized ({top_norm}) - check normalization"
+                )
+
     def calculate_preseason_ratings(
         self,
         year: int,
@@ -1007,6 +1084,9 @@ class PreseasonPriors:
         portal_impact = {}
         if use_portal:
             portal_impact = self.calculate_portal_impact(year, portal_scale=portal_scale)
+
+        # P0.2: Validate data quality and rank direction
+        self._validate_data_quality(prior_sp, talent, talent_normalized, returning_prod, portal_impact)
 
         # Get all teams - DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(set(prior_sp.keys()) | set(talent.keys()))
@@ -1073,10 +1153,10 @@ class PreseasonPriors:
                 regressed_prior = 0.0  # Average team
                 prior_confidence = 0.2
 
-            # Get talent score
+            # Get talent score (both raw and normalized)
             if team in talent_normalized:
-                talent_score = talent_normalized[team]
-                talent_raw = talent[team]
+                talent_score = talent_normalized[team]  # On SP+ scale (z-score * 12)
+                talent_raw = talent[team]  # Raw API value (~500-1000)
                 talent_confidence = 0.6
             else:
                 talent_score = 0.0
@@ -1169,6 +1249,7 @@ class PreseasonPriors:
                 team=team,
                 prior_rating=regressed_prior,
                 talent_score=talent_raw,
+                talent_rating_normalized=talent_score,  # P0.1: on SP+ scale
                 returning_ppa=ret_ppa if ret_ppa is not None else 0.5,
                 combined_rating=combined,
                 confidence=min(confidence, 1.0),
@@ -1270,15 +1351,11 @@ class PreseasonPriors:
             preseason = self.get_preseason_rating(team)
             inseason = inseason_ratings.get(team, 0.0)
 
-            # Get talent score for persistent floor
+            # P0.1: Use normalized talent (already on SP+ rating scale) for persistent floor
+            # Previously used ad hoc (raw - 750) / 25.0 which was on a different scale
             talent_rating = 0.0
             if team in self.preseason_ratings:
-                # Normalize talent score to rating scale
-                # talent_score is raw (500-1000), need to convert
-                raw_talent = self.preseason_ratings[team].talent_score
-                if raw_talent > 0:
-                    # Simple normalization: top talent (~1000) -> +15, low (~600) -> -10
-                    talent_rating = (raw_talent - 750) / 25.0
+                talent_rating = self.preseason_ratings[team].talent_rating_normalized
 
             # Blend: prior + in-season + persistent talent floor
             blended[team] = (

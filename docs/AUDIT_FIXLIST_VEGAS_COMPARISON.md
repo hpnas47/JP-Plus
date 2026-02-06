@@ -18,13 +18,12 @@
 
 ---
 
-- [ ] **P0.2 Add `game_id` to ValuePlay outputs**
+- [x] **P0.2 Add `game_id` to ValuePlay outputs** -- FIXED 2026-02-05
   - **Issue:** `ValuePlay` does not include `game_id`, making it hard to join to outcomes, lines, CLV, or movement without team-name matching.
   - **Acceptance criteria:**
     - `ValuePlay` includes `game_id` when available.
     - DataFrame outputs include `game_id`.
-  - **Claude nudge prompt:**
-    > Extend the value play outputs to carry `game_id` end-to-end so value plays can be joined reliably to betting lines and results. Avoid team-name matching as the primary key wherever possible.
+  - **Fix applied:** Added `game_id` field to ValuePlay dataclass. `identify_value_plays()` passes game_id from prediction. `value_plays_to_dataframe()` includes game_id column. `compare_prediction()` returns game_id from matched VegasLine.
 
 ---
 

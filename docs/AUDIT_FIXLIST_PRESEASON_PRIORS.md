@@ -18,41 +18,38 @@ This module is feature-rich (asymmetric regression, coaching change, portal impa
 
 ## P0 — Must Fix (correctness / consistency)
 
-- [ ] **P0.1 Unify talent scaling across the entire class**
-  - **Issue:** Talent is used on a normalized rating scale in preseason blending, but later “talent floor” uses a different ad hoc scaling derived from raw talent.
+- [x] **P0.1 Unify talent scaling across the entire class** -- FIXED 2026-02-05
+  - **Issue:** Talent is used on a normalized rating scale in preseason blending, but later "talent floor" uses a different ad hoc scaling derived from raw talent.
   - **Acceptance criteria:**
     - Store both `talent_raw` (API value) and `talent_rating_normalized` (rating-scale value).
     - Use a single normalized talent rating scale consistently for:
       - preseason talent blend
       - persistent talent floor
     - Remove or clearly deprecate the ad hoc `(raw_talent - 750) / 25.0` mapping.
-  - **Claude nudge prompt:**
-    > Audit PreseasonPriors for talent scaling consistency. Ensure the talent component used in preseason blending and the persistent talent floor are on the same rating scale. Store both raw and normalized talent explicitly and prevent accidental mixing.
+  - **Fix applied:** Added `talent_rating_normalized` field to PreseasonRating dataclass. `blend_with_inseason()` now uses the z-score-normalized talent (same scale as preseason blending) instead of the ad hoc `(raw - 750) / 25.0`. Backtest 5+ edge improved from 53.2% to 54.7%.
 
 ---
 
-- [ ] **P0.2 Add sanity checks to ensure ranking direction and gaps behave as intended**
-  - **Issue:** Coaching-change logic depends on ranks meaning “lower = better.” If talent data is ever rank-like (lower=better) rather than score-like (higher=better), everything flips.
+- [x] **P0.2 Add sanity checks to ensure ranking direction and gaps behave as intended** -- FIXED 2026-02-05
+  - **Issue:** Coaching-change logic depends on ranks meaning "lower = better." If talent data is ever rank-like (lower=better) rather than score-like (higher=better), everything flips.
   - **Acceptance criteria:**
     - Add a sanity/validation routine that checks:
       - known elite talent teams appear near the top of the talent ranks
       - known poor talent teams appear near the bottom
       - reported `talent_gap` sign matches documentation for a few examples
     - Log intersection sizes between SP+/talent/returning production/portal datasets.
-  - **Claude nudge prompt:**
-    > Add a preseason priors sanity report that validates dataset intersections and confirms rank direction assumptions (higher talent score → better rank). Include a few example checks so coaching adjustments cannot silently invert.
+  - **Fix applied:** Added `_validate_data_quality()` method that logs dataset intersection sizes and validates rank direction using known elite programs (Alabama, Georgia, Ohio State, Texas, LSU). Checks talent top-20 presence, SP+ sign direction, and normalized vs raw talent consistency. Called at start of `calculate_preseason_ratings()`.
 
 ---
 
-- [ ] **P0.3 Align coaching-change tables with documented rules**
+- [x] **P0.3 Align coaching-change tables with documented rules** -- FIXED 2026-02-05
   - **Issue:** Comments say COACHING_CHANGES should contain only coaches with prior HC experience, but the dict includes first-time HCs (even though they are later excluded).
   - **Acceptance criteria:**
     - Make the data structures consistent with your stated policy:
       - either remove first-time HCs from COACHING_CHANGES, or
       - rename/repurpose the table and rely on pedigree logic explicitly
-    - Avoid ambiguous states where a coach is “listed but excluded.”
-  - **Claude nudge prompt:**
-    > Audit coaching-change metadata and make it consistent with the documented policy. Ensure first-time HCs are handled cleanly (either excluded at the data layer or explicitly filtered by pedigree), and add minimal validation so the tables don’t drift over time.
+    - Avoid ambiguous states where a coach is "listed but excluded."
+  - **Fix applied:** Removed Dan Lanning from COACHING_CHANGES[2022] (he's already in FIRST_TIME_HCS). Cross-referenced all COACHING_CHANGES entries against FIRST_TIME_HCS — no other conflicts found. Added comment explaining the removal.
 
 ---
 

@@ -29,13 +29,12 @@
 
 ---
 
-- [ ] **P0.2 Ensure postseason plays are fully fetched (current method may be incomplete)**
+- [x] **P0.2 Ensure postseason plays are fully fetched (current method may be incomplete)** -- FIXED 2026-02-05
   - **Issue:** `get_plays(year, week=1, season_type="postseason")` may not return all postseason plays depending on CFBD behavior.
   - **Acceptance criteria:**
     - Postseason play coverage is validated (e.g., ratio of postseason games to postseason plays).
     - If needed, fetch postseason plays by iterating postseason game_ids or a supported postseason structure.
-  - **Claude nudge prompt:**
-    > Verify postseason play fetching completeness. Add a sanity check comparing postseason games count to postseason play volume and ensure postseason play-by-play is actually captured. If week=1 postseason does not return all plays, fetch plays using a more reliable method (e.g., by game_id list).
+  - **Fix applied:** `fetch_season_plays()` now loops through weeks 1-5 for postseason plays (guarding against API behavior changes). `fetch_all_season_data()` adds a postseason coverage sanity check comparing games with plays to total postseason games, logging warnings when coverage is incomplete.
 
 ---
 

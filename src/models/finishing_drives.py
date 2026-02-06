@@ -422,7 +422,7 @@ class FinishingDrivesModel:
                 rz_touchdowns=int(rz_tds),
                 rz_field_goals=int(rz_fgs),
                 rz_turnovers=int(rz_turnovers),
-                rz_failed=int(rz_failed_4th),
+                rz_failed=int(rz_failed),
                 goal_to_go_tds=int(gtg_tds),
                 goal_to_go_attempts=int(gtg_attempts),
             )
