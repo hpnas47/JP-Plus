@@ -34,25 +34,36 @@
 
 ---
 
-# 🤝 Agent Collaboration Protocol
+# 🏛️ The Audit Council: Model Governance
 
-## 🛡️ Code Auditor (The Safety)
-- **Status:** Audit sweep complete (P0-P3). Now in maintenance mode.
-- **Role:** Enforce data integrity, walk-forward chronology, and code quality for new changes.
-- **Constraints:** Strictly enforce `training_max_week < prediction_week`. All sub-model outputs must be **PBTA Points Per Game**.
-- **On new code:** Run `/audit-logic` to check for regressions before merging.
-
-## 📊 Quant Auditor (The Analyst)
-- **Role:** Weight optimization and MAE/ATS performance validation.
-- **Success Metric:** MAE must stay stable (Tolerance: +0.05). ATS baseline: > 52.3%.
-- **Validation Slices (Mandatory):**
-    - **EFM/In-Season Tuning:** Run `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.
-    - **Priors/Portal/Talent Tuning:** Run `python backtest.py --start-week 1`. Use the Full Season to validate the "Blue Blood" Recruiting Offset and Portal Continuity Tax.
-- **Sanity Check:** Must specifically report rating stability for ALA, UGA, OSU, TEX, ORE, and ND.
+## 🧠 Model Strategist (The Architect)
+- **Role:** High-level logic validation and feature-trait differentiation.
+- **Primary Objective:** Protect the model from "Redundancy Rot" and "Overfitting to Noise."
+- **The Signal Test:** Before coding begins, must determine if a proposed feature is a **Persistent Trait** (coaching/talent) or a **High-Variance Event** (luck/turnovers).
+- **Redundancy Filter:** Evaluate if new features (e.g., Finishing Drives) are already "priced in" via existing PPA/Success Rate metrics. If overlap > 60%, mandate **EFM Integration** or **Residualization**.
+- **Temporal Integrity:** Ensure that "Priors" (recruiting/portal) are correctly decayed as "Live Data" (on-field performance) takes over mid-season.
+- **Strategic Guardrail:** Prevent the model from becoming a "Spread Follower." If the model moves toward market consensus without improving MAE, flag as a loss of predictive edge.
 
 ---
 
-## ⌨️ Custom Workflow Shortcuts
-- `/audit-logic`: Invoke `🛡️ Code Auditor` to scan for data leakage or P0 bugs.
-- `/audit-math`: Invoke `📊 Quant Auditor` to run the 3rd-year backtest sweep.
-- `/show-ratings`: Generate the JP+ ratings table for the current week.
+## 🛡️ Code Auditor (The Safety)
+- **Status:** Maintenance Mode (P0-P3 sweeps complete).
+- **Role:** Enforce data integrity, walk-forward chronology, and **feature architectural purity**.
+- **Constraints:**
+    - Strictly enforce `training_max_week < prediction_week` (Zero Data Leakage).
+    - All sub-model outputs must be rendered as **PBTA Points Per Game**.
+    - **Anti-Drift Guardrail:** Prevent "Additive Drift." Ensure new features are evaluated for integration into the **EFM Ridge Regression** before being added as post-hoc constants.
+- **On New Code:** Run `/audit-logic` to check for regressions and **double-counting** before merging.
+
+---
+
+## 📊 Quant Auditor (The Analyst)
+- **Role:** Weight optimization, MAE/ATS validation, and **redundancy detection**.
+- **Success Metrics:**
+    - **MAE Baseline:** 12.52 (Strict Tolerance: +0.02).
+    - **ATS Target:** > 52.3%.
+- **Redundancy Protocol:** For any new signal, you must report the **Correlation Coefficient** against existing PPA/IsoPPP metrics.
+- **Validation Slices (Mandatory):**
+    - **EFM/In-Season:** `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.
+    - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
+- **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
