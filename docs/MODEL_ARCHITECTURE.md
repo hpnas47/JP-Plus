@@ -15,105 +15,137 @@
 
 ## Backtest Performance (2022-2025)
 
-Walk-forward backtest across 4 seasons covering the full CFB calendar. Model trained on data available at prediction time—no future leakage.
+Walk-forward backtest across 4 seasons covering the full CFB calendar (3,273 games). Model trained on data available at prediction time — no future leakage.
+
+*All metrics verified 2026-02-06.*
+
+### Understanding the Metrics
+
+- **MAE (Mean Absolute Error):** Average points off from actual margin. Vegas closing lines typically have MAE ~11-12 vs actuals — college football is inherently unpredictable.
+- **RMSE (Root Mean Squared Error):** Like MAE but penalizes large misses more. RMSE > MAE indicates occasional blowout misses; the gap shows tail risk.
+- **ATS (Against The Spread):** Win rate vs Vegas spread. 52.4%+ is profitable at -110 odds.
+- **CLV (Closing Line Value):** How the market moves after we identify an edge. Positive CLV = sharp money agrees with us. Gold standard for real edge.
 
 ### Performance by Season Phase
 
-*All metrics from walk-forward backtest across 2022–2025 (4 seasons). Verified 2026-02-06.*
-
-| Phase | Weeks | Games | MAE | MAE vs Close | ATS % | 3+ Edge | 5+ Edge | Mean CLV |
-|-------|-------|-------|-----|--------------|-------|---------|---------|----------|
-| **Calibration** | 1–3 | 597 | 14.95 | 7.89 | 47.1% | 48.2% | 48.0% | -0.30 |
-| **Core** | 4–15 | 2,485 | 12.52 | 4.42 | 52.0% | 52.3% | 53.5% | -0.12 |
-| **Postseason** | 16+ | 176 | 13.40 | 5.28 | 46.2% | 48.1% | 47.3% | -0.41 |
-| **Full Season** | All | 3,258 | 13.03 | 5.10 | 50.8% | 51.2% | 51.7% | -0.27 |
+| Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
+|-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
+| **Calibration** | 1–3 | 608 | 14.96 | 18.88 | 46.9% | 48.2% | 48.4% | 47.6% | 48.8% |
+| **Core** | **4–15** | **2,489** | **12.52** | **15.84** | **51.9%** | **53.4%** | **53.6%** | **55.0%** | **56.9%** |
+| **Postseason** | 16+ | 176 | 13.39 | 16.72 | 47.4% | 48.3% | 48.1% | 43.8% | 47.8% |
+| **Full Season** | All | 3,273 | 13.02 | 16.49 | 50.7% | 52.2% | 52.2% | 52.5% | 54.4% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone with 52.0% ATS and 53.5% at 5+ point edge
-- **Postseason (Weeks 16+)**: Bowl games struggle (46.2% ATS) due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
-
-*MAE vs closing measures distance to the efficient closing line—a cleaner engine quality metric than MAE vs actual.*
+- **Core (Weeks 4-15)**: Profitable zone — 55.0% ATS at 5+ edge vs closing, 56.9% vs opening
+- **Postseason (Weeks 16+)**: Bowl games struggle due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 ### Core Season Detail (Weeks 4-15)
 
-The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,485-game sample.
+The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,489-game sample.
 
 #### Against The Spread (ATS)
 
-*Core season only (Weeks 4–15, 2,485 games, 2022–2025). Verified 2026-02-06.*
+| Edge Filter | vs Closing Line | vs Opening Line |
+|-------------|-----------------|-----------------|
+| **All picks** | 1,264-1,173 (51.9%) | 1,309-1,141 (53.4%) |
+| **3+ pt edge** | 768-665 (53.6%) | 814-656 (55.4%) |
+| **5+ pt edge** | 493-404 (55.0%) | 530-401 (56.9%) |
 
-| Edge Filter | vs Closing Line |
-|-------------|-----------------|
-| **All picks** | 52.0% |
-| **3+ pt edge** | 738-672 (52.3%) |
-| **5+ pt edge** | 474-412 (53.5%) |
+Opening line performance exceeds closing line by ~2%, indicating the model captures value that the market prices out by game time.
 
-**Key insight:** 5+ point edge performance (53.5%) is the model's highest-conviction signal. These represent ~886 games where the model disagrees with Vegas by 5+ points.
+#### ATS by Season (Core, vs Closing Line)
+
+| Year | Games | ATS % | 3+ Edge | 5+ Edge |
+|------|-------|-------|---------|---------|
+| 2022 | 605 | 52.0% | 183-169 (52.0%) | 124-107 (53.7%) |
+| 2023 | 611 | 52.7% | 200-165 (54.8%) | 130-100 (56.5%) |
+| 2024 | 631 | 49.3% | 194-172 (53.0%) | 127-106 (54.5%) |
+| 2025 | 638 | 53.5% | 191-159 (54.6%) | 112-91 (55.2%) |
+
+2024 was the weakest overall ATS year, but the Core 5+ edge still hit 54.5%. The edge concentrates in high-conviction plays regardless of year.
+
+#### ATS by Season (Core, vs Opening Line)
+
+| Year | Games | ATS % | 3+ Edge | 5+ Edge |
+|------|-------|-------|---------|---------|
+| 2022 | 605 | 52.1% | 197-161 (55.0%) | 127-102 (55.5%) |
+| 2023 | 611 | 55.0% | 205-167 (55.1%) | 139-99 (58.4%) |
+| 2024 | 631 | 52.5% | 210-174 (54.7%) | 141-103 (57.8%) |
+| 2025 | 638 | 54.1% | 202-154 (56.7%) | 123-97 (55.9%) |
 
 #### Closing Line Value (CLV)
 
-*Standard run (Weeks 4+, 2,665 games with lines, 2022–2025). Verified 2026-02-06.*
-
 CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
 
-| Edge Filter | N | Mean CLV | CLV > 0 | ATS % |
-|-------------|---|----------|---------|-------|
-| **All picks** | 2,661 | -0.14 | 34.0% | 51.6% |
-| **3+ pt edge** | 1,547 | -0.27 | 32.6% | 52.0% |
-| **5+ pt edge** | 979 | -0.32 | 30.5% | 53.0% |
-| **7+ pt edge** | 535 | -0.47 | 27.9% | 53.6% |
+**Core Season (Weeks 4-15, 2,485 games):**
 
-**Interpretation:** CLV is slightly negative, indicating the market does not consistently move toward our predictions. However, ATS performance at higher edge thresholds (53.6% at 7+ pts) demonstrates the model still finds actionable disagreements with the market.
+| Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
+|-------------|---|----------|---------|---------------|
+| All picks | 2,485 | -0.29 | 32.8% | 51.9% |
+| 3+ pt edge | 1,461 | -0.44 | 30.2% | 53.6% |
+| **5+ pt edge** | **916** | **-0.51** | **29.3%** | **55.0%** |
+| 7+ pt edge | 497 | -0.55 | 27.6% | 56.7% |
 
-### Results by Year
+**CLV vs Opening Line (value available at bet time):**
 
-*Core season only (Weeks 4–15). Verified 2026-02-06.*
+| Edge Filter | N | Mean CLV (Open→Close) | ATS % (Open) |
+|-------------|---|----------------------|--------------|
+| All picks | 3,258 | +0.44 | 52.2% |
+| 3+ pt edge | 2,010 | +0.60 | 53.8% |
+| **5+ pt edge** | **1,341** | **+0.71** | **54.4%** |
+| 7+ pt edge | 820 | +0.88 | 56.4% |
 
-| Year | Games | MAE | RMSE |
-|------|-------|-----|------|
-| 2022 | 606 | 12.83 | 16.48 |
-| 2023 | 614 | 12.39 | 15.65 |
-| 2024 | 631 | 12.72 | 15.79 |
-| 2025 | 638 | 12.18 | 15.44 |
-| **All** | **2,489** | **12.53** | **15.84** |
+When measured against opening lines, CLV is strongly positive — the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
+
+**Interpretation:** CLV vs closing is slightly negative (the market doesn't fully move to us), but ATS is strongly positive. This pattern suggests JP+ exploits structural inefficiencies (public bias, schedule spots) rather than information sharps eventually price in.
+
+### MAE & RMSE by Season
+
+| Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | RMSE (Core) | MAE (Cal) | RMSE (Cal) | MAE (Post) | RMSE (Post) |
+|------|-------------|------------|-------------|------------|-------------|-----------|------------|------------|-------------|
+| 2022 | 802 | 13.41 | 17.11 | 12.77 | 16.33 | 15.96 | 19.99 | 13.29 | 16.59 |
+| 2023 | 816 | 13.15 | 16.62 | 12.46 | 15.77 | 15.06 | 18.66 | 15.88 | 20.07 |
+| 2024 | 818 | 13.12 | 16.39 | 12.67 | 15.73 | 15.45 | 19.50 | 12.18 | 14.68 |
+| 2025 | 837 | 12.42 | 15.86 | 12.19 | 15.54 | 13.39 | 17.31 | 12.43 | 15.31 |
+| **All** | **3,273** | **13.02** | **16.49** | **12.52** | **15.84** | **14.96** | **18.88** | **13.39** | **16.72** |
 
 **Notes:**
-- Core season (Weeks 4-15) only — excludes calibration (weeks 1-3) and postseason
-- Best MAE performance in 2025 (12.18) and 2023 (12.39)
-- MAE improves as more seasons of data become available for prior calibration
+- Best MAE in 2025 (12.19 Core), improving from 12.77 in 2022
+- Calibration MAE drops significantly in 2025 (13.39 vs 15-16 in prior years) — better priors calibration
+- RMSE/MAE ratio ~1.27 across all slices, indicating reasonably consistent error distribution
 
-**2025 Top 25** (end-of-season including CFP):
+### 2025 Top 25 (End of Season Including CFP)
 
-| Rank | Team | Overall | Off | Def |
-|------|------|---------|-----|-----|
-| 1 | Ohio State | +27.5 | +12.9 | +14.6 |
-| 2 | **Indiana** | +26.8 | +15.1 | +10.7 |
-| 3 | Notre Dame | +25.4 | +12.5 | +11.9 |
-| 4 | Oregon | +23.4 | +11.4 | +11.8 |
-| 5 | Miami | +22.8 | +9.3 | +13.1 |
-| 6 | Texas Tech | +22.0 | +3.4 | +17.9 |
-| 7 | Texas A&M | +19.2 | +10.1 | +9.8 |
-| 8 | Alabama | +18.8 | +7.0 | +11.1 |
-| 9 | Georgia | +17.5 | +8.1 | +9.4 |
-| 10 | Utah | +17.5 | +11.3 | +6.2 |
-| 11 | Vanderbilt | +17.4 | +17.1 | +0.3 |
-| 12 | Oklahoma | +16.8 | +0.9 | +16.0 |
-| 13 | Missouri | +16.5 | +4.4 | +12.5 |
-| 14 | Ole Miss | +16.2 | +12.3 | +4.0 |
-| 15 | Washington | +16.1 | +9.3 | +6.6 |
-| 16 | Louisville | +15.1 | +6.1 | +8.6 |
-| 17 | Tennessee | +14.1 | +12.1 | +1.6 |
-| 18 | James Madison | +14.1 | +3.2 | +11.0 |
-| 19 | BYU | +13.7 | +7.7 | +5.6 |
-| 20 | Texas | +13.4 | +3.5 | +9.4 |
-| 21 | South Florida | +12.7 | +6.4 | +5.7 |
-| 22 | Florida State | +12.3 | +10.9 | +1.5 |
-| 23 | Penn State | +12.0 | +7.9 | +4.1 |
-| 24 | USC | +11.8 | +12.6 | -0.9 |
-| 25 | Auburn | +11.5 | +3.0 | +8.1 |
+| Rank | Team | Overall | Off (rank) | Def (rank) | ST (rank) |
+|------|------|---------|------------|------------|-----------|
+| 1 | **Indiana** | +30.9 | +19.3 (2) | +11.6 (9) | +1.09 (30) |
+| 2 | Ohio State | +30.8 | +16.6 (6) | +14.2 (3) | +1.06 (32) |
+| 3 | Oregon | +28.2 | +16.5 (7) | +11.6 (8) | +0.63 (52) |
+| 4 | Notre Dame | +28.2 | +15.9 (9) | +12.3 (5) | -0.76 (114) |
+| 5 | Miami | +27.4 | +14.3 (14) | +13.1 (4) | +1.25 (24) |
+| 6 | Alabama | +25.7 | +14.0 (15) | +11.7 (6) | -0.16 (90) |
+| 7 | Texas Tech | +25.5 | +9.3 (42) | +16.2 (1) | +1.47 (14) |
+| 8 | Utah | +24.9 | +16.6 (5) | +8.2 (24) | +0.43 (62) |
+| 9 | Oklahoma | +24.6 | +8.5 (48) | +16.1 (2) | +1.76 (9) |
+| 10 | Texas A&M | +23.6 | +13.0 (17) | +10.6 (12) | -0.63 (112) |
+| 11 | Georgia | +23.4 | +13.0 (18) | +10.4 (14) | +2.74 (1) |
+| 12 | Washington | +23.0 | +15.0 (13) | +7.9 (26) | -0.55 (109) |
+| 13 | Vanderbilt | +22.5 | +19.8 (1) | +2.7 (60) | +2.55 (2) |
+| 14 | Ole Miss | +21.8 | +16.0 (8) | +5.8 (37) | +2.33 (3) |
+| 15 | Missouri | +21.6 | +10.3 (35) | +11.3 (11) | +0.03 (83) |
+| 16 | Texas | +20.8 | +9.0 (44) | +11.7 (7) | +0.63 (51) |
+| 17 | Louisville | +20.6 | +11.7 (26) | +8.9 (20) | +1.12 (28) |
+| 18 | BYU | +20.2 | +12.0 (24) | +8.2 (23) | +0.61 (53) |
+| 19 | Tennessee | +19.2 | +15.4 (12) | +3.9 (54) | +1.66 (13) |
+| 20 | Penn State | +19.1 | +12.8 (19) | +6.3 (31) | +2.25 (4) |
+| 21 | Florida State | +19.1 | +15.5 (11) | +3.6 (56) | +0.49 (60) |
+| 22 | Auburn | +18.7 | +9.6 (38) | +9.1 (19) | +0.73 (44) |
+| 23 | USC | +18.6 | +15.6 (10) | +3.0 (59) | +0.49 (59) |
+| 24 | Iowa | +18.4 | +8.2 (53) | +10.2 (15) | +0.93 (35) |
+| 25 | Michigan | +18.1 | +13.1 (16) | +5.0 (43) | -0.58 (110) |
 
-**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP.
+**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP. JP+ ranks them #1 with the #2 offense and #9 defense.
 
 ### Betting Line Data Sources
 

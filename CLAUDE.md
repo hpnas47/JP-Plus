@@ -16,15 +16,14 @@
 
 ## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-06)
 
-| Slice | Weeks | Games | MAE | ATS |
-|-------|-------|-------|-----|-----|
-| **Full (`--start-week 1`)** | 1–Post | 3,258 | 13.00 | 50.2% |
-| Phase 1 (Calibration) | 1–3 | 597 | 14.95 | 47.3% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.49** | **51.3%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.40 | 47.4% |
-| **Standard (`--start-week 4`)** | 4–Post | 2,665 | 12.55 | 51.0% |
-| 3+ Edge (Core) | 4–15 | 1,379 | — | 52.9% (730-649) |
-| 5+ Edge (Core) | 4–15 | 840 | — | 54.8% (460-380) |
+| Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
+|-------|-------|-------|-----|------|-------------|------------|
+| **Full (`--start-week 1`)** | 1–Post | 3,273 | 13.02 | 16.49 | 50.7% | 52.2% |
+| Phase 1 (Calibration) | 1–3 | 608 | 14.96 | 18.88 | 46.9% | 48.2% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.52** | **15.84** | **51.9%** | **53.4%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.39 | 16.72 | 47.4% | 48.3% |
+| 3+ Edge (Core) | 4–15 | 1,433 | — | — | 53.6% (768-665) | 55.4% (814-656) |
+| 5+ Edge (Core) | 4–15 | 897 | — | — | 55.0% (493-404) | 56.9% (530-401) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
