@@ -81,24 +81,15 @@
 
 ## P2 — Evaluation quality improvements (trust the results)
 
-- [ ] **P2.1 Update week coverage sanity checks to account for postseason or explicitly exclude it**
+- [x] **P2.1 Update week coverage sanity checks to account for postseason or explicitly exclude it** -- FIXED 2026-02-05
   - **Issue:** Sanity checks expect only weeks 1–15 but data may include week 16 postseason.
-  - **Acceptance criteria:**
-    - Coverage checks explicitly handle postseason (either include it or exclude it with clear messaging).
-  - **Claude nudge prompt:**
-    > Make week coverage sanity checks consistent with the dataset scope. If postseason is included, adjust expected weeks accordingly or explicitly exclude postseason from coverage checks and explain the decision in logs.
+  - **Fix applied:** `print_data_sanity_report()` and `fetch_all_season_data()` now separate regular-season (1-15) from postseason (16+) in coverage checks. Missing-week warnings specify "regular-season." Postseason pseudo-week count reported separately. Warning added when postseason games exist but no postseason plays found.
 
 ---
 
-- [ ] **P2.2 Add explicit sanity checks for postseason play coverage**
-  - **Issue:** It’s easy to include postseason games but miss postseason plays.
-  - **Acceptance criteria:**
-    - When postseason is enabled, log a postseason coverage summary:
-      - number of postseason games
-      - number of postseason efficiency plays
-      - warning if suspiciously low.
-  - **Claude nudge prompt:**
-    > Add postseason-specific sanity reporting (games vs play count) to detect missing postseason plays early and avoid silent partial-season training.
+- [x] **P2.2 Add explicit sanity checks for postseason play coverage** -- FIXED 2026-02-05
+  - **Issue:** It's easy to include postseason games but miss postseason plays.
+  - **Fix applied:** Enhanced P0.2 postseason coverage check to include total play count and average plays/game. Warns if avg plays/game < 80 (suspiciously low). Debug log includes complete postseason statistics (games, plays, plays/game).
 
 ---
 

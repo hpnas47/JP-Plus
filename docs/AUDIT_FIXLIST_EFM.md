@@ -84,22 +84,15 @@
 
 ## P2 — Engineering correctness & robustness
 
-- [ ] **P2.1 Avoid pandas SettingWithCopy pitfalls after filtering**
+- [x] **P2.1 Avoid pandas SettingWithCopy pitfalls after filtering** -- FIXED 2026-02-05
   - **Issue:** `df = df[keep_mask]` then assigning new columns can cause SettingWithCopy issues in pandas.
-  - **Acceptance criteria:**
-    - Ensure the filtered DataFrame is writable (explicit copy once after filtering).
-    - Add an assertion verifying expected columns exist after preprocessing.
-  - **Claude nudge prompt:**
-    > Make preprocessing robust to pandas view/copy pitfalls. Ensure assignments after filtering operate on a guaranteed writable DataFrame, and add a small assertion/test verifying expected columns (is_success, weight, etc.) exist.
+  - **Fix applied:** Added `.copy()` after `df = df[keep_mask]` to guarantee writable DataFrame. Added assertion verifying expected columns (`is_success`, `weight`, `offense`, `defense`, `ppa`) exist after preprocessing. Added NaN guard before ridge `.fit()` — if NaN somehow reaches `y` or `weights`, drops those rows with a warning instead of crashing.
 
 ---
 
-- [ ] **P2.2 Cache `settings` thresholds to reduce repeated calls**
+- [x] **P2.2 Cache `settings` thresholds to reduce repeated calls** -- FIXED 2026-02-05
   - **Issue:** `get_settings()` is called inside vectorized garbage-time functions; not expensive per call, but repeated across backtest weeks.
-  - **Acceptance criteria:**
-    - Cache garbage-time thresholds (and any frequently used settings) on the model instance or module level for repeated runs.
-  - **Claude nudge prompt:**
-    > Reduce repeated configuration lookups during repeated backtest calls by caching frequently used settings (e.g., garbage time thresholds) in the model instance.
+  - **Fix applied:** Added module-level `_GT_THRESHOLDS` cache tuple. `is_garbage_time_vectorized()` reads from `get_settings()` once on first call and caches the (q1, q2, q3, q4) threshold tuple for all subsequent calls. `get_settings()` was already a singleton but this eliminates the per-call attribute lookups and dict construction.
 
 ---
 

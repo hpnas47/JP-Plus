@@ -69,11 +69,9 @@ The script works for basic capturing, but there are several issues that will cau
 
 ## P2 — Operational / quality improvements
 
-- [ ] **P2.1 Make preview grouping stable (prefer game_id)**
+- [x] **P2.1 Make preview grouping stable (prefer game_id)** -- FIXED 2026-02-05
   - **Issue:** Preview groups by `(home_team, away_team)` which can fail if home/away swaps for neutral-site listings.
-  - **Acceptance criteria:** Preview groups by `game_id` when available.
-  - **Claude nudge prompt:**
-    > Improve preview grouping to use the most stable key available (prefer game_id), and fall back to team-name keys only when necessary.
+  - **Fix applied:** Preview now groups by `game_id` when available, falling back to `(home_team, away_team)` tuple key when `game_id` is missing. Game info (home, away, commence) stored in the group dict for display.
 
 ---
 
@@ -85,11 +83,9 @@ The script works for basic capturing, but there are several issues that will cau
 
 ---
 
-- [ ] **P2.3 Normalize timestamps to UTC**
+- [x] **P2.3 Normalize timestamps to UTC** -- FIXED 2026-02-05
   - **Issue:** `datetime.now()` is local; provider timestamp may be UTC; stored ISO strings may be inconsistent.
-  - **Acceptance criteria:** Store timestamps with timezone awareness and/or normalized UTC consistently.
-  - **Claude nudge prompt:**
-    > Normalize timestamps (captured_at, snapshot_time, commence_time) to a consistent timezone (prefer UTC) and ensure stored ISO strings preserve timezone information.
+  - **Fix applied:** `captured_at` now uses `datetime.now(timezone.utc).isoformat()` for UTC-normalized timestamps. Provider `snapshot_time` and `commence_time` are preserved as-is from the API (already UTC). `get_current_week()` retains local time (appropriate for "what day is it?" logic).
 
 ---
 

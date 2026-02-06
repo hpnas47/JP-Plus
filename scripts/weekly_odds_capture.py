@@ -31,7 +31,7 @@ import logging
 import os
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
@@ -218,7 +218,7 @@ def capture_odds(
     """, (
         snapshot_label,
         snapshot.timestamp.isoformat(),
-        datetime.now().isoformat(),
+        datetime.now(timezone.utc).isoformat(),  # P2.3: UTC-normalized timestamp
         snapshot.credits_used,
         year,
         week,
@@ -304,19 +304,22 @@ def preview_odds(client: OddsAPIClient, year: int | None = None, week: int | Non
         print("No games currently available")
         return
 
-    # Group by game
+    # P2.1: Group by game_id when available, fall back to team-name key
     games = {}
     for line in snapshot.lines:
-        key = (line.home_team, line.away_team)
+        key = line.game_id if line.game_id else (line.home_team, line.away_team)
         if key not in games:
             games[key] = {
+                'home': line.home_team,
+                'away': line.away_team,
                 'commence': line.commence_time,
                 'lines': []
             }
         games[key]['lines'].append(line)
 
     print(f"Found {len(games)} games:\n")
-    for (home, away), info in sorted(games.items(), key=lambda x: str(x[1]['commence'])):
+    for _key, info in sorted(games.items(), key=lambda x: str(x[1]['commence'])):
+        home, away = info['home'], info['away']
         commence = info['commence'].strftime('%Y-%m-%d %H:%M') if info['commence'] else 'TBD'
         print(f"{away} @ {home} ({commence})")
         for line in info['lines'][:3]:  # Show up to 3 books

@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 _RIDGE_ADJUST_CACHE: dict[tuple, tuple[dict, dict, Optional[float]]] = {}
 _CACHE_STATS = {"hits": 0, "misses": 0}
 
+# P2.2: Cache garbage time thresholds at module level (avoids rebuilding per call)
+_GT_THRESHOLDS: Optional[tuple[float, float, float, float]] = None
+
 
 def clear_ridge_cache() -> dict:
     """Clear the ridge adjustment cache and return stats.
@@ -157,6 +160,7 @@ def is_garbage_time_vectorized(periods: np.ndarray, score_diffs: np.ndarray) -> 
     """Vectorized garbage time detection for entire DataFrame.
 
     P3.2 optimization: Replaces row-wise apply with vectorized numpy operations.
+    P2.2: Uses module-level cached thresholds to avoid repeated Settings lookups.
 
     Args:
         periods: Array of quarter/period values (1-4)
@@ -165,15 +169,24 @@ def is_garbage_time_vectorized(periods: np.ndarray, score_diffs: np.ndarray) -> 
     Returns:
         Boolean array indicating garbage time plays
     """
-    settings = get_settings()
+    global _GT_THRESHOLDS
+    if _GT_THRESHOLDS is None:
+        settings = get_settings()
+        _GT_THRESHOLDS = (
+            settings.garbage_time_q1,
+            settings.garbage_time_q2,
+            settings.garbage_time_q3,
+            settings.garbage_time_q4,
+        )
+    gt_q1, gt_q2, gt_q3, gt_q4 = _GT_THRESHOLDS
 
     # Build threshold array based on period
     # Default to Q4 threshold for periods outside 1-4 (OT, etc.)
-    thresholds = np.full(len(periods), settings.garbage_time_q4, dtype=np.float64)
-    thresholds[periods == 1] = settings.garbage_time_q1
-    thresholds[periods == 2] = settings.garbage_time_q2
-    thresholds[periods == 3] = settings.garbage_time_q3
-    thresholds[periods == 4] = settings.garbage_time_q4
+    thresholds = np.full(len(periods), gt_q4, dtype=np.float64)
+    thresholds[periods == 1] = gt_q1
+    thresholds[periods == 2] = gt_q2
+    thresholds[periods == 3] = gt_q3
+    thresholds[periods == 4] = gt_q4
 
     return score_diffs > thresholds
 
@@ -560,7 +573,8 @@ class EfficiencyFoundationModel:
         keep_mask &= ~nan_mask
 
         # Apply combined filter once (avoids multiple intermediate DataFrames)
-        df = df[keep_mask]
+        # P2.1: Explicit .copy() to prevent SettingWithCopy warnings on subsequent column assignments
+        df = df[keep_mask].copy()
 
         # P3.9: Debug level for per-week logging (runs many times during backtest)
         filtered_count = initial_count - len(df)
@@ -627,6 +641,11 @@ class EfficiencyFoundationModel:
 
         prep_time = time.time() - prep_start
         logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")
+
+        # P2.1: Verify expected columns exist after preprocessing
+        expected_cols = {"is_success", "weight", "offense", "defense", "ppa"}
+        missing_cols = expected_cols - set(df.columns)
+        assert not missing_cols, f"EFM preprocessing missing columns: {missing_cols}"
 
         return df
 
@@ -932,6 +951,19 @@ class EfficiencyFoundationModel:
             y = plays_df[metric_col].astype(float).values
         else:
             y = plays_df[metric_col].values
+
+        # P2.1: Guard against NaN in ridge inputs (would cause sklearn to fail silently or error)
+        nan_in_y = np.isnan(y).sum()
+        nan_in_w = np.isnan(weights).sum()
+        if nan_in_y > 0 or nan_in_w > 0:
+            logger.warning(
+                f"NaN detected before ridge fit: {nan_in_y} in target, {nan_in_w} in weights. "
+                "Dropping NaN rows to prevent ridge failure."
+            )
+            valid = ~(np.isnan(y) | np.isnan(weights))
+            X_sparse = X_sparse[valid]
+            y = y[valid]
+            weights = weights[valid]
 
         # Fit weighted ridge regression (sklearn Ridge supports sparse matrices)
         fit_start = time.time()

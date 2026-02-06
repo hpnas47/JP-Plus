@@ -1382,12 +1382,14 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
         betting_coverage = n_betting / n_games * 100 if n_games > 0 else 0
         betting_status = "✓" if betting_coverage >= 90 else "⚠" if betting_coverage >= 70 else "✗"
 
-        # Week coverage
+        # Week coverage — P2.1: separate regular season (1-15) from postseason (16+)
         weeks_with_games = set(games_df["week"].unique().to_list()) if n_games > 0 else set()
         weeks_with_plays = set(efficiency_plays_df["week"].unique().to_list()) if n_efficiency > 0 else set()
-        expected_weeks = set(range(1, 16))
-        missing_game_weeks = expected_weeks - weeks_with_games
-        missing_play_weeks = expected_weeks - weeks_with_plays
+        regular_expected = set(range(1, 16))
+        missing_game_weeks = regular_expected - weeks_with_games
+        missing_play_weeks = regular_expected - weeks_with_plays
+        postseason_game_weeks = {w for w in weeks_with_games if w >= 16}
+        postseason_play_weeks = {w for w in weeks_with_plays if w >= 16}
 
         # Track warnings
         if game_pct < 95:
@@ -1395,9 +1397,11 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
         if betting_coverage < 90:
             warnings.append(f"{year}: {betting_status} Betting {betting_coverage:.0f}%")
         if missing_game_weeks:
-            warnings.append(f"{year}: Missing game weeks {sorted(missing_game_weeks)}")
+            warnings.append(f"{year}: Missing regular-season game weeks {sorted(missing_game_weeks)}")
         if missing_play_weeks:
-            warnings.append(f"{year}: Missing play weeks {sorted(missing_play_weeks)}")
+            warnings.append(f"{year}: Missing regular-season play weeks {sorted(missing_play_weeks)}")
+        if postseason_game_weeks and not postseason_play_weeks:
+            warnings.append(f"{year}: Postseason games found (weeks {sorted(postseason_game_weeks)}) but no postseason plays")
 
         # P3.9: Per-year details only in verbose mode
         if verbose:
@@ -1412,9 +1416,11 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
             print(f"    FBS teams: {n_fbs}")
             print(f"    Efficiency plays: {n_efficiency:,}")
             if missing_game_weeks:
-                print(f"    ⚠ Missing game weeks: {sorted(missing_game_weeks)}")
+                print(f"    ⚠ Missing regular-season game weeks: {sorted(missing_game_weeks)}")
             if missing_play_weeks:
-                print(f"    ⚠ Missing play weeks: {sorted(missing_play_weeks)}")
+                print(f"    ⚠ Missing regular-season play weeks: {sorted(missing_play_weeks)}")
+            if postseason_game_weeks:
+                print(f"    Postseason: {len(postseason_game_weeks)} pseudo-week(s), plays in {len(postseason_play_weeks)} week(s)")
             if priors:
                 print(f"    Preseason priors: {len(priors.preseason_ratings)} teams")
 
@@ -1502,21 +1508,29 @@ def fetch_all_season_data(
         turnover_df = build_game_turnovers(games_df, turnover_plays_df)
         logger.debug(f"Built turnover margins for {len(turnover_df)} games")
 
-        # Sanity check: validate data completeness for determinism
-        weeks_with_games = games_df["week"].unique().to_list() if len(games_df) > 0 else []
-        weeks_with_plays = efficiency_plays_df["week"].unique().to_list() if len(efficiency_plays_df) > 0 else []
-        expected_weeks = set(range(1, 16))
-        missing_game_weeks = expected_weeks - set(weeks_with_games)
-        missing_play_weeks = expected_weeks - set(weeks_with_plays)
+        # P2.1: Sanity check — validate regular-season (1-15) completeness; report postseason separately
+        weeks_with_games = set(games_df["week"].unique().to_list()) if len(games_df) > 0 else set()
+        weeks_with_plays = set(efficiency_plays_df["week"].unique().to_list()) if len(efficiency_plays_df) > 0 else set()
+        regular_expected = set(range(1, 16))
+        missing_game_weeks = regular_expected - weeks_with_games
+        missing_play_weeks = regular_expected - weeks_with_plays
+        postseason_game_weeks = sorted(w for w in weeks_with_games if w >= 16)
+        postseason_play_weeks = sorted(w for w in weeks_with_plays if w >= 16)
 
         if missing_game_weeks or missing_play_weeks:
             logger.warning(
-                f"Data completeness check for {year}: "
-                f"games missing weeks {sorted(missing_game_weeks) if missing_game_weeks else 'none'}, "
+                f"Data completeness for {year}: "
+                f"regular-season games missing weeks {sorted(missing_game_weeks) if missing_game_weeks else 'none'}, "
                 f"plays missing weeks {sorted(missing_play_weeks) if missing_play_weeks else 'none'}"
             )
         else:
-            logger.debug(f"Data completeness check for {year}: all weeks 1-15 present")
+            logger.debug(f"Data completeness for {year}: all regular-season weeks 1-15 present")
+
+        if postseason_game_weeks:
+            logger.debug(
+                f"Postseason for {year}: {len(postseason_game_weeks)} game pseudo-weeks, "
+                f"{len(postseason_play_weeks)} play pseudo-weeks"
+            )
 
         # P0.2: Postseason play coverage check
         # Compare postseason games (from games_df) to games with efficiency plays
@@ -1532,16 +1546,26 @@ def fetch_all_season_data(
                 coverage_pct = (
                     len(postseason_play_game_ids & postseason_game_ids) / len(postseason_game_ids) * 100
                 )
+                # P2.2: Report postseason play count and warn if suspiciously low
+                n_postseason_plays = len(efficiency_plays_df.filter(pl.col("week") >= 16))
+                avg_plays_per_game = n_postseason_plays / len(postseason_game_ids) if postseason_game_ids else 0
+
                 if missing_play_games:
                     logger.warning(
-                        f"P0.2: Postseason play coverage {coverage_pct:.0f}% "
-                        f"({len(postseason_game_ids) - len(missing_play_games)}/{len(postseason_game_ids)} games) "
-                        f"for {year}"
+                        f"Postseason play coverage {coverage_pct:.0f}% "
+                        f"({len(postseason_game_ids) - len(missing_play_games)}/{len(postseason_game_ids)} games, "
+                        f"{n_postseason_plays} plays, {avg_plays_per_game:.0f} plays/game) for {year}"
+                    )
+                elif avg_plays_per_game < 80:
+                    logger.warning(
+                        f"Postseason play count suspiciously low: {n_postseason_plays} plays "
+                        f"across {len(postseason_game_ids)} games ({avg_plays_per_game:.0f} plays/game) for {year}"
                     )
                 else:
                     logger.debug(
-                        f"P0.2: Postseason play coverage 100% "
-                        f"({len(postseason_game_ids)} games) for {year}"
+                        f"Postseason play coverage 100% "
+                        f"({len(postseason_game_ids)} games, {n_postseason_plays} plays, "
+                        f"{avg_plays_per_game:.0f} plays/game) for {year}"
                     )
 
         # Fetch FBS teams for EFM filtering
