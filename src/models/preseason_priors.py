@@ -950,12 +950,13 @@ class PreseasonPriors:
             # Team is at or above expectations - apply mild uncertainty
             # but don't pull them down aggressively
             if talent_gap < -20:
-                # Significant overperformer with new coach - slight regression
-                forget_factor = 0.15  # Mild forget factor for prior success
-                prior_weight = self.prior_year_weight * (1 + forget_factor * 0.5)
+                # Significant overperformer losing their coach - expect regression
+                # toward talent (DECREASE prior_weight to trust talent more)
+                forget_factor = 0.15  # Mild forget factor
+                prior_weight = self.prior_year_weight * (1 - forget_factor)
                 talent_weight = 1 - prior_weight
                 logger.debug(
-                    f"{team}: Overperformer with new coach, mild regression "
+                    f"{team}: Overperformer losing coach, expect regression "
                     f"(talent #{talent_rank}, perf #{performance_rank})"
                 )
             else:
@@ -1015,11 +1016,27 @@ class PreseasonPriors:
             f"P0.2 data coverage: SP+={len(sp_teams)}, talent={len(talent_teams)}, "
             f"returning={len(ret_teams)}, portal={len(portal_teams)}"
         )
+        all_four = sp_teams & talent_teams & ret_teams & portal_teams
         logger.debug(
             f"  SP+ ∩ talent: {len(sp_teams & talent_teams)}, "
             f"SP+ ∩ returning: {len(sp_teams & ret_teams)}, "
-            f"all four: {len(sp_teams & talent_teams & ret_teams & portal_teams)}"
+            f"all four: {len(all_four)}"
         )
+
+        # P2.2: Report teams missing from key datasets (SP+ is the reference set)
+        if sp_teams:
+            missing_talent = sp_teams - talent_teams
+            missing_ret = sp_teams - ret_teams
+            if missing_talent:
+                logger.debug(
+                    f"P2.2: {len(missing_talent)} SP+ teams missing talent data: "
+                    f"{sorted(missing_talent)[:10]}{'...' if len(missing_talent) > 10 else ''}"
+                )
+            if missing_ret:
+                logger.debug(
+                    f"P2.2: {len(missing_ret)} SP+ teams missing returning production: "
+                    f"{sorted(missing_ret)[:10]}{'...' if len(missing_ret) > 10 else ''}"
+                )
 
         # Validate talent direction: known elite programs should have high raw scores
         # Higher talent score = better recruiting = should rank near top

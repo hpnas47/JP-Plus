@@ -26,6 +26,7 @@ class SpecialTeamsRating:
     punt_rating: float  # Punting value in points per game
     kickoff_rating: float  # Kickoff coverage + return value in points per game
     overall_rating: float  # Total ST marginal contribution (sum of components)
+    is_complete: bool = False  # P2.3: True only when all 3 components are populated
 
 
 class SpecialTeamsModel:
@@ -393,6 +394,12 @@ class SpecialTeamsModel:
         rating_a = self.team_ratings.get(team_a)
         rating_b = self.team_ratings.get(team_b)
 
+        # P2.3: Warn if using incomplete (FG-only) ratings in a matchup differential
+        if rating_a and not rating_a.is_complete:
+            logger.debug(f"ST rating for {team_a} is FG-only (incomplete)")
+        if rating_b and not rating_b.is_complete:
+            logger.debug(f"ST rating for {team_b} is FG-only (incomplete)")
+
         overall_a = rating_a.overall_rating if rating_a else 0.0
         overall_b = rating_b.overall_rating if rating_b else 0.0
 
@@ -458,6 +465,15 @@ class SpecialTeamsModel:
 
         fg_plays["distance"] = fg_plays["play_text"].apply(extract_distance)
 
+        # P2.1: Parse coverage diagnostics for FG distance
+        n_total_fg = len(fg_plays)
+        n_parsed_fg = fg_plays["distance"].notna().sum()
+        fg_parse_pct = n_parsed_fg / n_total_fg * 100 if n_total_fg > 0 else 0
+        if fg_parse_pct < 80:
+            logger.warning(f"FG distance parse coverage low: {fg_parse_pct:.0f}% ({n_parsed_fg}/{n_total_fg})")
+        else:
+            logger.debug(f"FG distance parse coverage: {fg_parse_pct:.0f}% ({n_parsed_fg}/{n_total_fg})")
+
         # Determine if made
         fg_plays["made"] = fg_plays["play_type"].str.contains("Good", case=False, na=False)
 
@@ -513,12 +529,14 @@ class SpecialTeamsModel:
             per_game_rating = total_paae / estimated_games
 
             # Create rating (FG-only for now, others zeroed)
+            # P2.3: is_complete=False — callers should use calculate_all_st_ratings_from_plays()
             rating = SpecialTeamsRating(
                 team=team,
                 field_goal_rating=per_game_rating,
                 punt_rating=0.0,
                 kickoff_rating=0.0,
                 overall_rating=per_game_rating,  # FG-only
+                is_complete=False,
             )
             self.team_ratings[team] = rating
 
@@ -618,6 +636,15 @@ class SpecialTeamsModel:
         punt_plays["is_touchback"] = punt_plays["play_text"].apply(is_touchback)
         punt_plays["is_inside_20"] = punt_plays["play_text"].apply(is_inside_20)
         punt_plays["return_yards"] = punt_plays["play_text"].apply(extract_return_yards)
+
+        # P2.1: Parse coverage diagnostics for punt gross yards
+        n_total_punts = len(punt_plays)
+        n_parsed_punts = punt_plays["gross_yards"].notna().sum()
+        punt_parse_pct = n_parsed_punts / n_total_punts * 100 if n_total_punts > 0 else 0
+        if punt_parse_pct < 80:
+            logger.warning(f"Punt gross yards parse coverage low: {punt_parse_pct:.0f}% ({n_parsed_punts}/{n_total_punts})")
+        else:
+            logger.debug(f"Punt gross yards parse coverage: {punt_parse_pct:.0f}% ({n_parsed_punts}/{n_total_punts})")
 
         # Filter out plays without parseable gross yards
         # P3.5: No second .copy() - already working with a copy, just filter in place
@@ -733,6 +760,16 @@ class SpecialTeamsModel:
             r'return(?:ed)?.*?(\d+)\s*(?:Yd|yard)', flags=re.IGNORECASE
         )
         kickoff_plays["return_yards"] = pd.to_numeric(return_match[0], errors="coerce")
+
+        # P2.1: Parse coverage diagnostics for kickoff return yards
+        non_tb = kickoff_plays[~kickoff_plays["is_touchback"]]
+        if len(non_tb) > 0:
+            n_parsed_ko = non_tb["return_yards"].notna().sum()
+            ko_parse_pct = n_parsed_ko / len(non_tb) * 100
+            if ko_parse_pct < 80:
+                logger.warning(f"Kickoff return yards parse coverage low: {ko_parse_pct:.0f}% ({n_parsed_ko}/{len(non_tb)} non-TB)")
+            else:
+                logger.debug(f"Kickoff return yards parse coverage: {ko_parse_pct:.0f}% ({n_parsed_ko}/{len(non_tb)} non-TB)")
 
         # For non-touchbacks without parsed return yards, use average
         kickoff_plays.loc[
@@ -876,6 +913,7 @@ class SpecialTeamsModel:
                 punt_rating=punt_rating,
                 kickoff_rating=kick_rating,
                 overall_rating=overall,
+                is_complete=True,  # P2.3: All 3 components populated
             )
 
         # P3.9: Debug level for per-week logging

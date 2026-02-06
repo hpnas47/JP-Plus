@@ -153,6 +153,11 @@ class FinishingDrivesModel:
     ) -> FinishingDrivesRating:
         """Calculate finishing drives rating from drive-level data.
 
+        P2.2: SECONDARY pathway — use when drive-level data is available but
+        play-by-play is not. Preferred over calculate_from_game_stats().
+
+        Hierarchy: calculate_all_from_plays() > calculate_from_drives() > calculate_from_game_stats()
+
         Args:
             team: Team name
             drives_df: DataFrame with drive data including:
@@ -164,6 +169,7 @@ class FinishingDrivesModel:
         Returns:
             FinishingDrivesRating for the team
         """
+        logger.debug(f"FD pathway: drive-level for {team}")
         # Filter to team's offensive drives that entered red zone
         team_drives = drives_df[drives_df["offense"] == team]
 
@@ -216,6 +222,11 @@ class FinishingDrivesModel:
     ) -> FinishingDrivesRating:
         """Calculate finishing drives rating from game-level statistics.
 
+        P2.2: TERTIARY pathway (last resort) — uses scoring proxies when
+        neither play-by-play nor drive-level data is available.
+
+        Hierarchy: calculate_all_from_plays() > calculate_from_drives() > calculate_from_game_stats()
+
         Args:
             team: Team name
             games_df: DataFrame with game stats
@@ -223,6 +234,7 @@ class FinishingDrivesModel:
         Returns:
             FinishingDrivesRating for the team
         """
+        logger.debug(f"FD pathway: game-stats fallback for {team}")
         home_games = games_df[games_df["home_team"] == team]
         away_games = games_df[games_df["away_team"] == team]
 
@@ -313,7 +325,11 @@ class FinishingDrivesModel:
     ) -> None:
         """Calculate finishing drives ratings for all teams from play-by-play data.
 
-        Identifies red zone plays (yards_to_goal <= 20) and tracks scoring outcomes.
+        P2.2: PRIMARY pathway — preferred for production and backtests.
+        Identifies red zone plays (yards_to_goal <= 20) and tracks scoring outcomes
+        at drive level using game_id + drive_id.
+
+        Hierarchy: calculate_all_from_plays() > calculate_from_drives() > calculate_from_game_stats()
 
         Args:
             plays_df: Play-by-play DataFrame with yards_to_goal, offense, play_type columns

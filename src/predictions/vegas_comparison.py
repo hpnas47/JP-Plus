@@ -148,7 +148,27 @@ class VegasComparison:
                 self.lines_by_id[vl.game_id] = vl
             self.lines[(game.home_team, game.away_team)] = vl  # Fallback: by team names
 
-        logger.info(f"Fetched {len(vegas_lines)} Vegas lines for {year} week {week}")
+        # P2.1: Opener data reliability diagnostics
+        n_lines = len(vegas_lines)
+        if n_lines > 0:
+            n_with_open = sum(1 for vl in vegas_lines if vl.spread_open is not None)
+            open_pct = n_with_open / n_lines * 100
+            if n_with_open > 0:
+                n_moved = sum(
+                    1 for vl in vegas_lines
+                    if vl.spread_open is not None and abs(vl.spread - vl.spread_open) > 0.5
+                )
+                moved_pct = n_moved / n_with_open * 100
+                logger.debug(
+                    f"Opener quality: {open_pct:.0f}% have spread_open, "
+                    f"{moved_pct:.0f}% moved >0.5 pts from open"
+                )
+            if open_pct < 50:
+                logger.warning(
+                    f"Opener data unreliable: only {open_pct:.0f}% of lines have spread_open"
+                )
+
+        logger.info(f"Fetched {n_lines} Vegas lines for {year} week {week}")
         return vegas_lines
 
     def get_line_by_id(self, game_id: int) -> Optional[VegasLine]:
@@ -387,17 +407,21 @@ class VegasComparison:
         self,
         home_team: str,
         away_team: str,
+        game_id: Optional[int] = None,
     ) -> Optional[dict]:
         """Get line movement information for a game.
+
+        P2.2: Supports game_id matching (preferred), falls back to team names.
 
         Args:
             home_team: Home team
             away_team: Away team
+            game_id: Optional CFBD game_id for reliable matching
 
         Returns:
             Dict with line movement info or None
         """
-        vegas = self.get_line(home_team, away_team)
+        vegas = self.get_line(home_team, away_team, game_id=game_id)
 
         if vegas is None or vegas.spread_open is None:
             return None
