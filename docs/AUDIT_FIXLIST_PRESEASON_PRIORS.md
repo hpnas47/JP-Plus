@@ -85,17 +85,9 @@ This module is feature-rich (asymmetric regression, coaching change, portal impa
 
 ---
 
-- [ ] **P2.2 Improve metadata/name consistency diagnostics**
+- [x] **P2.2 Improve metadata/name consistency diagnostics** -- FIXED 2026-02-05
   - **Issue:** Team naming mismatches across SP+, talent, returning production, and portal data can silently reduce coverage.
-  - **Acceptance criteria:**
-    - Log intersection counts:
-      - teams in SP+
-      - teams in talent
-      - teams in returning production
-      - teams with portal impact
-    - Report missing teams and consider a name normalization/alias layer if needed.
-  - **Claude nudge prompt:**
-    > Add diagnostics for team-name alignment across SP+/talent/returning production/portal datasets. Log intersection sizes and identify missing teams, and consider using a normalization/alias layer to reduce silent coverage loss.
+  - **Fix applied:** Enhanced `_validate_data_quality()` to report SP+ teams missing from talent and returning production datasets (with first 10 team names listed). Intersection logging already present from P0.2; now includes per-dataset gap analysis at debug level.
 
 ---
 

@@ -70,16 +70,9 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 
 ## P2 — Data quality / robustness (prevents silent bias)
 
-- [ ] **P2.1 Add parse coverage diagnostics for play_text-based extraction**
+- [x] **P2.1 Add parse coverage diagnostics for play_text-based extraction** -- FIXED 2026-02-05
   - **Issue:** FG/punt/kickoff logic relies on regex parsing of `play_text`, which can fail or misparse. Today this failure is mostly silent.
-  - **Acceptance criteria:**
-    - Log parse coverage rates:
-      - % of FG plays with distance parsed
-      - % of punts with gross parsed
-      - % of kickoffs with return yards parsed (or defaulted)
-    - Warn if coverage is below a threshold (e.g., <80%).
-  - **Claude nudge prompt:**
-    > Add diagnostics and safeguards around `play_text` parsing for FG/punt/kickoffs. Report parse success rates and warn when coverage is low. Ensure parsing failures do not silently bias team ratings.
+  - **Fix applied:** Added parse coverage logging to all three ST components: FG distance parse rate, punt gross yards parse rate, kickoff return yards parse rate (non-touchback only). Each warns if coverage < 80%, otherwise logs at debug level.
 
 ---
 
@@ -93,15 +86,9 @@ The model is directionally correct and has good structure (PBTA framing, leakage
 
 ---
 
-- [ ] **P2.3 Clarify public API to avoid partial state confusion**
+- [x] **P2.3 Clarify public API to avoid partial state confusion** -- FIXED 2026-02-05
   - **Issue:** `calculate_fg_ratings_from_plays()` writes FG-only ratings into `team_ratings`. If users call it directly, they may assume `overall_rating` is full ST when it is FG-only.
-  - **Acceptance criteria:**
-    - Public API makes it hard to accidentally use partial ST ratings.
-    - Either:
-      - treat FG-only calc as internal helper, or
-      - clearly label/encode partial ratings and require merge step for overall.
-  - **Claude nudge prompt:**
-    > Clarify the SpecialTeamsModel public API so callers can’t easily mistake FG-only ratings for full special teams ratings. Make “FG-only” vs “full ST” explicit and enforceable.
+  - **Fix applied:** Added `is_complete: bool` field to `SpecialTeamsRating` dataclass. FG-only ratings set `is_complete=False`; `calculate_all_st_ratings_from_plays()` sets `is_complete=True`. `get_matchup_differential()` logs debug warning when using incomplete ratings.
 
 ---
 

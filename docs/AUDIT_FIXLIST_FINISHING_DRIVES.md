@@ -72,13 +72,9 @@ If this adjustment is applied to spreads, the current implementation can introdu
 
 ---
 
-- [ ] **P2.2 Strengthen and clarify fallback pathways (drives > plays > game stats)**
+- [x] **P2.2 Strengthen and clarify fallback pathways (drives > plays > game stats)** -- FIXED 2026-02-05
   - **Issue:** `calculate_from_game_stats()` uses proxies (points/game → estimated trips) which can be misleading.
-  - **Acceptance criteria:**
-    - Clear precedence: drive-level data preferred; play-by-play only if trips can be computed correctly; game-stat proxy only as last resort.
-    - Document which methods are used in production/backtest.
-  - **Claude nudge prompt:**
-    > Clarify and enforce the hierarchy of data sources for finishing drives: prefer drive-level data, then play-by-play if trips can be reliably computed, and use game-stat proxies only as a last resort. Document which pathway is used and add logging to confirm.
+  - **Fix applied:** Added hierarchy documentation to all three method docstrings: PRIMARY (calculate_all_from_plays) > SECONDARY (calculate_from_drives) > TERTIARY (calculate_from_game_stats). Added debug-level pathway logging to secondary and tertiary methods so callers can confirm which pathway was used.
 
 ---
 

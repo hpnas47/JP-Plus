@@ -55,25 +55,15 @@
 
 ## P2 — Diagnostics & data quality checks (helps trust the results)
 
-- [ ] **P2.1 Opener data reliability diagnostics**
+- [x] **P2.1 Opener data reliability diagnostics** -- FIXED 2026-02-05
   - **Issue:** `spread_open` is surfaced but its quality varies; users may treat it as a true opener.
-  - **Acceptance criteria:**
-    - When fetching lines, record/report:
-      - % of games with `spread_open` present
-      - % where `spread_open != spread_close` by > 0.5
-    - Warn if opener appears unreliable.
-  - **Claude nudge prompt:**
-    > Add lightweight diagnostics to assess opener quality. Report how often spread_open exists and how often it differs meaningfully from spread_close, and warn if opener data appears unreliable.
+  - **Fix applied:** `fetch_lines()` now logs opener coverage (% with spread_open) and movement rate (% where open-to-close differs >0.5 pts). Warns if opener coverage < 50%.
 
 ---
 
-- [ ] **P2.2 Improve `get_line_movement()` to support `game_id`**
+- [x] **P2.2 Improve `get_line_movement()` to support `game_id`** -- FIXED 2026-02-05
   - **Issue:** `get_line_movement()` currently uses team-name matching only.
-  - **Acceptance criteria:**
-    - If `game_id` is available, movement lookup prefers it.
-    - Fallback to team names only if needed.
-  - **Claude nudge prompt:**
-    > Make line movement retrieval consistent with the rest of the module by supporting `game_id` matching and using team-name matching only as fallback.
+  - **Fix applied:** Added optional `game_id` parameter to `get_line_movement()`. Passes it through to `get_line()` which prefers game_id lookup, falling back to team names. Consistent with rest of module.
 
 ---
 
