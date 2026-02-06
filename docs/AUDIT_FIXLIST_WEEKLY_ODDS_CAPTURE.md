@@ -18,35 +18,32 @@ The script works for basic capturing, but there are several issues that will cau
 
 ## P0 — Must Fix (correctness / data integrity)
 
-- [ ] **P0.1 Replace heuristic `get_current_week()` for storage keys**
+- [x] **P0.1 Replace heuristic `get_current_week()` for storage keys** -- FIXED 2026-02-05
   - **Issue:** Current week calculation based on month/day is not reliable and will mislabel weeks around boundaries, Week 0/1, and postseason.
   - **Acceptance criteria:**
     - Captures can be run with explicit `--year` and `--week` (preferred), OR
     - Week is derived robustly from games/commence_time and an authoritative schedule source.
     - Stored snapshot includes correct season/week for later joins.
-  - **Claude nudge prompt:**
-    > Replace the heuristic week estimator with a robust approach. Either require explicit `--year`/`--week` inputs for captures or derive week from game commence times and an authoritative schedule source. Ensure lines are stored under the correct season/week for later joins.
+  - **Fix applied:** Added `--year` and `--week` CLI arguments. When provided, these are used directly. Heuristic `get_current_week()` is kept as fallback but now logs a warning recommending explicit args. Both `capture_odds()` and `preview_odds()` accept explicit year/week.
 
 ---
 
-- [ ] **P0.2 Fix SQLite upsert logic (avoid `INSERT OR REPLACE`)**
+- [x] **P0.2 Fix SQLite upsert logic (avoid `INSERT OR REPLACE`)** -- FIXED 2026-02-05
   - **Issue:** `INSERT OR REPLACE` can delete the old snapshot row and insert a new one, breaking foreign-key relationships (`odds_lines.snapshot_id`) and causing orphaned rows.
   - **Acceptance criteria:**
     - Use a safe upsert strategy that preserves snapshot identity.
     - After insert/update, snapshot_id is correct and stable.
     - No orphan `odds_lines` remain after repeated captures.
-  - **Claude nudge prompt:**
-    > Audit the SQLite upsert logic. Avoid `INSERT OR REPLACE` patterns that can delete rows and orphan foreign-key references. Implement a safe upsert that preserves snapshot identity and maintains referential integrity.
+  - **Fix applied:** Replaced both `INSERT OR REPLACE` with `INSERT...ON CONFLICT DO UPDATE`. Snapshots: on conflict updates captured_at/credits_used, then retrieves actual id via SELECT. Lines: on conflict updates spread/price/last_update fields. Row identity preserved across re-runs.
 
 ---
 
-- [ ] **P0.3 Enable and enforce foreign keys**
+- [x] **P0.3 Enable and enforce foreign keys** -- FIXED 2026-02-05
   - **Issue:** SQLite foreign keys are off by default; your schema declares FKs but they may not be enforced.
   - **Acceptance criteria:**
     - `PRAGMA foreign_keys = ON;` is applied for the connection.
     - Inserting lines with invalid snapshot_id is prevented or logged.
-  - **Claude nudge prompt:**
-    > Enable SQLite foreign key enforcement and add a small integrity check to ensure odds_lines always reference valid snapshot rows.
+  - **Fix applied:** Added `PRAGMA foreign_keys = ON` immediately after connection creation in `init_database()`. FK violations will now raise errors instead of silently inserting orphaned records.
 
 ---
 
