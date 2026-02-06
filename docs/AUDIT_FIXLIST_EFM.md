@@ -98,26 +98,16 @@
 
 ## P3 — Performance (nice-to-have; improves sweep/backtest runtime)
 
-- [ ] **P3.1 Vectorize sparse matrix COO construction**
+- [x] **P3.1 Vectorize sparse matrix COO construction** -- FIXED 2026-02-05
   - **Issue:** Sparse matrix build loop is still Python-level O(N_plays).
-  - **Acceptance criteria:**
-    - Replace per-row loop with vectorized construction (using categorical codes or vectorized indexing).
-    - Confirm results match baseline within tolerance.
-  - **Claude nudge prompt:**
-    > Optimize ridge design-matrix construction by vectorizing sparse COO assembly (avoid Python loops over plays). Preserve correctness and verify coefficients match baseline within tolerance.
+  - **Fix applied:** Replaced per-row Python loop with vectorized numpy operations: `team_to_idx` lookup via list comprehension to int32 arrays, `np.concatenate` for row/col/data assembly, vectorized home team comparison using `np.asarray(dtype=object)` to avoid Categorical comparison errors. Backtest MAE identical (12.49).
 
 ---
 
 ## Diagnostics to add (high ROI)
 
-- [ ] **D.1 Ridge sanity logging (debug-level)**
-  - Include:
-    - intercept, learned_hfa
-    - mean(adj_off_sr), mean(adj_def_sr)
-    - home_team missing rate (if used)
-    - cache hit/miss stats (already partially done)
-  - **Claude nudge prompt:**
-    > Add lightweight ridge sanity logs that confirm neutral-field regression is working as intended (intercept meaning, learned HFA sign/magnitude, and mean adjusted values). Keep logs debug-level to avoid noise.
+- [x] **D.1 Ridge sanity logging (debug-level)** -- FIXED 2026-02-05
+  - **Fix applied:** Added consolidated debug-level sanity summary after post-centering: intercept, learned HFA, off/def mean and std, n_teams, n_plays. Home team coverage logging already existed from P0.2. Cache hit/miss logging already existed. All metrics now reported in a single log line per ridge fit.
 
 ---
 

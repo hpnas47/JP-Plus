@@ -885,52 +885,34 @@ class EfficiencyFoundationModel:
         else:
             home_teams = None
 
-        # Pre-allocate arrays for COO sparse matrix
-        # Max entries: 2 per row (offense + defense) + 1 per row for home (if applicable)
-        max_nnz = 3 * n_plays if has_home_info else 2 * n_plays
-        row_indices = np.empty(max_nnz, dtype=np.int32)
-        col_indices = np.empty(max_nnz, dtype=np.int32)
-        data_values = np.empty(max_nnz, dtype=np.float64)
+        # P3.1: Vectorized sparse COO construction (replaces Python per-row loop)
+        # Map team names to integer indices via vectorized lookup
+        off_idx = np.array([team_to_idx[t] for t in offenses], dtype=np.int32)
+        def_idx = np.array([team_to_idx[t] for t in defenses], dtype=np.int32)
+        play_rows = np.arange(n_plays, dtype=np.int32)
 
-        nnz = 0  # Number of non-zero entries
+        # Offense columns: +1.0, Defense columns: -1.0
+        row_indices = np.concatenate([play_rows, play_rows])
+        col_indices = np.concatenate([off_idx, n_teams + def_idx])
+        data_values = np.concatenate([np.ones(n_plays), -np.ones(n_plays)])
 
-        for i in range(n_plays):
-            off = offenses[i]
-            def_ = defenses[i]
-            off_idx = team_to_idx[off]
-            def_idx = team_to_idx[def_]
+        # Home field indicator: +1 if offense is home, -1 if defense is home, skip neutral
+        if has_home_info:
+            # Ensure plain object arrays to avoid Categorical comparison errors
+            off_str = np.asarray(offenses, dtype=object)
+            def_str = np.asarray(defenses, dtype=object)
+            home_str = np.asarray(home_teams, dtype=object)
+            home_valid_mask = np.array([pd.notna(h) for h in home_str], dtype=bool)
+            off_is_home = (off_str == home_str) & home_valid_mask
+            def_is_home = (def_str == home_str) & home_valid_mask
 
-            # Offense contributes positively
-            row_indices[nnz] = i
-            col_indices[nnz] = off_idx
-            data_values[nnz] = 1.0
-            nnz += 1
+            home_rows = np.concatenate([play_rows[off_is_home], play_rows[def_is_home]])
+            home_cols = np.full(off_is_home.sum() + def_is_home.sum(), n_cols - 1, dtype=np.int32)
+            home_vals = np.concatenate([np.ones(off_is_home.sum()), -np.ones(def_is_home.sum())])
 
-            # Defense reduces (good D = lower success)
-            row_indices[nnz] = i
-            col_indices[nnz] = n_teams + def_idx
-            data_values[nnz] = -1.0
-            nnz += 1
-
-            # Home field indicator: +1 if offense is home, -1 if away, 0 if neutral
-            # P0.2: Use pd.notna() to catch both None and np.nan
-            if has_home_info and pd.notna(home_teams[i]):
-                home = home_teams[i]
-                if off == home:
-                    row_indices[nnz] = i
-                    col_indices[nnz] = n_cols - 1
-                    data_values[nnz] = 1.0
-                    nnz += 1
-                elif def_ == home:
-                    row_indices[nnz] = i
-                    col_indices[nnz] = n_cols - 1
-                    data_values[nnz] = -1.0
-                    nnz += 1
-
-        # Trim arrays to actual size and create sparse matrix
-        row_indices = row_indices[:nnz]
-        col_indices = col_indices[:nnz]
-        data_values = data_values[:nnz]
+            row_indices = np.concatenate([row_indices, home_rows])
+            col_indices = np.concatenate([col_indices, home_cols])
+            data_values = np.concatenate([data_values, home_vals])
 
         X_sparse = sparse.csr_matrix(
             (data_values, (row_indices, col_indices)),
@@ -990,6 +972,7 @@ class EfficiencyFoundationModel:
             logger.debug(f"Ridge adjust {metric_col}: intercept={intercept:.4f} (no home info)")
 
         total_time = time.time() - start_time
+        nnz = X_sparse.nnz
         logger.debug(
             f"  Sparse matrix: {n_plays:,} plays × {n_cols} cols, "
             f"{nnz:,} non-zeros ({100*nnz/(n_plays*n_cols):.2f}% density)"
@@ -1057,6 +1040,18 @@ class EfficiencyFoundationModel:
                 f"Post-centering failed for {metric_col}: drift={max_drift:.8f}. "
                 f"This indicates a bug in the centering logic."
             )
+
+        # D.1: Consolidated ridge sanity summary (debug-level)
+        off_std = np.std(list(off_adjusted.values()))
+        def_std = np.std(list(def_adjusted.values()))
+        hfa_str = f"{learned_hfa:.4f}" if learned_hfa is not None else "N/A"
+        logger.debug(
+            f"  Ridge sanity ({metric_col}): intercept={intercept:.4f}, "
+            f"HFA={hfa_str}, "
+            f"off mean={mean_off:.4f} std={off_std:.4f}, "
+            f"def mean={mean_def:.4f} std={def_std:.4f}, "
+            f"n_teams={n_teams}, n_plays={n_plays:,}"
+        )
 
         # =================================================================
         # CACHE STORAGE
