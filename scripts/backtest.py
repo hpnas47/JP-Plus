@@ -1448,6 +1448,8 @@ def fetch_all_season_data(
     use_priors: bool = True,
     use_portal: bool = True,
     portal_scale: float = 0.15,
+    use_cache: bool = True,
+    force_refresh: bool = False,
 ) -> dict:
     """Fetch and cache all season data (games, betting, plays, turnovers, priors, fbs_teams, historical_rankings).
 
@@ -1456,58 +1458,77 @@ def fetch_all_season_data(
         use_priors: Whether to build preseason priors
         use_portal: Whether to incorporate transfer portal data into priors
         portal_scale: How much to weight portal impact (default 0.15)
+        use_cache: Whether to use cached data if available (default True)
+        force_refresh: If True, bypass cache and force fresh API calls (default False)
 
     Returns:
         Dict mapping year to (games_df, betting_df, plays_df, turnover_df, priors,
                               efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings)
     """
+    from src.data.season_cache import SeasonDataCache
+
     client = CFBDClient()
+    season_cache = SeasonDataCache()
     season_data = {}
 
+    # If force_refresh, don't use cache at all
+    effective_use_cache = use_cache and not force_refresh
+
     for year in years:
-        # P3.9: Per-year detailed logs at debug level for quiet runs
-        logger.debug(f"Fetching data for {year}...")
+        # Try to load from cache first
+        cached_season = None
+        if effective_use_cache:
+            cached_season = season_cache.load_season(year)
 
-        games_df, betting_df = fetch_season_data(client, year)
-        logger.debug(f"Loaded {len(games_df)} games, {len(betting_df)} betting lines")
+        if cached_season is not None:
+            # Use cached data (already processed: remap + home_team validated before save)
+            games_df, betting_df, efficiency_plays_df, turnover_plays_df, st_plays_df = cached_season
+            logger.info(f"Using cached data for {year}")
+            plays_df = pl.DataFrame()  # Empty placeholder
+        else:
+            # Fetch from API
+            logger.debug(f"Fetching data for {year} from API...")
 
-        plays_df, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
+            games_df, betting_df = fetch_season_data(client, year)
+            logger.debug(f"Loaded {len(games_df)} games, {len(betting_df)} betting lines")
 
-        # P0.1: Remap postseason play weeks to match game pseudo-weeks
-        if len(games_df) > 0:
-            game_week_map = games_df.select([
-                pl.col("id").alias("game_id"),
-                pl.col("week").alias("game_week"),
-            ])
-            efficiency_plays_df = _remap_play_weeks(efficiency_plays_df, game_week_map)
-            turnover_plays_df = _remap_play_weeks(turnover_plays_df, game_week_map)
-            st_plays_df = _remap_play_weeks(st_plays_df, game_week_map)
+            plays_df, turnover_plays_df, efficiency_plays_df, st_plays_df = fetch_season_plays(client, year)
 
-        # P0.3: Validate home_team in efficiency plays by joining to game records
-        # play.home may not be the home team string; game.home_team is reliable
-        if len(efficiency_plays_df) > 0 and len(games_df) > 0:
-            game_home = games_df.select([
-                pl.col("id").alias("game_id"),
-                pl.col("home_team").alias("validated_home_team"),
-            ])
-            efficiency_plays_df = efficiency_plays_df.join(
-                game_home, on="game_id", how="left"
-            )
-            efficiency_plays_df = efficiency_plays_df.with_columns(
-                pl.col("validated_home_team").alias("home_team")
-            ).drop("validated_home_team")
+            # P0.1: Remap postseason play weeks to match game pseudo-weeks
+            if len(games_df) > 0:
+                game_week_map = games_df.select([
+                    pl.col("id").alias("game_id"),
+                    pl.col("week").alias("game_week"),
+                ])
+                efficiency_plays_df = _remap_play_weeks(efficiency_plays_df, game_week_map)
+                turnover_plays_df = _remap_play_weeks(turnover_plays_df, game_week_map)
+                st_plays_df = _remap_play_weeks(st_plays_df, game_week_map)
 
-            null_count = efficiency_plays_df["home_team"].null_count()
-            total = len(efficiency_plays_df)
-            if null_count > 0:
-                logger.warning(
-                    f"P0.3: home_team coverage {total - null_count}/{total} "
-                    f"({(total - null_count) / total * 100:.1f}%) after game join"
+            # P0.3: Validate home_team in efficiency plays by joining to game records
+            # play.home may not be the home team string; game.home_team is reliable
+            if len(efficiency_plays_df) > 0 and len(games_df) > 0:
+                game_home = games_df.select([
+                    pl.col("id").alias("game_id"),
+                    pl.col("home_team").alias("validated_home_team"),
+                ])
+                efficiency_plays_df = efficiency_plays_df.join(
+                    game_home, on="game_id", how="left"
                 )
-            else:
-                logger.debug(
-                    f"P0.3: home_team validated via game join ({total} plays, 100% coverage)"
-                )
+                efficiency_plays_df = efficiency_plays_df.with_columns(
+                    pl.col("validated_home_team").alias("home_team")
+                ).drop("validated_home_team")
+
+                null_count = efficiency_plays_df["home_team"].null_count()
+                total = len(efficiency_plays_df)
+                if null_count > 0:
+                    logger.warning(
+                        f"P0.3: home_team coverage {total - null_count}/{total} "
+                        f"({(total - null_count) / total * 100:.1f}%) after game join"
+                    )
+                else:
+                    logger.debug(
+                        f"P0.3: home_team validated via game join ({total} plays, 100% coverage)"
+                    )
 
         turnover_df = build_game_turnovers(games_df, turnover_plays_df)
         logger.debug(f"Built turnover margins for {len(turnover_df)} games")
@@ -1572,6 +1593,17 @@ def fetch_all_season_data(
                         f"{avg_plays_per_game:.0f} plays/game) for {year}"
                     )
 
+            # Save processed season to cache (only if we fetched from API)
+            if effective_use_cache and cached_season is None:
+                season_cache.save_season(
+                    year,
+                    games_df,
+                    betting_df,
+                    efficiency_plays_df,
+                    turnover_plays_df,
+                    st_plays_df,
+                )
+
         # Fetch FBS teams for EFM filtering
         fbs_teams_list = client.get_fbs_teams(year)
         fbs_teams = {t.school for t in fbs_teams_list}
@@ -1625,6 +1657,8 @@ def run_backtest(
     portal_scale: float = 0.15,
     use_opening_line: bool = False,
     clear_cache: bool = True,
+    use_season_cache: bool = True,
+    force_refresh: bool = False,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -1647,6 +1681,8 @@ def run_backtest(
         portal_scale: How much to weight portal impact (default 0.15)
         use_opening_line: If True, use opening lines for ATS; if False, use closing lines (default)
         clear_cache: Whether to clear ridge adjustment cache at start (default True)
+        use_season_cache: Whether to use disk cache for season data (default True)
+        force_refresh: If True, bypass all caches and force fresh API calls (default False)
 
     Returns:
         Dictionary with backtest results
@@ -1665,6 +1701,8 @@ def run_backtest(
             use_priors=use_priors,
             use_portal=use_portal,
             portal_scale=portal_scale,
+            use_cache=use_season_cache,
+            force_refresh=force_refresh,
         )
 
     # Build team records for trajectory calculation (need ~4 years before earliest year)
@@ -2128,6 +2166,16 @@ def main():
         action="store_true",
         help="Enable verbose output (per-week MAE, detailed logging). Default is quiet summary.",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable season data caching (always fetch from API)",
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Force refresh all data from API (bypasses cache completely)",
+    )
 
     args = parser.parse_args()
 
@@ -2153,6 +2201,8 @@ def main():
         use_priors=not args.no_priors,
         use_portal=not args.no_portal,
         portal_scale=args.portal_scale,
+        use_cache=not args.no_cache,
+        force_refresh=args.force_refresh,
     )
 
     # P3.4: Print data sanity report

@@ -49,7 +49,7 @@ env/
 *.json
 *.xlsx
 *.xls
-data/
+/data/
 *.pkl
 *.pickle
 
@@ -58,3 +58,6 @@ data/
 
 # Claude Code
 .claude/
+
+# Local API cache
+.cache/
