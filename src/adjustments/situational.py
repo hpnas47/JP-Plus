@@ -116,21 +116,25 @@ class SituationalFactors:
     Factors stored:
     - rest_advantage: Days of rest differential (positive = home advantage)
     - rest_days: Actual days of rest for this team
+    - is_season_opener: True if team has no prior games this season
     - letdown_penalty: Penalty for coming off a big win vs unranked opponent
     - lookahead_penalty: Penalty for having a big game next week
     - sandwich_penalty: Extra penalty when BOTH letdown AND lookahead apply
     - rivalry_boost: Boost for underdog in rivalry games
     - consecutive_road_penalty: Penalty for 2nd consecutive road game
+    - game_shape_penalty: Rust penalty for opener vs team with game experience
     """
 
     team: str
     rest_advantage: float = 0.0  # Days of rest differential (replaces binary bye_week)
     rest_days: int = 7  # Actual days of rest for this team
+    is_season_opener: bool = False  # True if team has no prior games this season
     letdown_penalty: float = 0.0
     lookahead_penalty: float = 0.0
     sandwich_penalty: float = 0.0  # Extra penalty when BOTH letdown AND lookahead apply
     rivalry_boost: float = 0.0
     consecutive_road_penalty: float = 0.0  # Penalty for 2nd consecutive road game
+    game_shape_penalty: float = 0.0  # Rust penalty for opener vs team with game experience
 
     # Backward compatibility alias
     @property
@@ -150,6 +154,7 @@ class SituationalFactors:
             + self.sandwich_penalty
             + self.rivalry_boost
             + self.consecutive_road_penalty
+            + self.game_shape_penalty
         )
 
 
@@ -190,6 +195,9 @@ class SituationalAdjuster:
     SHORT_WEEK_THRESHOLD = 5  # Saturday → Thursday
     MINI_BYE_THRESHOLD = 9  # Thursday → Saturday
     BYE_WEEK_THRESHOLD = 14  # Full week off
+
+    # Game shape: rust penalty when opener team faces opponent with game experience
+    GAME_SHAPE_PENALTY = 1.5  # Points (stored as negative on the opener team)
 
     def __init__(
         self,
@@ -272,7 +280,7 @@ class SituationalAdjuster:
         - Mini-bye: 9+ days (Thursday → following Saturday)
         - Short week: 5 days (Saturday → Thursday)
         - Bye week: 14+ days (didn't play previous week)
-        - Season opener: 14 days (maximum rest - hasn't played yet)
+        - Season opener: 7 days (neutralized - no false rest advantage)
 
         Args:
             team: Team name
@@ -280,7 +288,7 @@ class SituationalAdjuster:
             schedule_df: DataFrame with schedule (must have start_date, home_team, away_team)
 
         Returns:
-            Days since last game (14 if season opener, i.e., no previous games)
+            Days since last game (NORMAL_REST for season openers to avoid false rest advantage)
         """
         # Find team's previous games
         team_games = schedule_df[
@@ -314,14 +322,41 @@ class SituationalAdjuster:
 
         if previous_games.empty:
             # Season opener: team hasn't played yet this season
-            # Treat as maximum rest (equivalent to bye week)
-            # This gives rest advantage over teams that played Week 0
-            return self.BYE_WEEK_THRESHOLD
+            # Return NORMAL_REST to neutralize rest calc - no false advantage
+            # over teams that played Week 0 (who have real game shape)
+            return self.NORMAL_REST
 
         last_game_date = previous_games["game_datetime"].max()
         days_rest = (game_date - last_game_date).days
 
         return max(1, days_rest)  # Minimum 1 day
+
+    def _is_season_opener(
+        self,
+        team: str,
+        game_date: datetime,
+        schedule_df: pd.DataFrame,
+    ) -> bool:
+        """Check if this is the team's first game of the season (no prior games).
+
+        Used to detect the 'Opener vs. Played' game shape spot where the
+        team with game experience has a rust/readiness advantage.
+        """
+        team_games = schedule_df[
+            (schedule_df["home_team"] == team) | (schedule_df["away_team"] == team)
+        ]
+        if team_games.empty:
+            return True
+
+        if "start_date" not in team_games.columns:
+            return False
+
+        game_ts = pd.Timestamp(game_date)
+        if game_ts.tzinfo is not None:
+            game_ts = game_ts.tz_localize(None)
+
+        game_dates = pd.to_datetime(team_games["start_date"], utc=True).dt.tz_localize(None)
+        return (game_dates < game_ts).sum() == 0
 
     def check_bye_week(
         self,
@@ -711,7 +746,9 @@ class SituationalAdjuster:
         # Calculate rest days (new approach - replaces binary bye week)
         if game_date is not None and "start_date" in schedule_df.columns:
             factors.rest_days = self.calculate_rest_days(team, game_date, schedule_df)
-            logger.debug(f"{team} rest days: {factors.rest_days}")
+            factors.is_season_opener = self._is_season_opener(team, game_date, schedule_df)
+            logger.debug(f"{team} rest days: {factors.rest_days}"
+                        f"{' (SEASON OPENER)' if factors.is_season_opener else ''}")
         else:
             # Fallback to binary bye week check if no date available
             if self.check_bye_week(team, current_week, schedule_df):
@@ -835,6 +872,22 @@ class SituationalAdjuster:
         # Update home factors with rest advantage (assigned to home team by convention)
         home_factors.rest_advantage = rest_advantage
 
+        # Game Shape: Opener vs. Played spot
+        # A team playing its season opener is "cold" / rusty compared to an opponent
+        # that already has game reps. The played team has rust removal + game shape.
+        if home_factors.is_season_opener and not away_factors.is_season_opener:
+            home_factors.game_shape_penalty = -self.GAME_SHAPE_PENALTY
+            logger.info(
+                f"GAME SHAPE: {home_team} (opener) vs {away_team} (played) "
+                f"- rust penalty: -{self.GAME_SHAPE_PENALTY}"
+            )
+        elif away_factors.is_season_opener and not home_factors.is_season_opener:
+            away_factors.game_shape_penalty = -self.GAME_SHAPE_PENALTY
+            logger.info(
+                f"GAME SHAPE: {away_team} (opener) vs {home_team} (played) "
+                f"- rust penalty: -{self.GAME_SHAPE_PENALTY}"
+            )
+
         return home_factors, away_factors
 
     def get_matchup_adjustment(
@@ -900,6 +953,8 @@ class SituationalAdjuster:
             "away_sandwich": away_factors.sandwich_penalty,
             "home_consecutive_road": home_factors.consecutive_road_penalty,
             "away_consecutive_road": away_factors.consecutive_road_penalty,
+            "home_game_shape": home_factors.game_shape_penalty,
+            "away_game_shape": away_factors.game_shape_penalty,
             "home_rivalry": home_factors.rivalry_boost,
             "away_rivalry": away_factors.rivalry_boost,
             # Raw totals (no smoothing)

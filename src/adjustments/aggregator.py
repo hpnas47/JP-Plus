@@ -276,6 +276,8 @@ class AdjustmentAggregator:
             away_mental.append(("lookahead", abs(away_factors.lookahead_penalty)))
         if away_factors.sandwich_penalty != 0:
             away_mental.append(("sandwich", abs(away_factors.sandwich_penalty)))
+        if away_factors.game_shape_penalty != 0:
+            away_mental.append(("game_shape", abs(away_factors.game_shape_penalty)))
 
         away_mental_smoothed = self._smooth_mental(away_mental)
 
@@ -287,6 +289,8 @@ class AdjustmentAggregator:
             home_mental.append(("lookahead", abs(home_factors.lookahead_penalty)))
         if home_factors.sandwich_penalty != 0:
             home_mental.append(("sandwich", abs(home_factors.sandwich_penalty)))
+        if home_factors.game_shape_penalty != 0:
+            home_mental.append(("game_shape", abs(home_factors.game_shape_penalty)))
 
         home_mental_smoothed = self._smooth_mental(home_mental)
 
