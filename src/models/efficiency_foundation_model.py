@@ -337,8 +337,8 @@ class EfficiencyFoundationModel:
     def __init__(
         self,
         ridge_alpha: float = 50.0,  # Optimized via sweep (was 100.0)
-        efficiency_weight: float = 0.54,  # Reduced from 0.60 to make room for turnovers
-        explosiveness_weight: float = 0.36,  # Reduced from 0.40 to make room for turnovers
+        efficiency_weight: float = 0.45,  # Equal SR/IsoPPP weighting (Explosiveness Uplift)
+        explosiveness_weight: float = 0.45,  # Equal SR/IsoPPP weighting (Explosiveness Uplift)
         turnover_weight: float = 0.10,  # 10% weight for turnovers (like SP+)
         turnover_prior_strength: float = 10.0,  # Bayesian shrinkage for turnover margin
         garbage_time_weight: float = 0.1,  # Weight for garbage time plays (0 to discard)
@@ -360,8 +360,8 @@ class EfficiencyFoundationModel:
 
         Args:
             ridge_alpha: Regularization for opponent adjustment
-            efficiency_weight: Weight for success rate component (default 0.54)
-            explosiveness_weight: Weight for IsoPPP component (default 0.36)
+            efficiency_weight: Weight for success rate component (default 0.45)
+            explosiveness_weight: Weight for IsoPPP component (default 0.45)
             turnover_weight: Weight for turnover margin component (default 0.10, like SP+)
             turnover_prior_strength: Bayesian shrinkage for turnover margin (default 10).
                                     Equivalent to 10 games of 0 margin prior data. Higher = more

@@ -60,8 +60,8 @@ def fetch_jp_ratings(client: CFBDClient, year: int) -> pd.DataFrame:
     # Run EFM
     efm = EfficiencyFoundationModel(
         ridge_alpha=50.0,
-        efficiency_weight=0.54,
-        explosiveness_weight=0.36,
+        efficiency_weight=0.45,
+        explosiveness_weight=0.45,
         turnover_weight=0.10,
         asymmetric_garbage=True,
     )

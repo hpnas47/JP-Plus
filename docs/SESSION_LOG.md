@@ -1851,8 +1851,8 @@ python scripts/weekly_odds_capture.py --closing
 | Parameter | Value | Location |
 |-----------|-------|----------|
 | `ridge_alpha` | 50 | `efficiency_foundation_model.py` (optimized from 100) |
-| `efficiency_weight` | 0.54 | `efficiency_foundation_model.py` |
-| `explosiveness_weight` | 0.36 | `efficiency_foundation_model.py` |
+| `efficiency_weight` | 0.45 | `efficiency_foundation_model.py` (Explosiveness Uplift) |
+| `explosiveness_weight` | 0.45 | `efficiency_foundation_model.py` (Explosiveness Uplift) |
 | `turnover_weight` | 0.10 | `efficiency_foundation_model.py` |
 | `turnover_prior_strength` | 10.0 | `efficiency_foundation_model.py` |
 | `garbage_time_weight` | 0.1 | `efficiency_foundation_model.py` |

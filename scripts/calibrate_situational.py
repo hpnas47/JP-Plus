@@ -122,8 +122,8 @@ def build_weekly_ratings(plays_df: pd.DataFrame, games_df: pd.DataFrame,
 
     efm = EfficiencyFoundationModel(
         ridge_alpha=50.0,
-        efficiency_weight=0.54,
-        explosiveness_weight=0.36,
+        efficiency_weight=0.45,
+        explosiveness_weight=0.45,
         turnover_weight=0.10,
     )
     efm.calculate_ratings(train_plays, train_games)

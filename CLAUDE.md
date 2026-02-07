@@ -18,12 +18,12 @@
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,273 | 13.02 | 16.49 | 50.7% | 52.2% |
-| Phase 1 (Calibration) | 1–3 | 608 | 14.96 | 18.88 | 46.9% | 48.2% |
-| **Phase 2 (Core)** | **4–15** | **2,489** | **12.52** | **15.84** | **51.9%** | **53.4%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.39 | 16.72 | 47.4% | 48.3% |
-| 3+ Edge (Core) | 4–15 | 1,433 | — | — | 53.6% (768-665) | 55.4% (814-656) |
-| 5+ Edge (Core) | 4–15 | 897 | — | — | 55.0% (493-404) | 56.9% (530-401) |
+| **Full (`--start-week 1`)** | 1–Post | 3,273 | 13.02 | 16.50 | 51.1% | 52.7% |
+| Phase 1 (Calibration) | 1–3 | 597 | 14.94 | — | 47.1% | 48.6% |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.52** | **15.84** | **52.4%** | **54.0%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.43 | — | 47.4% | 48.3% |
+| 3+ Edge (Core) | 4–15 | 1,433 | — | — | 53.3% (764-669) | 55.5% (811-650) |
+| 5+ Edge (Core) | 4–15 | 866 | — | — | 54.6% (473-393) | 56.9% (525-397) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).

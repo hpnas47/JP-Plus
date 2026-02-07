@@ -30,27 +30,27 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,273 gam
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| **Calibration** | 1–3 | 608 | 14.96 | 18.88 | 46.9% | 48.2% | 48.4% | 47.6% | 48.8% |
-| **Core** | **4–15** | **2,489** | **12.52** | **15.84** | **51.9%** | **53.4%** | **53.6%** | **55.0%** | **56.9%** |
-| **Postseason** | 16+ | 176 | 13.39 | 16.72 | 47.4% | 48.3% | 48.1% | 43.8% | 47.8% |
-| **Full Season** | All | 3,273 | 13.02 | 16.49 | 50.7% | 52.2% | 52.2% | 52.5% | 54.4% |
+| **Calibration** | 1–3 | 597 | 14.94 | — | 47.1% | 48.6% | 48.0% | 47.4% | 48.8% |
+| **Core** | **4–15** | **2,485** | **12.52** | **15.84** | **52.4%** | **54.0%** | **53.3%** | **54.6%** | **56.9%** |
+| **Postseason** | 16+ | 176 | 13.43 | — | 47.4% | 48.3% | 46.2% | 46.7% | 47.4% |
+| **Full Season** | All | 3,273 | 13.02 | 16.50 | 51.1% | 52.7% | 51.8% | 52.3% | 54.4% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone — 55.0% ATS at 5+ edge vs closing, 56.9% vs opening
+- **Core (Weeks 4-15)**: Profitable zone — 54.6% ATS at 5+ edge vs closing, 56.9% vs opening
 - **Postseason (Weeks 16+)**: Bowl games struggle due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 ### Core Season Detail (Weeks 4-15)
 
-The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,489-game sample.
+The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,485-game sample.
 
 #### Against The Spread (ATS)
 
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
-| **All picks** | 1,264-1,173 (51.9%) | 1,309-1,141 (53.4%) |
-| **3+ pt edge** | 768-665 (53.6%) | 814-656 (55.4%) |
-| **5+ pt edge** | 493-404 (55.0%) | 530-401 (56.9%) |
+| **All picks** | 1,276-1,161 (52.4%) | 1,322-1,128 (54.0%) |
+| **3+ pt edge** | 764-669 (53.3%) | 811-650 (55.5%) |
+| **5+ pt edge** | 473-393 (54.6%) | 525-397 (56.9%) |
 
 Opening line performance exceeds closing line by ~2%, indicating the model captures value that the market prices out by game time.
 
@@ -58,61 +58,61 @@ Opening line performance exceeds closing line by ~2%, indicating the model captu
 
 | Year | Games | ATS % | 3+ Edge | 5+ Edge |
 |------|-------|-------|---------|---------|
-| 2022 | 605 | 52.0% | 183-169 (52.0%) | 124-107 (53.7%) |
-| 2023 | 611 | 52.7% | 200-165 (54.8%) | 130-100 (56.5%) |
-| 2024 | 631 | 49.3% | 194-172 (53.0%) | 127-106 (54.5%) |
-| 2025 | 638 | 53.5% | 191-159 (54.6%) | 112-91 (55.2%) |
+| 2022 | 596 | 53.5% | 182-177 (50.7%) | 112-105 (51.6%) |
+| 2023 | 598 | 53.0% | 206-168 (55.1%) | 128-102 (55.7%) |
+| 2024 | 617 | 50.1% | 193-170 (53.2%) | 123-100 (55.2%) |
+| 2025 | 626 | 52.9% | 183-154 (54.3%) | 110-86 (56.1%) |
 
-2024 was the weakest overall ATS year, but the Core 5+ edge still hit 54.5%. The edge concentrates in high-conviction plays regardless of year.
+2024 was the weakest overall ATS year, but the Core 5+ edge still hit 55.2%. The edge concentrates in high-conviction plays regardless of year.
 
 #### ATS by Season (Core, vs Opening Line)
 
 | Year | Games | ATS % | 3+ Edge | 5+ Edge |
 |------|-------|-------|---------|---------|
-| 2022 | 605 | 52.1% | 197-161 (55.0%) | 127-102 (55.5%) |
-| 2023 | 611 | 55.0% | 205-167 (55.1%) | 139-99 (58.4%) |
-| 2024 | 631 | 52.5% | 210-174 (54.7%) | 141-103 (57.8%) |
-| 2025 | 638 | 54.1% | 202-154 (56.7%) | 123-97 (55.9%) |
+| 2022 | 593 | 53.6% | 190-158 (54.6%) | 116-102 (53.2%) |
+| 2023 | 598 | 55.5% | 209-168 (55.4%) | 139-101 (57.9%) |
+| 2024 | 625 | 52.5% | 210-169 (55.4%) | 153-106 (59.1%) |
+| 2025 | 634 | 54.3% | 202-155 (56.6%) | 117-88 (57.1%) |
 
 #### Closing Line Value (CLV)
 
 CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
 
-**Core Season (Weeks 4-15, 2,485 games):**
+**Full Season (Weeks 1+, 3,258 games with lines):**
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 2,485 | -0.29 | 32.8% | 51.9% |
-| 3+ pt edge | 1,461 | -0.44 | 30.2% | 53.6% |
-| **5+ pt edge** | **916** | **-0.51** | **29.3%** | **55.0%** |
-| 7+ pt edge | 497 | -0.55 | 27.6% | 56.7% |
+| All picks | 3,258 | -0.32 | 29.0% | 51.1% |
+| 3+ pt edge | 1,997 | -0.43 | 26.2% | 51.8% |
+| **5+ pt edge** | **1,294** | **-0.50** | **23.3%** | **52.3%** |
+| 7+ pt edge | 779 | -0.51 | 21.2% | 53.0% |
 
 **CLV vs Opening Line (value available at bet time):**
 
 | Edge Filter | N | Mean CLV (Open→Close) | ATS % (Open) |
 |-------------|---|----------------------|--------------|
-| All picks | 3,258 | +0.44 | 52.2% |
-| 3+ pt edge | 2,010 | +0.60 | 53.8% |
-| **5+ pt edge** | **1,341** | **+0.71** | **54.4%** |
-| 7+ pt edge | 820 | +0.88 | 56.4% |
+| All picks | 3,258 | +0.44 | 52.7% |
+| 3+ pt edge | 2,001 | +0.61 | 53.6% |
+| **5+ pt edge** | **1,339** | **+0.75** | **54.4%** |
+| 7+ pt edge | 824 | +0.93 | 55.4% |
 
-When measured against opening lines, CLV is strongly positive — the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
+When measured against opening lines, CLV is strongly positive (+0.75 at 5+ edge) and monotonically increasing with edge size — the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
 
 **Interpretation:** CLV vs closing is slightly negative (the market doesn't fully move to us), but ATS is strongly positive. This pattern suggests JP+ exploits structural inefficiencies (public bias, schedule spots) rather than information sharps eventually price in.
 
 ### MAE & RMSE by Season
 
-| Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | RMSE (Core) | MAE (Cal) | RMSE (Cal) | MAE (Post) | RMSE (Post) |
-|------|-------------|------------|-------------|------------|-------------|-----------|------------|------------|-------------|
-| 2022 | 802 | 13.41 | 17.11 | 12.77 | 16.33 | 15.96 | 19.99 | 13.29 | 16.59 |
-| 2023 | 816 | 13.15 | 16.62 | 12.46 | 15.77 | 15.06 | 18.66 | 15.88 | 20.07 |
-| 2024 | 818 | 13.12 | 16.39 | 12.67 | 15.73 | 15.45 | 19.50 | 12.18 | 14.68 |
-| 2025 | 837 | 12.42 | 15.86 | 12.19 | 15.54 | 13.39 | 17.31 | 12.43 | 15.31 |
-| **All** | **3,273** | **13.02** | **16.49** | **12.52** | **15.84** | **14.96** | **18.88** | **13.39** | **16.72** |
+| Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | RMSE (Core) | MAE (Cal) | MAE (Post) |
+|------|-------------|------------|-------------|------------|-------------|-----------|------------|
+| 2022 | 802 | 13.37 | 17.07 | 12.75 | 16.29 | 15.97 | 12.84 |
+| 2023 | 816 | 13.14 | 16.64 | 12.43 | 15.77 | 15.07 | 16.18 |
+| 2024 | 818 | 13.13 | 16.40 | 12.67 | 15.76 | 15.45 | 12.19 |
+| 2025 | 837 | 12.46 | 15.90 | 12.22 | 15.56 | 13.37 | 12.70 |
+| **All** | **3,273** | **13.02** | **16.50** | **12.52** | **15.84** | **14.94** | **13.43** |
 
 **Notes:**
-- Best MAE in 2025 (12.19 Core), improving from 12.77 in 2022
-- Calibration MAE drops significantly in 2025 (13.39 vs 15-16 in prior years) — better priors calibration
+- Best MAE in 2025 (12.22 Core), improving from 12.75 in 2022
+- Calibration MAE drops significantly in 2025 (13.37 vs 15-16 in prior years) — better priors calibration
 - RMSE/MAE ratio ~1.27 across all slices, indicating reasonably consistent error distribution
 
 ### 2025 Top 25 (End of Season Including CFP)
@@ -206,8 +206,8 @@ The core engine of JP+. Built on play-level efficiency metrics rather than game 
 
 | Component | Weight | Description |
 |-----------|--------|-------------|
-| **Success Rate** | 54% | Opponent-adjusted success rate via ridge regression |
-| **Explosiveness (IsoPPP)** | 36% | Average EPA on successful plays only |
+| **Success Rate** | 45% | Opponent-adjusted success rate via ridge regression |
+| **Explosiveness (IsoPPP)** | 45% | Average EPA on successful plays only |
 | **Turnover Margin** | 10% | Per-game turnover differential (see below) |
 | **Finishing Drives** | Adjustment | Red zone efficiency regressed toward mean (see below) |
 

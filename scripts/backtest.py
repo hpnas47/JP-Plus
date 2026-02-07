@@ -571,8 +571,8 @@ def walk_forward_predict(
     hfa_value: float = 2.5,
     prior_weight: int = 8,
     ridge_alpha: float = 50.0,  # Optimized via sweep
-    efficiency_weight: float = 0.54,
-    explosiveness_weight: float = 0.36,
+    efficiency_weight: float = 0.45,
+    explosiveness_weight: float = 0.45,
     turnover_weight: float = 0.10,
     garbage_time_weight: float = 0.1,
     asymmetric_garbage: bool = True,
@@ -602,8 +602,8 @@ def walk_forward_predict(
         hfa_value: Fixed home field advantage in points
         prior_weight: games_for_full_weight for preseason blending
         ridge_alpha: Ridge alpha for EFM opponent adjustment
-        efficiency_weight: Weight for success rate component (default 0.54)
-        explosiveness_weight: Weight for IsoPPP component (default 0.36)
+        efficiency_weight: Weight for success rate component (default 0.45)
+        explosiveness_weight: Weight for IsoPPP component (default 0.45)
         turnover_weight: Weight for turnover margin component (default 0.10)
         garbage_time_weight: Weight for garbage time plays (default 0.1)
         asymmetric_garbage: Only penalize trailing team in garbage time (default True)
@@ -2120,8 +2120,8 @@ def run_backtest(
     hfa_value: float = 2.5,
     prior_weight: int = 8,
     season_data: Optional[dict] = None,
-    efficiency_weight: float = 0.54,
-    explosiveness_weight: float = 0.36,
+    efficiency_weight: float = 0.45,
+    explosiveness_weight: float = 0.45,
     turnover_weight: float = 0.10,
     garbage_time_weight: float = 0.1,
     asymmetric_garbage: bool = True,
@@ -2144,8 +2144,8 @@ def run_backtest(
         hfa_value: Base home field advantage in points
         prior_weight: games_for_full_weight for preseason blending
         season_data: Pre-fetched season data (for sweep caching)
-        efficiency_weight: EFM success rate weight (default 0.54)
-        explosiveness_weight: EFM IsoPPP weight (default 0.36)
+        efficiency_weight: EFM success rate weight (default 0.45)
+        explosiveness_weight: EFM IsoPPP weight (default 0.45)
         turnover_weight: EFM turnover margin weight (default 0.10)
         garbage_time_weight: EFM garbage time play weight (default 0.1)
         asymmetric_garbage: Only penalize trailing team in garbage time (default True)
@@ -2312,7 +2312,7 @@ def run_sweep(
     # Note: turnover_weight is fixed at 0.10, so efficiency + explosiveness = 0.90
     alphas = [50, 100, 200]
     hfas = [2.0, 2.5, 3.0]
-    eff_weights = [0.50, 0.54, 0.60]  # These are efficiency weights (explosiveness = 0.90 - eff)
+    eff_weights = [0.40, 0.45, 0.50]  # These are efficiency weights (explosiveness = 0.90 - eff)
     turnover_weight = 0.10  # Fixed at 10%
 
     combos = list(product(alphas, hfas, eff_weights))
@@ -2619,14 +2619,14 @@ def main():
     parser.add_argument(
         "--efficiency-weight",
         type=float,
-        default=0.54,
-        help="Weight for success rate component (default: 0.54)",
+        default=0.45,
+        help="Weight for success rate component (default: 0.45)",
     )
     parser.add_argument(
         "--explosiveness-weight",
         type=float,
-        default=0.36,
-        help="Weight for IsoPPP component (default: 0.36)",
+        default=0.45,
+        help="Weight for IsoPPP component (default: 0.45)",
     )
     parser.add_argument(
         "--turnover-weight",
