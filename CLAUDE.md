@@ -1,5 +1,20 @@
 # 🏈 JP+ CFB Power Ratings: Model Governance
 
+## Project Overview
+- This project is a Python-based CFB power ratings model designed to generate an analytical edge against market lines. Key files include the backtest pipeline, efficiency model, ratings engine, and config. The primary language is Python. Documentation is maintained in Markdown. Always check that column names, feature names, and config flags match across files after any refactor.
+
+## Model Development Rules
+- Backtest Before Commit: After any code change to the model pipeline, always run a backtest before committing to verify MAE, correlation, and ATS metrics haven't regressed. Never commit model changes without backtest validation.
+
+- Sign Convention Verification: When fixing spread/line calculations, always verify the sign convention (home-team perspective vs. away-team perspective) before and after the change. Double-check that normalization doesn't flip already-correct values.
+
+- Multi-Year Validation: When adding a new feature to the model (e.g., TWP, early-down success rate, red zone regression), always validate across multiple years (not just one season) before keeping it. If single-year results look good but multi-year degrades MAE, remove the feature.
+
+## Git Workflow
+- Atomic Commits: Never commit unrelated changes alongside a targeted fix. Keep commits atomic and scoped to the task at hand.
+
+- Staging Protocol: Always confirm with the user before staging files beyond the current task.
+
 ## 🛠️ Environment & Technical Context
 - **Python:** `python3` (v3.10+)
 - **Database:** SQLite located at `data/cfb_model.db`
@@ -14,21 +29,21 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-06)
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-07)
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
 | **Full (`--start-week 1`)** | 1–Post | 3,273 | 13.02 | 16.50 | 51.1% | 52.7% |
 | Phase 1 (Calibration) | 1–3 | 597 | 14.94 | — | 47.1% | 48.6% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.52** | **15.84** | **52.4%** | **54.0%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.43 | — | 47.4% | 48.3% |
-| 3+ Edge (Core) | 4–15 | 1,433 | — | — | 53.3% (764-669) | 55.5% (811-650) |
-| 5+ Edge (Core) | 4–15 | 866 | — | — | 54.6% (473-393) | 56.9% (525-397) |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.53** | **15.91** | **52.5%** | **54.0%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.49 | — | 47.4% | 48.3% |
+| 3+ Edge (Core) | 4–15 | 1,412 | — | — | 53.7% (758-654) | 55.5% (811-650) |
+| 5+ Edge (Core) | 4–15 | 875 | — | — | 54.2% (474-401) | 56.9% (525-397) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
-- **Conference Anchor:** OOC game weighting (1.5x) + Bayesian conference strength anchor. Fixes inter-conference bias; Big 12 intra-conference circularity remains.
+- **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.12, prior=20, max=3.0). Fixes inter-conference defensive inflation; Big 12 intra-conference circularity partially addressed.
 
 ---
 
@@ -77,3 +92,4 @@
     - **EFM/In-Season:** `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
+
