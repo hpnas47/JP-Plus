@@ -356,6 +356,8 @@ class EfficiencyFoundationModel:
         rz_weight_20: float = 1.5,  # Weight multiplier for plays inside the 20-yard line
         rz_weight_10: float = 2.0,  # Weight multiplier for plays inside the 10-yard line
         empty_yards_weight: float = 0.7,  # Weight for "empty" successful plays between opp 40-20
+        money_down_weight: float = 1.0,  # Weight multiplier for 3rd/4th down plays (LASR - dormant, 1.0 = disabled)
+        empty_success_weight: float = 1.0,  # Penalty for successful 3rd/4th down plays that don't convert (dormant)
         def_efficiency_weight: float = None,  # Defensive SR weight (None = use efficiency_weight)
         def_explosiveness_weight: float = None,  # Defensive IsoPPP weight (None = use explosiveness_weight)
         def_turnover_weight: float = None,  # Defensive TO weight (None = use turnover_weight)
@@ -394,6 +396,11 @@ class EfficiencyFoundationModel:
             rz_weight_10: Weight multiplier for plays inside the 10-yard line (default 2.0).
             empty_yards_weight: Weight for "empty" successful plays between opponent 40-20 (default 0.7).
                                Devalues successful plays that stall without entering the red zone or scoring.
+            money_down_weight: Weight multiplier for 3rd/4th down plays (default 2.0).
+                              LASR (Late And Short Runs) weighting - emphasizes conversion situations.
+            empty_success_weight: Penalty for successful 3rd/4th down plays that don't convert (default 0.5).
+                                 Applies to plays that meet success criteria but fail to gain first down.
+                                 Stacks multiplicatively with money_down_weight (net 1.0x for empty successes).
         """
         self.ridge_alpha = ridge_alpha
         self.efficiency_weight = efficiency_weight
@@ -414,6 +421,8 @@ class EfficiencyFoundationModel:
         self.rz_weight_20 = rz_weight_20
         self.rz_weight_10 = rz_weight_10
         self.empty_yards_weight = empty_yards_weight
+        self.money_down_weight = money_down_weight
+        self.empty_success_weight = empty_success_weight
         self.def_efficiency_weight = def_efficiency_weight if def_efficiency_weight is not None else self.efficiency_weight
         self.def_explosiveness_weight = def_explosiveness_weight if def_explosiveness_weight is not None else self.explosiveness_weight
         self.def_turnover_weight = def_turnover_weight if def_turnover_weight is not None else self.turnover_weight
@@ -786,6 +795,49 @@ class EfficiencyFoundationModel:
                                     f"{team} has {empty_pct:.1f}% successful plays in Empty Yards zone — "
                                     f"possible field position data error"
                                 )
+
+        # Apply Money Down weighting (LASR - Late And Short Runs)
+        # Hypothesis: 3rd/4th down conversion ability is a persistent trait that reveals
+        # coaching quality, scheme adaptability, and execution under pressure.
+        if self.money_down_weight != 1.0 and "down" in df.columns:
+            is_money_down = df["down"].isin([3, 4])
+            money_down_count = is_money_down.sum()
+
+            if money_down_count > 0:
+                # Apply base money down weight
+                df["weight"] = np.where(is_money_down, df["weight"] * self.money_down_weight, df["weight"])
+
+                # Apply Empty Success penalty: successful 3rd/4th down plays that don't convert
+                # A play is an "empty success" if it meets success rate criteria (50%/70%/100% of distance)
+                # but fails to gain enough yards for a first down (yards_gained < distance)
+                if self.empty_success_weight != 1.0 and "is_success" in df.columns and "distance" in df.columns and "yards_gained" in df.columns:
+                    # Empty success: successful play on money down that didn't convert
+                    # yards_gained < distance means no first down (didn't gain full distance)
+                    is_empty_success = (
+                        is_money_down &
+                        (df["is_success"] == 1) &
+                        (df["yards_gained"] < df["distance"])
+                    )
+
+                    empty_success_count = is_empty_success.sum()
+
+                    if empty_success_count > 0:
+                        # Apply penalty (stacks with money_down_weight: 2.0 × 0.5 = 1.0 net)
+                        df["weight"] = np.where(is_empty_success, df["weight"] * self.empty_success_weight, df["weight"])
+
+                        total_plays = len(df)
+                        logger.debug(
+                            f"  LASR: {money_down_count:,} money down plays ({money_down_count/total_plays*100:.1f}%, "
+                            f"{self.money_down_weight}x weight), "
+                            f"{empty_success_count:,} empty successes ({empty_success_count/total_plays*100:.1f}%, "
+                            f"{self.empty_success_weight}x penalty)"
+                        )
+                else:
+                    total_plays = len(df)
+                    logger.debug(
+                        f"  LASR: {money_down_count:,} money down plays ({money_down_count/total_plays*100:.1f}%, "
+                        f"{self.money_down_weight}x weight)"
+                    )
 
         # Store base weight (before time decay) for X_base caching.
         # base_weight = GT × OOC × RZ × empty_yards (all non-temporal weights).

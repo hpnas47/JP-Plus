@@ -67,6 +67,26 @@
 - **Magnitude check:** ±2.5 pct pt weight shift produces 0.25 pts per game — below noise floor. Even ±5.0 pct pt (0.49 pts) doesn't reach the 0.5 pt threshold. Flagged for rejection before backtest.
 - **Indiana/Ole Miss root cause:** Priors problems (coaching turnarounds, portal churn) and conference circularity, not style asymmetry. Indiana's largest error (Wk5 -15.5 vs Maryland) occurred before the model captured Cignetti's turnaround.
 
+#### LASR (Money Down Weighting) — REJECTED (Rejection #10)
+**Impact: Worst single-experiment degradation; confirmed SR already captures down-and-distance**
+
+- **Hypothesis:** Up-weighting 3rd/4th down plays (2.0x) and penalizing "empty successes" (0.5x for plays that meet SR criteria but don't convert) captures a "clutch" signal that reduces MAE for efficiency-inflated teams like UCF.
+- **Implementation:** Added `money_down_weight` and `empty_success_weight` params to `_prepare_plays()` in EFM, stacking multiplicatively with existing weights (RZ Leverage, garbage time, etc.).
+- **Magnitude gate PASSED:** UCF 2024 dropped +20.38 → +16.88 (**-3.50 pts**). Colorado moved minimally (-0.30 pts).
+- **Core backtest FAILED (Weeks 4-15, 2022-2025):**
+
+| Metric | Baseline | LASR | Delta |
+|--------|----------|------|-------|
+| Core MAE | 12.52 | 12.63 | **+0.11 (5x tolerance)** |
+| Core ATS (Close) | 52.4% | 52.0% | -0.4% |
+| Core 3+ Edge | 53.0% | 53.1% | +0.1% |
+| Core 5+ Edge | 54.5% | 53.8% | **-0.7% (worst ever)** |
+
+- **CLV at 5+ edge: -0.57** — market moves AGAINST LASR-influenced picks.
+- **Root cause:** SR's success thresholds already differentiate by down (50%/70%/100% for 1st/2nd/3rd-4th down). 3rd down conversion signal is priced into both SR and the market. Up-weighting adds noise, not information.
+- **Key insight (Code Auditor):** "The UCF/Colorado overrating problem cannot be solved by re-weighting existing signals. The market already knows which teams are bad on 3rd down — we need signals the market DOESN'T have."
+- Infrastructure preserved dormant (defaults=1.0, guard `!= 1.0` prevents execution).
+
 ---
 
 ## Session: February 7, 2026
