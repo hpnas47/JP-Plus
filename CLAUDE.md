@@ -4,16 +4,40 @@
 - This project is a Python-based CFB power ratings model designed to generate an analytical edge against market lines. Key files include the backtest pipeline, efficiency model, ratings engine, and config. The primary language is Python. Documentation is maintained in Markdown. Always check that column names, feature names, and config flags match across files after any refactor.
 
 ## Model Development Rules
-- Backtest Before Commit: After any code change to the model pipeline, always run a backtest before committing to verify MAE, correlation, and ATS metrics haven't regressed. Never commit model changes without backtest validation.
+- **Backtest Before Commit:** After any code change to the model pipeline, always run a backtest before committing to verify MAE, correlation, and ATS metrics haven't regressed. Never commit model changes without backtest validation.
+- **Multi-Year Validation:** When adding a new feature, always validate across multiple years (not just one season) before keeping it. If single-year results look good but multi-year degrades MAE, remove the feature.
+- **Edge > Accuracy:** Optimize parameters to maximize ATS Profit (Win % on 3+/5+ pt edge), not to minimize MAE. ATS performance is what matters for betting edge.
+- **Market Blindness:** Never use the Vegas line as a training target or feature input. Disagreement with Vegas is the goal, not an error.
+- **Process Over Resume:** Rankings must be derived from Efficiency (Success Rate), not Outcomes (Points/Wins). Exception: Turnover Margin (10%) as regressed modifier.
+- **No Mercy Rule:** Never dampen predicted margins solely to lower MAE in blowouts. We model team capability, not coaching psychology.
+- **Full Season for Final Ratings:** Never generate "Final" Power Ratings from partial data. End-of-season rankings must include postseason (Bowls, CFP).
 
-- Sign Convention Verification: When fixing spread/line calculations, always verify the sign convention (home-team perspective vs. away-team perspective) before and after the change. Double-check that normalization doesn't flip already-correct values.
+## Sign Conventions (Immutable)
+- **Internal (SpreadGenerator):** Positive (+) = Home Team Favored
+- **Vegas (CFBD API):** Negative (-) = Home Team Favored
+- **HFA:** Positive (+) = Points added to Home Team
+- **Edge:** Negative = JP+ likes Home more than Vegas; Positive = JP+ likes Away more
+- **Actual Margin:** Positive (+) = Home Team Won
+- **Conversion:** `vegas_spread = -internal_spread`
 
-- Multi-Year Validation: When adding a new feature to the model (e.g., TWP, early-down success rate, red zone regression), always validate across multiple years (not just one season) before keeping it. If single-year results look good but multi-year degrades MAE, remove the feature.
+## Data Sources (Betting Lines)
+- **Historical (2022-2025):** CFBD API — 91% FBS opening line coverage
+- **Future (2026+):** The Odds API — capture opening (Sunday) and closing (Saturday) lines
+- **Priority order:** DraftKings > ESPN Bet > Bovada > fallback
+- **Storage:** Odds API lines stored in `data/odds_api_lines.db` (SQLite)
+- **Merge logic:** `src/api/betting_lines.py` combines both sources, preferring Odds API when available
+
+## Data Hygiene
+- **FCS:** Efficiency metrics must be trained on FBS vs. FBS data only. FCS plays dropped before Ridge Regression.
+- **Garbage Time:** Asymmetric filtering. Winner keeps full weight (signal); Loser gets down-weighted (noise).
 
 ## Git Workflow
-- Atomic Commits: Never commit unrelated changes alongside a targeted fix. Keep commits atomic and scoped to the task at hand.
-
-- Staging Protocol: Always confirm with the user before staging files beyond the current task.
+- **Atomic Commits:** Never commit unrelated changes alongside a targeted fix. Keep commits atomic and scoped to the task at hand.
+- **Staging Protocol:** Always confirm with the user before staging files beyond the current task.
+- **Documentation Sync:** All documentation changes must be pushed to BOTH repositories:
+  1. `hpnas47/JP-Plus` (main code repo) — `docs/` directory
+  2. `hpnas47/JP-Plus-Docs` (docs-only repo) — root directory
+- **Session Log:** Update `docs/SESSION_LOG.md` at end of every session with ALL changes made AND tested-but-rejected experiments.
 
 ## 🛠️ Environment & Technical Context
 - **Python:** `python3` (v3.10+)
