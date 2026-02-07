@@ -60,6 +60,28 @@
 - Populated metrics cache and updated CLAUDE.md + MODEL_ARCHITECTURE.md via generate_docs.py.
 - Core metrics stable: MAE 12.52, ATS 52.4%, 5+ Edge 54.5%.
 
+#### Commit: Move governing rules from SESSION_LOG to CLAUDE.md (6aab560)
+**Impact: Clean separation of governance vs journal**
+
+- Merged unique rules (sign conventions, data sources, mercy rule, market blindness, dual repo sync) into CLAUDE.md.
+- SESSION_LOG is now a pure chronological development journal.
+
+#### Commit: Replace sklearn Ridge with analytical Cholesky solver (a2f3e0c)
+**Impact: 5.2x faster Ridge solve, improved numerical accuracy**
+
+- **Problem:** sklearn's `sparse_cg` solver is iterative (tol=1e-4), producing ~1e-6 coefficient accuracy. Also requires building a sparse CSR design matrix per call.
+- **Solution:** Analytical Gram matrix construction via `np.bincount()` + direct Cholesky decomposition via `scipy.linalg.cho_factor/cho_solve`.
+- **4-step Council pipeline:** Strategist (equivalence confirmed) → Perf Optimizer (design plan) → Code Auditor (implementation) → Quant Auditor (backtest validation).
+- **Key implementation details:**
+  - Gram matrix `X^T W X` computed analytically from team indices (no sparse matrix needed)
+  - Replicates sklearn's weighted centering + weight normalization exactly
+  - Intercept NOT regularized (matches sklearn behavior)
+  - Runtime assertions: Gram matrix symmetry check, Cholesky positive definiteness guard
+- **Removed:** `_build_base_matrix()`, `_BASE_MATRIX_CACHE`, `_compute_matrix_hash()`, sklearn Ridge import
+- **Performance:** 15.6ms → 3.0ms per prediction week (5.2x), 60% memory reduction (4MB → 1.6MB)
+- **Accuracy:** Cholesky is 100x more precise (1e-14 vs 1e-6 vs gold standard)
+- **Backtest:** Core MAE 12.51 (-0.01), ATS 52.5% (+0.1%), 3+ Edge 53.5% (+0.2%), 5+ Edge 54.1% (-0.5%, boundary effect — same 473 wins, 8 more games entered cohort under more precise coefficients)
+
 ---
 
 ## Session: February 6, 2026 (Performance)
