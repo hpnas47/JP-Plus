@@ -381,101 +381,88 @@ class FinishingDrivesModel:
         if rz_plays.empty:
             return
 
+        # Require drive identifiers for trip-level analysis
+        if "drive_id" not in rz_plays.columns or "game_id" not in rz_plays.columns:
+            logger.warning(
+                "Cannot compute RZ trips: missing drive_id or game_id columns. "
+                "Skipping all teams."
+            )
+            return
+
+        # --- VECTORIZED TRIP CLASSIFICATION ---
+        # Extract the last play of every RZ drive in one operation (replaces per-team for-loop).
+        # Uses .tail(1) on the groupby to get the final play per (offense, game_id, drive_id).
+        last_plays = rz_plays.groupby(["offense", "game_id", "drive_id"]).tail(1).copy()
+
+        # Lowercase play_type once for all classification
+        pt_lower = last_plays["play_type"].fillna("").str.lower()
+
+        # Filter out non-competitive trips: kneeldowns, end-of-game, timeouts
+        non_competitive = pt_lower.str.contains("kneel|end of|timeout", na=False)
+        last_plays = last_plays[~non_competitive]
+        pt_lower = pt_lower[~non_competitive]
+
+        # Classify outcomes via vectorized string matching
+        is_td = pt_lower.str.contains("touchdown|rushing td|passing td", na=False)
+        is_fg = pt_lower.str.contains("field goal good", na=False)
+        is_to = pt_lower.str.contains("interception|fumble recovery \\(opponent\\)", na=False)
+        # FAILED = everything else (4th down stops, punts, etc.)
+
+        last_plays["_outcome"] = "FAILED"
+        last_plays.loc[is_td, "_outcome"] = "TD"
+        last_plays.loc[is_fg, "_outcome"] = "FG"
+        last_plays.loc[is_to, "_outcome"] = "TO"
+
+        # Aggregate counts per team in one groupby
+        outcome_counts = (
+            last_plays.groupby(["offense", "_outcome"])
+            .size()
+            .unstack(fill_value=0)
+        )
+        # Ensure all outcome columns exist
+        for col in ("TD", "FG", "TO", "FAILED"):
+            if col not in outcome_counts.columns:
+                outcome_counts[col] = 0
+
+        # --- VECTORIZED GOAL-TO-GO (inside 10) ---
+        # Get last play per GTG drive, classify TDs
+        gtg_plays = rz_plays[rz_plays["yards_to_goal"] <= 10]
+        if not gtg_plays.empty:
+            gtg_last = gtg_plays.groupby(["offense", "game_id", "drive_id"]).tail(1)
+            gtg_pt_lower = gtg_last["play_type"].fillna("").str.lower()
+            gtg_is_td = gtg_pt_lower.str.contains("touchdown", na=False)
+
+            gtg_trip_counts = gtg_last.groupby("offense").size()
+            gtg_td_counts = gtg_last[gtg_is_td].groupby("offense").size()
+        else:
+            gtg_trip_counts = pd.Series(dtype=int)
+            gtg_td_counts = pd.Series(dtype=int)
+
+        # Games played per team (for PBTA normalization)
+        games_per_team = rz_plays.groupby("offense")["game_id"].nunique()
+
         # DETERMINISM: Sort for consistent iteration order
-        all_teams = sorted(set(rz_plays["offense"].dropna()))
+        all_teams = sorted(outcome_counts.index)
 
         for team in all_teams:
-            team_rz = rz_plays[rz_plays["offense"] == team]
+            row = outcome_counts.loc[team]
+            rz_tds = int(row["TD"])
+            rz_fgs = int(row["FG"])
+            rz_turnovers = int(row["TO"])
+            rz_failed = int(row["FAILED"])
 
-            if team_rz.empty:
-                continue
-
-            # P0.1 FIX: Count RED ZONE TRIPS at drive level, not play level
-            # A trip = one distinct possession that entered the red zone
-            # Use game_id + drive_id to uniquely identify trips
-
-            if "drive_id" not in team_rz.columns or "game_id" not in team_rz.columns:
-                # Fallback: cannot compute trips without drive identifiers
-                logger.warning(
-                    f"Cannot compute RZ trips for {team}: missing drive_id or game_id columns. "
-                    "Skipping team."
-                )
-                continue
-
-            # P0.1: Count DISTINCT drives that entered red zone
-            rz_trips = team_rz.groupby(["game_id", "drive_id"])
-
-            # Classify each trip by outcome (look at last play of trip in RZ)
-            # For each trip, get the last play's play_type to determine outcome
-            trip_outcomes = []
-
-            for (game_id, drive_id), trip_plays in rz_trips:
-                # Sort by play order (use index as proxy if no explicit play number)
-                # Last play in RZ determines trip outcome
-                last_play = trip_plays.iloc[-1]
-                play_type_lower = str(last_play.get("play_type", "")).lower()
-
-                # Skip non-competitive trips: kneeldowns, end-of-game, timeouts
-                # These are clock-management situations, not scoring failures
-                if any(tag in play_type_lower for tag in ("kneel", "end of", "timeout")):
-                    continue
-
-                # Classify outcome
-                if "touchdown" in play_type_lower or "rushing td" in play_type_lower or "passing td" in play_type_lower:
-                    outcome = "TD"
-                elif "field goal good" in play_type_lower:
-                    outcome = "FG"
-                elif "interception" in play_type_lower or "fumble recovery (opponent)" in play_type_lower:
-                    outcome = "TO"
-                elif last_play.get("down") == 4:
-                    # 4th down stop (failed conversion)
-                    outcome = "FAILED"
-                else:
-                    # Other failures (punt, turnover on downs without 4th down marker, etc.)
-                    outcome = "FAILED"
-
-                trip_outcomes.append(outcome)
-
-            # Count trips by outcome
-            rz_tds = trip_outcomes.count("TD")
-            rz_fgs = trip_outcomes.count("FG")
-            rz_turnovers = trip_outcomes.count("TO")
-            rz_failed = trip_outcomes.count("FAILED")
-
-            # P0.1: Goal-to-go (inside 10) - also count TRIPS not plays
-            # A GTG trip = one distinct possession that started inside 10
-            gtg_mask = team_rz["yards_to_goal"] <= 10
-            if gtg_mask.any():
-                gtg_trips = team_rz[gtg_mask].groupby(["game_id", "drive_id"])
-
-                gtg_td_count = 0
-                gtg_trip_count = 0
-
-                for (game_id, drive_id), trip_plays in gtg_trips:
-                    gtg_trip_count += 1
-                    last_play = trip_plays.iloc[-1]
-                    play_type_lower = str(last_play.get("play_type", "")).lower()
-                    if "touchdown" in play_type_lower:
-                        gtg_td_count += 1
-
-                gtg_tds = gtg_td_count
-                gtg_attempts = gtg_trip_count
-            else:
-                gtg_tds = 0
-                gtg_attempts = 0
-
-            # Derive games_played from unique game_ids in team's plays
-            # This ensures per-game normalization for PBTA calculation
-            games_played = team_rz["game_id"].nunique()
+            gtg_tds = int(gtg_td_counts.get(team, 0))
+            gtg_attempts = int(gtg_trip_counts.get(team, 0))
+            games_played = int(games_per_team.get(team, 0))
 
             self.calculate_team_rating(
                 team=team,
-                rz_touchdowns=int(rz_tds),
-                rz_field_goals=int(rz_fgs),
-                rz_turnovers=int(rz_turnovers),
-                rz_failed=int(rz_failed),
-                goal_to_go_tds=int(gtg_tds),
-                goal_to_go_attempts=int(gtg_attempts),
+                rz_touchdowns=rz_tds,
+                rz_field_goals=rz_fgs,
+                rz_turnovers=rz_turnovers,
+                rz_failed=rz_failed,
+                goal_to_go_tds=gtg_tds,
+                goal_to_go_attempts=gtg_attempts,
                 games_played=games_played,
             )
 
