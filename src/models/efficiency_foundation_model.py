@@ -1759,9 +1759,9 @@ class EfficiencyFoundationModel:
         games_df: pd.DataFrame,
         team_conferences: dict[str, str],
         max_week: int | None = None,
-        anchor_scale: float = 0.12,
-        prior_games: int = 20,
-        max_adjustment: float = 3.0,
+        anchor_scale: float = 0.08,
+        prior_games: int = 30,
+        max_adjustment: float = 2.0,
     ) -> tuple[dict[str, float], dict[str, tuple[float, float]]]:
         """Calculate conference strength adjustment from non-conference game performance.
 

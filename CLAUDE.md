@@ -35,15 +35,15 @@
 |-------|-------|-------|-----|------|-------------|------------|
 | **Full (`--start-week 1`)** | 1–Post | 3,273 | 13.02 | 16.50 | 51.1% | 52.7% |
 | Phase 1 (Calibration) | 1–3 | 597 | 14.94 | — | 47.1% | 48.6% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.53** | **15.91** | **52.5%** | **54.0%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.49 | — | 47.4% | 48.3% |
-| 3+ Edge (Core) | 4–15 | 1,412 | — | — | 53.7% (758-654) | 55.5% (811-650) |
-| 5+ Edge (Core) | 4–15 | 875 | — | — | 54.2% (474-401) | 56.9% (525-397) |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.52** | **15.84** | **52.4%** | **54.0%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.43 | — | 47.4% | 48.3% |
+| 3+ Edge (Core) | 4–15 | 1,433 | — | — | 53.0% (764-669) | 55.5% (811-650) |
+| 5+ Edge (Core) | 4–15 | 866 | — | — | 54.5% (475-396) | 56.9% (525-397) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
-- **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.12, prior=20, max=3.0). Fixes inter-conference defensive inflation; Big 12 intra-conference circularity partially addressed.
+- **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 
 ---
 
