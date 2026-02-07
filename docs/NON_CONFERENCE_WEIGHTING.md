@@ -147,25 +147,62 @@ python3 scripts/backtest.py --years 2024 --start-week 4 --end-week 6
 
 Result: Backtest completed successfully with non-conference weighting applied.
 
-## Next Steps
+## Full Backtest Results (2022-2025): APPROVED
 
-1. **Full backtest**: Run 2022-2025 full backtest to measure impact on:
-   - Big 12 rating compression (should reduce UCF/Baylor/Colorado inflation)
-   - Overall MAE and ATS performance
-   - Conference rating std deviation
+The OOC weighting was committed as part of the Conference Strength Anchor feature (`f7bf815`), which combined two mechanisms:
+1. **OOC play weighting (1.5x)** — this document's implementation
+2. **Post-Ridge Bayesian conference anchors** — separate O/D anchors from OOC scoring margin (scale=0.08, prior_games=30, max_adjustment=±2.0)
 
-2. **SP+ comparison**: Compare post-fix Big 12 ratings to SP+ for validation
+### Backtest Impact (Combined Feature, vs Pre-Anchor Baseline)
 
-3. **Weight tuning**: If 1.5x is too aggressive/conservative, test 1.3x or 1.7x
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| Core MAE (4-15) | 12.52 | 12.49 | -0.03 |
+| Core ATS (Close) | 52.0% | 52.4% | +0.4% |
+| Core 3+ Edge (Close) | 52.3% | 52.9% | +0.6% |
+| **Core 5+ Edge (Close)** | **53.5%** | **54.8%** | **+1.3%** |
 
-4. **Conference strength reporting**: Consider logging conference-level OOC performance for diagnostics
+### Anchor Scale Sweep (Post-Approval)
+
+Tested 4 anchor_scale variants to optimize the Bayesian anchor strength:
+
+| Scale | 3+ Edge | 5+ Edge | MAE | Verdict |
+|-------|---------|---------|-----|---------|
+| **0.08** | 52.9% | **54.8%** | 12.49 | **KEPT (production)** |
+| 0.12 | 53.6% (+0.7%) | 54.5% (-0.3%) | 12.50 | Reverted — 5+ Edge degraded |
+| 0.15 | 53.4% | 54.2% | 12.52 | Rejected |
+| 0.20 | 53.1% | 53.8% | 12.55 | Rejected |
+
+**Decision:** 5+ Edge (~2% over vig) is the binding constraint. Scale 0.08 preserved best 5+ Edge. Scale 0.12 improved 3+ Edge but degraded the higher-conviction bets.
+
+### Big 12 Impact
+
+- UCF dropped from #13 → #19 (still inflated vs SP+ #62, but meaningful improvement)
+- Composite anchor CANNOT fully fix Colorado/Baylor because Big 12 OOC margin is positive overall — the conference performs reasonably well OOC, the problem is intra-conference circularity
+- Conference rating std deviation increased (reduced artificial compression)
+
+### Garbage Time Variants (Tested Alongside, All Rejected)
+
+| GT Variant | 5+ Edge | Verdict |
+|------------|---------|---------|
+| Baseline (asymmetric, leading=1.0) | 53.5% | — |
+| Leading=0.5 | 52.5% | REJECTED |
+| Leading=0.7 | 52.2% | REJECTED |
+| Symmetric | 52.3% | REJECTED |
+
+Asymmetric GT (leading=1.0) confirmed as optimal. Leading team plays ARE informative; down-weighting them removes real signal.
 
 ## Implementation Date
 
 2026-02-06
+
+## Current Status
+
+**APPROVED and in production.** OOC 1.5x weighting is part of the Conference Strength Anchor feature. Parameters reverted to conservative settings (0.08/30/2.0) on 2026-02-07 after aggressive params (0.12/20/3.0) were found to degrade 5+ Edge.
 
 ## Related Issues
 
 - Big 12 rating inflation (UCF #13, Baylor #16, Colorado #12 vs SP+ reality)
 - Ridge regression conference circularity
 - Garbage time weighting experiments (rejected due to ATS degradation)
+- Conference Anchor param revert (57f228a) — preserved O/D split architecture

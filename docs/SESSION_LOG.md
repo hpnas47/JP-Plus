@@ -154,6 +154,82 @@ Two performance-focused refactors to reduce API calls and redundant matrix const
 
 ---
 
+## Session: February 6, 2026 (Model Tuning)
+
+### Theme: Conference Anchor + RZ Leverage + Rejected Experiments
+
+Five model tuning experiments after the FD shelving and Council sessions. Two approved (conference anchor, RZ leverage), three rejected (MOV calibration, efficiency fraud tax, garbage time variants). Net result: Core 5+ Edge 53.5% → 55.0% (+1.5%).
+
+---
+
+#### Commit: Reconcile baselines against fresh backtest (ddc2550)
+**Impact: Established verified ground truth for all subsequent experiments**
+
+- Ran fresh `--start-week 4` and `--start-week 1` backtests.
+- Updated CLAUDE.md, MODEL_ARCHITECTURE.md, MODEL_EXPLAINER.md, SESSION_LOG.md with verified numbers.
+- Core baseline: MAE 12.52, ATS 52.0%, 3+ Edge 52.3%, 5+ Edge 53.5%.
+
+#### Commit: Add conference strength anchor (f7bf815) — APPROVED
+**Impact: Core 5+ Edge 53.5% → 54.8% (+1.3%), MAE 12.52 → 12.49**
+
+- **Problem:** Big 12 teams massively over-rated (UCF #13 vs SP+ #62, Baylor #16 vs SP+ #38) due to Ridge regression conference circularity.
+- **Two mechanisms:**
+  1. OOC play weighting (1.5x) — gives Ridge more cross-conference signal
+  2. Post-Ridge Bayesian conference anchor — separate O/D anchors from OOC scoring margin (scale=0.08, prior_games=30, max=±2.0)
+- UCF dropped #13 → #19. Big 12 rating std deviation increased (reduced compression).
+- Also added `leading_garbage_weight` param (tested 0.5/0.7/symmetric — all rejected, default 1.0 preserved).
+- See `docs/NON_CONFERENCE_WEIGHTING.md` for full implementation details.
+
+#### Garbage Time Variants — REJECTED
+**Impact: Confirmed asymmetric GT (leading=1.0) is optimal**
+
+- Tested leading=0.5, leading=0.7, and symmetric weighting.
+- All degraded 5+ Edge: 53.5% → 52.2-52.5%.
+- Root cause of Big 12 bubble is NOT GT weighting — it's conference circularity.
+- Leading team plays ARE informative; down-weighting them removes real signal.
+
+#### MOV Calibration — REJECTED
+**Impact: All 4 weights degraded Core 5+ Edge ATS**
+
+- Tested weights 0.05, 0.10, 0.15, 0.20. Best (0.05): 54.4% (-0.4%), Worst (0.15): 53.3% (-1.5%).
+- MAE improves slightly (12.49→12.45) but ATS is the binding constraint.
+- Root cause: MOV makes model MORE like market (lower MAE vs close), reducing edge.
+- Infrastructure preserved: `_apply_mov_calibration()` + `mov_weight`/`mov_cap` params (default 0.0).
+
+#### Efficiency Fraud Tax — REJECTED
+**Impact: Core 5+ Edge 54.8% → 54.6% (-0.2%) — fails "must not degrade" criterion**
+
+- Asymmetric one-way penalty for teams where expected_wins - actual_wins > 2.5.
+- UCF 2024: Drops #19 → #38 (-5.31 pts) — targeting works perfectly.
+- Too broad: 8 teams triggered (2024), 11 teams (2025) — target was 2-5.
+- Baylor/Colorado NOT triggered (circularity makes them "look right").
+- Infrastructure preserved: `_apply_efficiency_fraud_tax()` + params (default disabled).
+
+#### Commit: Add RZ leverage weighting + empty yards filter (70b2ed0) — APPROVED
+**Impact: Core 5+ Edge 54.8% → 55.0% (+0.2%), 57 more qualifying games**
+
+- Play-level weighting in `_prepare_plays()` — no outcome signals used.
+- Inside 20yd: 1.5x weight. Inside 10yd: 2.0x weight. Empty successful plays (opp 40-20, no RZ entry/score): 0.7x.
+- Core 3+ Edge: 52.9% → 53.6% (+0.7%). Core MAE: 12.49 → 12.51 (+0.02, within tolerance).
+- Naturally drops UCF from #19 → #23 without outcome-based signals.
+
+#### Commit: Update model docs with performance metrics (9ce2940)
+**Impact: Comprehensive documentation refresh**
+
+- Added opening + closing line ATS to all tables, RMSE metrics, per-year breakdowns, CLV tables, metric explainer section.
+- Updated 2025 Top 25 with full O/D/ST component ratings.
+
+### Baseline (Post-Tuning Session)
+
+| Metric | Pre-Session | Post-Session | Delta |
+|--------|-------------|--------------|-------|
+| Core MAE | 12.52 | 12.51 | -0.01 |
+| Core ATS (Close) | 52.0% | 52.4% | +0.4% |
+| Core 3+ Edge (Close) | 52.3% | 53.6% | +1.3% |
+| Core 5+ Edge (Close) | 53.5% | 55.0% | +1.5% |
+
+---
+
 ## Session: February 6, 2026 (Late Night)
 
 ### Theme: Explosiveness Uplift — Equal SR/IsoPPP Weights (45/45/10)
