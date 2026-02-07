@@ -39,8 +39,10 @@ from src.predictions.vegas_comparison import VegasComparison
 from src.reports.excel_export import ExcelExporter
 from src.reports.html_report import HTMLReporter
 from src.notifications import Notifier
+from src.data.week_cache import WeekDataCache
 
 import pandas as pd
+import polars as pl
 
 # Configure logging
 logging.basicConfig(
@@ -256,6 +258,128 @@ def build_schedule_df(
     return pd.DataFrame(all_games)
 
 
+PLAY_COLUMNS = [
+    "game_id", "offense", "defense", "down", "distance",
+    "yards_gained", "ppa", "play_type", "period",
+    "home_score", "away_score", "yards_to_goal",
+]
+
+
+def _fetch_week_plays_from_api(client: CFBDClient, year: int, w: int) -> pl.DataFrame:
+    """Fetch a single week's plays from the API and return as Polars DataFrame."""
+    plays_data = []
+    week_plays = client.get_plays(year, w)
+    for play in week_plays:
+        plays_data.append({
+            "game_id": play.game_id,
+            "offense": play.offense,
+            "defense": play.defense,
+            "down": play.down,
+            "distance": play.distance,
+            "yards_gained": play.yards_gained,
+            "ppa": play.ppa,
+            "play_type": play.play_type,
+            "period": play.period,
+            "home_score": play.home_score,
+            "away_score": play.away_score,
+            "yards_to_goal": getattr(play, "yards_to_goal", None),
+        })
+    return pl.DataFrame(plays_data, schema={
+        "game_id": pl.Int64,
+        "offense": pl.Utf8,
+        "defense": pl.Utf8,
+        "down": pl.Int64,
+        "distance": pl.Float64,
+        "yards_gained": pl.Float64,
+        "ppa": pl.Float64,
+        "play_type": pl.Utf8,
+        "period": pl.Int64,
+        "home_score": pl.Int64,
+        "away_score": pl.Int64,
+        "yards_to_goal": pl.Float64,
+    })
+
+
+def _fetch_plays(
+    client: CFBDClient, year: int, week: int, use_delta_cache: bool
+) -> pd.DataFrame:
+    """Fetch play-by-play data, using week-level cache when enabled.
+
+    When use_delta_cache=True:
+        - Loads weeks [1, week-2] from disk cache (cache hits)
+        - Fetches ONLY week (week-1) from the CFBD API
+        - Saves the newly fetched week to cache
+    When use_delta_cache=False:
+        - Fetches all weeks [1, week-1] from API (original behavior)
+    """
+    training_weeks = list(range(1, week))  # weeks 1 through week-1
+
+    if not use_delta_cache:
+        # Original behavior: fetch every week from API
+        all_dfs = []
+        for w in training_weeks:
+            try:
+                df = _fetch_week_plays_from_api(client, year, w)
+                all_dfs.append(df)
+            except Exception as e:
+                logger.warning(f"Error fetching plays for week {w}: {e}")
+        if all_dfs:
+            return pl.concat(all_dfs).to_pandas()
+        return pd.DataFrame(columns=PLAY_COLUMNS)
+
+    # --- Delta cache path ---
+    cache = WeekDataCache()
+    cached_weeks = set(cache.get_cached_weeks(year, "plays"))
+    historical_weeks = training_weeks[:-1]  # weeks [1, week-2]
+    fetch_week = training_weeks[-1] if training_weeks else None  # week-1
+
+    # Load historical weeks from cache
+    all_dfs: list[pl.DataFrame] = []
+    missing_historical = []
+    for w in historical_weeks:
+        if w in cached_weeks:
+            df = cache.load_week(year, w, "plays")
+            if df is not None:
+                all_dfs.append(df)
+                continue
+        missing_historical.append(w)
+
+    # If any historical weeks are missing, fetch them from API and cache
+    if missing_historical:
+        logger.info(
+            f"Delta cache: {len(missing_historical)} historical week(s) not cached, "
+            f"fetching from API: {missing_historical}"
+        )
+        for w in missing_historical:
+            try:
+                df = _fetch_week_plays_from_api(client, year, w)
+                cache.save_week(year, w, "plays", df)
+                all_dfs.append(df)
+            except Exception as e:
+                logger.warning(f"Error fetching plays for week {w}: {e}")
+    else:
+        if historical_weeks:
+            logger.info(
+                f"Delta cache: Loaded weeks 1-{historical_weeks[-1]} from cache "
+                f"({sum(len(d) for d in all_dfs):,} plays)"
+            )
+
+    # Fetch the current week from API (always fresh)
+    if fetch_week is not None:
+        try:
+            logger.info(f"Delta cache: Fetching week {fetch_week} from API...")
+            df = _fetch_week_plays_from_api(client, year, fetch_week)
+            cache.save_week(year, fetch_week, "plays", df)
+            all_dfs.append(df)
+            logger.info(f"Delta cache: Week {fetch_week} fetched and cached ({len(df):,} plays)")
+        except Exception as e:
+            logger.warning(f"Error fetching plays for week {fetch_week}: {e}")
+
+    if all_dfs:
+        return pl.concat(all_dfs).to_pandas()
+    return pd.DataFrame(columns=PLAY_COLUMNS)
+
+
 def run_predictions(
     year: int,
     week: int,
@@ -263,6 +387,7 @@ def run_predictions(
     send_notifications: bool = True,
     qb_out_teams: list[str] = None,
     generate_reports: bool = True,
+    use_delta_cache: bool = False,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -341,30 +466,8 @@ def run_predictions(
 
         # Fetch play-by-play data for EFM
         logger.info("Fetching play-by-play data for efficiency model...")
-        plays_data = []
-        for w in range(1, week):
-            try:
-                week_plays = client.get_plays(year, w)
-                for play in week_plays:
-                    plays_data.append({
-                        "game_id": play.game_id,
-                        "offense": play.offense,
-                        "defense": play.defense,
-                        "down": play.down,
-                        "distance": play.distance,
-                        "yards_gained": play.yards_gained,
-                        "ppa": play.ppa,
-                        "play_type": play.play_type,
-                        "period": play.period,
-                        "home_score": play.home_score,
-                        "away_score": play.away_score,
-                        "yards_to_goal": getattr(play, "yards_to_goal", None),
-                    })
-            except Exception as e:
-                logger.warning(f"Error fetching plays for week {w}: {e}")
-
-        plays_df = pd.DataFrame(plays_data)
-        logger.info(f"Fetched {len(plays_df)} plays for EFM training")
+        plays_df = _fetch_plays(client, year, week, use_delta_cache)
+        logger.info(f"Loaded {len(plays_df)} plays for EFM training")
 
         # Build EFM model
         logger.info("Fitting Efficiency Foundation Model...")
@@ -569,6 +672,7 @@ def main():
         send_notifications=not args.no_notify,
         qb_out_teams=args.qb_out,
         generate_reports=not args.no_reports,
+        use_delta_cache=args.use_delta_cache,
     )
 
     if results["success"]:
