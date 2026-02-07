@@ -1269,15 +1269,8 @@ class PreseasonPriors:
             # Get returning production for this team
             ret_ppa = returning_prod.get(team)
 
-            # Adjust returning production by transfer portal impact
-            # Portal impact is a modifier: positive = net gain, negative = net loss
+            # Portal impact is a directional modifier: positive = net talent gain
             portal_adj = portal_impact.get(team, 0.0)
-            if ret_ppa is not None:
-                # Effective returning = base returning + portal adjustment
-                # Portal adjustment is already scaled and capped at ±15%
-                effective_ret_ppa = max(0.0, min(1.0, ret_ppa + portal_adj))
-            else:
-                effective_ret_ppa = None
 
             # Get raw prior rating first (needed for asymmetric regression)
             raw_prior = prior_sp.get(team)
@@ -1290,10 +1283,16 @@ class PreseasonPriors:
                 logger.debug(f"{team}: Applied triple-option boost of +{triple_option_boost:.1f} pts")
 
             # Calculate team-specific regression factor based on:
-            # 1. Effective returning production (higher = less regression)
-            # 2. Distance from mean (farther = less regression - asymmetric)
+            # 1. RAW returning production (roster continuity — higher = less regression)
+            # 2. Distance from mean (farther = less regression — asymmetric)
+            #
+            # IMPORTANT: Use raw ret_ppa here, NOT portal-adjusted.
+            # Portal impact is a directional talent change, not a continuity signal.
+            # Adding portal talent to a bad team should HELP them (move toward mean),
+            # not anchor them to their bad prior by reducing regression.
+            # Portal effect is applied as a direct rating adjustment below.
             team_regression = self._get_regression_factor(
-                effective_ret_ppa,
+                ret_ppa,
                 raw_prior=raw_prior,
                 mean_prior=mean_prior,
             )
@@ -1396,6 +1395,22 @@ class PreseasonPriors:
                 # No data - assume average
                 combined = 0.0
                 confidence = 0.1
+
+            # Apply portal impact as a direct rating adjustment
+            # Portal is a directional talent change: positive portal = team got better.
+            # Decoupled from regression factor to avoid the "bad team anchor" bug where
+            # adding portal talent to a bad team reduced regression and locked them into
+            # their bad prior instead of helping them improve.
+            # Scale: portal_adj (±0.12 max) * PORTAL_TO_POINTS (12) ≈ ±1.4 pts max
+            PORTAL_TO_POINTS = 12.0  # Matches rating_std normalization target
+            if portal_adj != 0.0:
+                portal_rating_bonus = portal_adj * PORTAL_TO_POINTS
+                combined += portal_rating_bonus
+                if abs(portal_rating_bonus) > 0.3:
+                    logger.debug(
+                        f"  {team}: Portal rating adjustment {portal_rating_bonus:+.1f} pts "
+                        f"(portal_adj={portal_adj:+.3f})"
+                    )
 
             # Boost confidence if we have returning production data
             if ret_ppa is not None:
