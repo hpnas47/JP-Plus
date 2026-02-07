@@ -1051,12 +1051,19 @@ class EfficiencyFoundationModel:
             cho = linalg.cho_factor(G, lower=False)
             beta = linalg.cho_solve(cho, Xty)
         except linalg.LinAlgError as e:
-            logger.error(
-                f"Cholesky factorization failed: {e}. "
-                f"n_teams={n_teams}, n_plays={n_plays}, alpha={alpha}. "
-                "Gram matrix may not be positive definite."
+            logger.warning(
+                f"Cholesky factorization failed for alpha={alpha}, "
+                f"falling back to LU decomposition. "
+                f"n_teams={n_teams}, n_plays={n_plays}. Original error: {e}"
             )
-            raise
+            try:
+                beta = linalg.solve(G, Xty)
+            except linalg.LinAlgError:
+                logger.error(
+                    "LU fallback also failed. Gram matrix is singular. "
+                    f"n_teams={n_teams}, n_plays={n_plays}, alpha={alpha}."
+                )
+                raise
 
         # --- Reconstruct intercept (sklearn convention) ---
         intercept = y_offset - X_offset @ beta
