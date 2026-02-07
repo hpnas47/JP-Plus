@@ -488,14 +488,20 @@ class SpecialTeamsModel:
         made = fg_plays["made"].values
 
         # Vectorized expected rate lookup using np.select
-        conditions = [
-            distance < 30,
-            (distance >= 30) & (distance < 40),
-            (distance >= 40) & (distance < 50),
-            (distance >= 50) & (distance < 60),
-        ]
-        choices = [0.92, 0.83, 0.72, 0.55]
-        expected_rate = np.select(conditions, choices, default=0.30)
+        # Dynamically build conditions/choices from EXPECTED_FG_RATES
+        sorted_ranges = sorted(self.EXPECTED_FG_RATES.keys(), key=lambda x: x[0])
+        conditions = []
+        choices = []
+        for (low, high), rate in [(rng, self.EXPECTED_FG_RATES[rng]) for rng in sorted_ranges]:
+            if low == 0:
+                conditions.append(distance < high)
+            else:
+                conditions.append((distance >= low) & (distance < high))
+            choices.append(rate)
+
+        # Default is the longest range rate (60-100 yards)
+        default_rate = self.EXPECTED_FG_RATES[(60, 100)]
+        expected_rate = np.select(conditions[:-1], choices[:-1], default=default_rate)
 
         # Vectorized PAAE: actual_points - expected_points
         actual_points = np.where(made, 3.0, 0.0)
