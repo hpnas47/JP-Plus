@@ -415,6 +415,11 @@ class FinishingDrivesModel:
                 last_play = trip_plays.iloc[-1]
                 play_type_lower = str(last_play.get("play_type", "")).lower()
 
+                # Skip non-competitive trips: kneeldowns, end-of-game, timeouts
+                # These are clock-management situations, not scoring failures
+                if any(tag in play_type_lower for tag in ("kneel", "end of", "timeout")):
+                    continue
+
                 # Classify outcome
                 if "touchdown" in play_type_lower or "rushing td" in play_type_lower or "passing td" in play_type_lower:
                     outcome = "TD"
