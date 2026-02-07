@@ -1706,17 +1706,18 @@ class EfficiencyFoundationModel:
         # Applied AFTER Ridge regression but BEFORE normalization to break conference
         # circularity. Only activates when team_conferences and games_df are both provided.
         if team_conferences is not None and games_df is not None:
-            conf_anchor = self._calculate_conference_anchor(
+            conf_anchor, conf_splits = self._calculate_conference_anchor(
                 games_df, team_conferences, max_week=max_week
             )
             if conf_anchor:
                 for team, rating in self.team_ratings.items():
                     adj = conf_anchor.get(team, 0.0)
                     if abs(adj) > 0.001:
-                        # Split adjustment evenly between offense and defense
-                        # This preserves the overall = off + def invariant
-                        new_off = rating.offensive_rating + adj / 2
-                        new_def = rating.defensive_rating + adj / 2
+                        # Separate O/D anchors: offense and defense get independent
+                        # adjustments based on OOC scoring vs allowing
+                        off_adj, def_adj = conf_splits.get(team, (adj / 2, adj / 2))
+                        new_off = rating.offensive_rating + off_adj
+                        new_def = rating.defensive_rating + def_adj
                         new_overall = new_off + new_def
                         self.team_ratings[team] = TeamEFMRating(
                             team=rating.team,
@@ -1758,10 +1759,10 @@ class EfficiencyFoundationModel:
         games_df: pd.DataFrame,
         team_conferences: dict[str, str],
         max_week: int | None = None,
-        anchor_scale: float = 0.08,
-        prior_games: int = 30,
-        max_adjustment: float = 2.0,
-    ) -> dict[str, float]:
+        anchor_scale: float = 0.12,
+        prior_games: int = 20,
+        max_adjustment: float = 3.0,
+    ) -> tuple[dict[str, float], dict[str, tuple[float, float]]]:
         """Calculate conference strength adjustment from non-conference game performance.
 
         Addresses conference circularity in Ridge regression: teams in a weak conference
@@ -1775,6 +1776,8 @@ class EfficiencyFoundationModel:
         3. Apply Bayesian shrinkage: n_games / (n_games + prior_games) to suppress
            early-season noise when sample sizes are small
         4. Scale the deviation to produce a per-team adjustment (capped at +-max_adjustment)
+        5. Compute O/D-specific split ratios from Ridge-derived ratings to allocate
+           more anchor correction to the weaker side (offense or defense)
 
         The adjustment is applied to overall_rating BEFORE normalization, so it
         affects the relative ordering of teams across conferences while preserving
@@ -1793,10 +1796,13 @@ class EfficiencyFoundationModel:
             max_adjustment: Hard cap on adjustment magnitude (default 2.0 pts)
 
         Returns:
-            Dict mapping team name to conference anchor adjustment (in pre-normalization points)
+            Tuple of:
+            - Dict mapping team name to conference anchor adjustment (in pre-normalization points)
+            - Dict mapping team name to (off_fraction, def_fraction) split ratios
+              where off_fraction + def_fraction = 1.0 and each >= 0.3
         """
         if games_df is None or len(games_df) == 0 or not team_conferences:
-            return {}
+            return {}, {}
 
         df = games_df.copy()
 
@@ -1808,7 +1814,7 @@ class EfficiencyFoundationModel:
         required = ["home_team", "away_team", "home_points", "away_points"]
         if not all(col in df.columns for col in required):
             logger.debug("Conference anchor: missing required columns in games_df")
-            return {}
+            return {}, {}
 
         # Drop games without scores
         df = df.dropna(subset=["home_points", "away_points"])
@@ -1827,66 +1833,96 @@ class EfficiencyFoundationModel:
 
         if len(ooc_games) < 10:
             logger.debug(f"Conference anchor: only {len(ooc_games)} OOC games, skipping")
-            return {}
+            return {}, {}
 
-        # Calculate margin from each team's perspective in OOC games
-        # Vectorized: build arrays for home conf margins and away conf margins
-        home_margins = ooc_games["home_points"].values - ooc_games["away_points"].values
+        # Compute SEPARATE offensive and defensive conference anchors
+        # from OOC points scored (offensive signal) and points allowed (defensive signal).
+        # A conference can have a positive offensive anchor (good offenses) but negative
+        # defensive anchor (weak defenses), which a single composite margin would hide.
+        home_points = ooc_games["home_points"].values
+        away_points = ooc_games["away_points"].values
         home_confs = ooc_games["home_conf"].values
         away_confs = ooc_games["away_conf"].values
 
-        # Build (conference, margin) pairs for all team appearances
+        # Build (conference, pts_scored, pts_allowed) for all team appearances
         confs = np.concatenate([home_confs, away_confs])
-        margins = np.concatenate([home_margins, -home_margins])
+        scored = np.concatenate([home_points, away_points])
+        allowed = np.concatenate([away_points, home_points])
 
-        margins_df = pd.DataFrame({"conference": confs, "margin": margins})
+        ooc_df = pd.DataFrame({
+            "conference": confs,
+            "scored": scored,
+            "allowed": allowed,
+            "margin": scored - allowed,
+        })
 
         # Aggregate per conference
-        conf_stats = margins_df.groupby("conference").agg(
+        conf_stats = ooc_df.groupby("conference").agg(
+            mean_scored=("scored", "mean"),
+            mean_allowed=("allowed", "mean"),
             mean_margin=("margin", "mean"),
             n_games=("margin", "count"),
         )
 
-        # FBS-wide average OOC margin (should be near 0 for FBS-vs-FBS)
-        fbs_avg_margin = margins_df["margin"].mean()
+        # FBS-wide averages (should be symmetric for FBS-vs-FBS)
+        fbs_avg_scored = ooc_df["scored"].mean()
+        fbs_avg_allowed = ooc_df["allowed"].mean()
 
-        # Calculate per-conference adjustment with Bayesian shrinkage
-        conf_adjustments = {}
+        # Calculate per-conference SEPARATE O and D adjustments with Bayesian shrinkage
+        conf_off_adjustments = {}
+        conf_def_adjustments = {}
+        conf_adjustments = {}  # composite for backward-compatible total
         for conf, row in conf_stats.iterrows():
             n = row["n_games"]
-            # Bayesian shrinkage: more games -> more trust in the signal
             shrinkage = n / (n + prior_games)
 
-            # Raw deviation from FBS average
-            deviation = row["mean_margin"] - fbs_avg_margin
+            # Offensive anchor: conference scores MORE than average = positive
+            off_deviation = row["mean_scored"] - fbs_avg_scored
+            raw_off_adj = shrinkage * anchor_scale * off_deviation
+            off_adj = np.clip(raw_off_adj, -max_adjustment, max_adjustment)
 
-            # Shrunken adjustment: shrinkage * scale * deviation
-            raw_adj = shrinkage * anchor_scale * deviation
-            adj = np.clip(raw_adj, -max_adjustment, max_adjustment)
-            conf_adjustments[conf] = adj
+            # Defensive anchor: conference ALLOWS LESS than average = positive
+            # (allowing fewer points is good for defense)
+            def_deviation = fbs_avg_allowed - row["mean_allowed"]
+            raw_def_adj = shrinkage * anchor_scale * def_deviation
+            def_adj = np.clip(raw_def_adj, -max_adjustment, max_adjustment)
 
-        # Log conference anchor adjustments
+            conf_off_adjustments[conf] = off_adj
+            conf_def_adjustments[conf] = def_adj
+            conf_adjustments[conf] = off_adj + def_adj
+
+        # Log conference anchor adjustments (separate O and D)
         sorted_confs = sorted(conf_adjustments.items(), key=lambda x: x[1])
         n_nonzero = sum(1 for _, a in conf_adjustments.items() if abs(a) > 0.01)
         logger.info(
             f"Conference Anchor ({len(ooc_games)} OOC games, "
-            f"FBS avg={fbs_avg_margin:.1f}, {n_nonzero} confs adjusted):"
+            f"FBS avg scored={fbs_avg_scored:.1f} allowed={fbs_avg_allowed:.1f}, "
+            f"{n_nonzero} confs adjusted):"
         )
         for conf, adj in sorted_confs:
             n = conf_stats.loc[conf, "n_games"] if conf in conf_stats.index else 0
-            mean_m = conf_stats.loc[conf, "mean_margin"] if conf in conf_stats.index else 0
             shrink = n / (n + prior_games)
-            if abs(adj) > 0.01:
+            off_a = conf_off_adjustments.get(conf, 0.0)
+            def_a = conf_def_adjustments.get(conf, 0.0)
+            if abs(adj) > 0.01 or abs(off_a - def_a) > 0.02:
+                scored_v = conf_stats.loc[conf, "mean_scored"]
+                allowed_v = conf_stats.loc[conf, "mean_allowed"]
                 logger.info(
-                    f"  {conf}: OOC={mean_m:+.1f} ({n} games, shrink={shrink:.2f}) -> adj={adj:+.2f}"
+                    f"  {conf}: scored={scored_v:.1f} allowed={allowed_v:.1f} "
+                    f"({n} games, shrink={shrink:.2f}) -> "
+                    f"off={off_a:+.2f} def={def_a:+.2f} total={adj:+.2f}"
                 )
 
-        # Map conference adjustment to individual teams
+        # Map conference adjustments to individual teams (separate O and D)
         team_adjustments = {}
+        team_splits = {}
         for team, conf in team_conferences.items():
-            team_adjustments[team] = conf_adjustments.get(conf, 0.0)
+            off_a = conf_off_adjustments.get(conf, 0.0)
+            def_a = conf_def_adjustments.get(conf, 0.0)
+            team_adjustments[team] = off_a + def_a
+            team_splits[team] = (off_a, def_a)  # separate O and D anchor values
 
-        return team_adjustments
+        return team_adjustments, team_splits
 
     def _apply_mov_calibration(
         self,
