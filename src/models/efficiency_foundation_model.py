@@ -404,6 +404,9 @@ class EfficiencyFoundationModel:
         rz_weight_20: float = 1.5,  # Weight multiplier for plays inside the 20-yard line
         rz_weight_10: float = 2.0,  # Weight multiplier for plays inside the 10-yard line
         empty_yards_weight: float = 0.7,  # Weight for "empty" successful plays between opp 40-20
+        def_efficiency_weight: float = None,  # Defensive SR weight (None = use efficiency_weight)
+        def_explosiveness_weight: float = None,  # Defensive IsoPPP weight (None = use explosiveness_weight)
+        def_turnover_weight: float = None,  # Defensive TO weight (None = use turnover_weight)
     ):
         """Initialize Efficiency Foundation Model.
 
@@ -459,6 +462,9 @@ class EfficiencyFoundationModel:
         self.rz_weight_20 = rz_weight_20
         self.rz_weight_10 = rz_weight_10
         self.empty_yards_weight = empty_yards_weight
+        self.def_efficiency_weight = def_efficiency_weight if def_efficiency_weight is not None else self.efficiency_weight
+        self.def_explosiveness_weight = def_explosiveness_weight if def_explosiveness_weight is not None else self.explosiveness_weight
+        self.def_turnover_weight = def_turnover_weight if def_turnover_weight is not None else self.turnover_weight
 
         self.team_ratings: dict[str, TeamEFMRating] = {}
 
