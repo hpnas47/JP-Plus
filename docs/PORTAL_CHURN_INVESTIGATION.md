@@ -219,10 +219,26 @@ Extract FSU's 2024 preseason rating with and without churn penalty:
 
 ---
 
-## Next Steps
-1. Validate churn penalty math with unit tests (Phase 1)
-2. Run baseline backtest to establish current performance
-3. Enable churn penalty and run comparison backtest (Phase 2)
-4. Analyze FSU 2024 case study specifically (Phase 3)
-5. If results are positive (MAE ↓, ATS% ↑), commit changes with `use_churn_penalty=True` as default
-6. If results are negative, revert and document findings in agent memory
+## Outcome: REJECTED (2026-02-06)
+
+### Chemistry Tax — 3-0 Council Vote to Reject
+
+The churn penalty was evaluated by the full Audit Council as the "Chemistry Tax" proposal: a -3.0 pt penalty for teams with <50% Returning Production in Week 1, decaying linearly to 0 by Week 5.
+
+**Council Findings:**
+
+1. **Model Strategist (REJECT — Redundant):** Three existing mechanisms already penalize low-RetProd teams 5-8 pts: RetProd regression, talent decay (0.08→0.03), and prior fade. Adding a 4th layer is redundancy rot.
+
+2. **Code Auditor (REJECT — Architecture):** The <50% RetProd threshold captures 46-56% of FBS teams — a median split, not an outlier detector. Any "penalty" applied to half the league is noise, not signal.
+
+3. **Quant Auditor (REJECT — No Signal):** Observed bias for low-RetProd teams was only +1.28 pts (t=0.87, not statistically significant). The -3.0 tax overcorrects to -1.72 pts in the wrong direction. Signal reverses by Week 4; the 50-70% RetProd group actually has 57.5% ATS 3+ edge — penalizing them would destroy real edge.
+
+**Key Lessons:**
+- 14.94 early-season MAE is a **sample-size problem** (608 games), not a fixable bias.
+- The churn penalty infrastructure is preserved (`use_churn_penalty=False` by default) but should not be activated.
+- This was the 5th consecutive rejection in a pattern of trying to surgically fix 1-3 team anomalies (MOV → Fraud Tax → Chemistry Tax → Zombie Prior → Talent Abandonment). All fail the same way: any game-outcome or roster-composition signal either (a) is already captured by existing mechanisms or (b) degrades ATS edge.
+
+### Infrastructure Status
+- `calculate_roster_churn_penalty()` remains in `preseason_priors.py` (lines 615-674)
+- Toggle: `use_churn_penalty=False` (default, dormant)
+- Temporal talent decay (`0.08→0.03`) was APPROVED and is active (separate from this rejection)

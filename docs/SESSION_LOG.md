@@ -145,7 +145,7 @@ Two performance-focused refactors to reduce API calls and redundant matrix const
   - Signal reverses by Week 4 (+3.25 Week 2 → -1.08 Week 4)
   - 50-70% RetProd group has 57.5% ATS at 3+ edge — at risk from threshold bleed
 
-**Conclusion:** 14.94 early-season MAE is the structural cost of predicting with 0-2 games of data per team. Not fixable via roster-turnover penalties. The model correctly handles this by treating Weeks 1-3 as "Calibration" and concentrating edge in Core (Weeks 4-15).
+**Conclusion:** 14.94 early-season MAE is the structural cost of predicting with 0-2 games of data per team. Not fixable via roster-turnover penalties. The model correctly handles this by treating Weeks 1-3 as "Calibration" and concentrating edge in Core (Weeks 4-15). See also: `docs/PORTAL_CHURN_INVESTIGATION.md` (updated with outcome).
 
 **Alternatives Evaluated (Not Pursued):**
 - Targeted version (<25% RetProd, -1.5 pts, Weeks 2-3 only): Would affect ~30 games out of 597, theoretical MAE improvement ~0.08 pts — not worth the complexity.
