@@ -654,11 +654,13 @@ class SpecialTeamsModel:
         return_yards = punt_plays["return_yards"].values
         is_touchback = punt_plays["is_touchback"].values
 
-        # Touchback: net = min(gross, 55) since touchback from far means wasted yards
+        # Touchback: opponent gets ball at their 25-yard line, so net field
+        # position gain = gross_yards - 25 (the 25 yards are "given back").
+        # E.g., 50-yard touchback punt = 25 net yards, not 50.
         # Normal: net = gross - return_yards
         punt_plays["net_yards"] = np.where(
             is_touchback,
-            np.minimum(gross, 55),
+            gross - 25,
             gross - return_yards
         )
 
