@@ -53,6 +53,19 @@ logger = logging.getLogger(__name__)
 _RIDGE_ADJUST_CACHE: dict[tuple, tuple[dict, dict, Optional[float]]] = {}
 _CACHE_STATS = {"hits": 0, "misses": 0}
 
+# =============================================================================
+# BASE FEATURE MATRIX CACHE (X_base)
+# =============================================================================
+# Caches the sparse design matrix (team indicators + home field indicator)
+# separately from sample weights. X_base is independent of time decay and
+# can be reused when only the eval_week (time-decay reference) changes.
+#
+# Key: matrix_hash (hash of play structure: teams, home_team, n_plays)
+# Value: (X_base_csr, has_home_info)
+# =============================================================================
+_BASE_MATRIX_CACHE: dict[str, tuple] = {}
+_BASE_MATRIX_STATS = {"hits": 0, "misses": 0}
+
 # P2.2: Cache garbage time thresholds at module level (avoids rebuilding per call)
 _GT_THRESHOLDS: Optional[tuple[float, float, float, float]] = None
 
@@ -85,6 +98,42 @@ def get_ridge_cache_stats() -> dict:
         "size": len(_RIDGE_ADJUST_CACHE),
         "hit_rate": hit_rate,
     }
+
+
+def clear_base_matrix_cache() -> dict:
+    """Clear the base matrix cache and return stats."""
+    global _BASE_MATRIX_CACHE, _BASE_MATRIX_STATS
+    stats = _BASE_MATRIX_STATS.copy()
+    _BASE_MATRIX_CACHE.clear()
+    _BASE_MATRIX_STATS = {"hits": 0, "misses": 0}
+    logger.info(f"Base matrix cache cleared. Previous stats: {stats}")
+    return stats
+
+
+def _compute_matrix_hash(plays_df: pd.DataFrame, n_teams: int) -> str:
+    """Hash play structure for X_base caching (independent of weights/targets).
+
+    X_base depends only on which teams appear in which plays and home_team info,
+    NOT on weights, time decay, or metric values.
+    """
+    n = len(plays_df)
+    if n == 0:
+        return "empty"
+    if n > 10000:
+        idx = np.linspace(0, n - 1, 1000, dtype=int)
+        sample = plays_df.iloc[idx]
+    else:
+        sample = plays_df
+    parts = [
+        str(n),
+        str(n_teams),
+        hashlib.md5(sample["offense"].str.cat(sep=",").encode()).hexdigest()[:8],
+        hashlib.md5(sample["defense"].str.cat(sep=",").encode()).hexdigest()[:8],
+    ]
+    if "home_team" in sample.columns:
+        ht = sample["home_team"].fillna("").astype(str).str.cat(sep=",")
+        parts.append(hashlib.md5(ht.encode()).hexdigest()[:8])
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
 
 
 def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
@@ -672,16 +721,6 @@ class EfficiencyFoundationModel:
                 1.0
             )
 
-        # Apply time decay if enabled (decay < 1.0)
-        if self.time_decay < 1.0 and "week" in df.columns:
-            # Use explicit max_week if provided (prevents data leakage),
-            # otherwise fall back to df["week"].max()
-            decay_reference_week = max_week if max_week is not None else df["week"].max()
-            # Weight = decay ^ (reference_week - play_week)
-            # Recent plays (reference_week) get weight 1.0, older plays get less
-            df["time_weight"] = self.time_decay ** (decay_reference_week - df["week"])
-            df["weight"] = df["weight"] * df["time_weight"]
-
         # Apply non-conference game weighting (1.5x boost for OOC matchups)
         # This reduces conference circularity in ridge regression by anchoring
         # conference ratings to external benchmarks. Only boosts FBS-vs-FBS OOC games.
@@ -790,11 +829,25 @@ class EfficiencyFoundationModel:
                                     f"possible field position data error"
                                 )
 
+        # Store base weight (before time decay) for X_base caching.
+        # base_weight = GT × OOC × RZ × empty_yards (all non-temporal weights).
+        # _ridge_adjust_metric() uses base_weight and applies time decay dynamically
+        # per eval_week, enabling X_base reuse when only the reference week changes.
+        df["base_weight"] = df["weight"].values.copy()
+
+        # Apply time decay if enabled (decay < 1.0).
+        # Moved to end of weight pipeline so base_weight captures all non-temporal weights.
+        # weight = base_weight × time_decay^(ref_week - play_week)
+        if self.time_decay < 1.0 and "week" in df.columns:
+            decay_reference_week = max_week if max_week is not None else df["week"].max()
+            df["time_weight"] = self.time_decay ** (decay_reference_week - df["week"])
+            df["weight"] = df["base_weight"] * df["time_weight"]
+
         prep_time = time.time() - prep_start
         logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")
 
         # P2.1: Verify expected columns exist after preprocessing
-        expected_cols = {"is_success", "weight", "offense", "defense", "ppa"}
+        expected_cols = {"is_success", "weight", "base_weight", "offense", "defense", "ppa"}
         missing_cols = expected_cols - set(df.columns)
         assert not missing_cols, f"EFM preprocessing missing columns: {missing_cols}"
 
@@ -924,6 +977,103 @@ class EfficiencyFoundationModel:
 
         return off_sr, def_sr, off_isoppp, def_isoppp, off_isoppp_real, def_isoppp_real
 
+    def _build_base_matrix(
+        self,
+        plays_df: pd.DataFrame,
+        team_to_idx: dict[str, int],
+        n_teams: int,
+    ) -> tuple:
+        """Build unweighted sparse design matrix X_base.
+
+        X_base encodes play structure only (team indicators + home field).
+        It is independent of weights, time decay, and target values, making
+        it safe to cache across different eval_weeks and metric columns
+        that share the same play set.
+
+        Structure: [off_team_0...n, def_team_0...n, (home_indicator)]
+        Each row has 2-3 non-zero entries: +1 offense, -1 defense, ±1 home.
+
+        Returns:
+            (X_base, has_home_info) where X_base is sparse CSR
+        """
+        global _BASE_MATRIX_CACHE, _BASE_MATRIX_STATS
+
+        n_plays = len(plays_df)
+        matrix_hash = _compute_matrix_hash(plays_df, n_teams)
+
+        if matrix_hash in _BASE_MATRIX_CACHE:
+            _BASE_MATRIX_STATS["hits"] += 1
+            cached = _BASE_MATRIX_CACHE[matrix_hash]
+            logger.debug(
+                f"  X_base cache HIT: {matrix_hash} "
+                f"({cached[0].shape[0]:,}×{cached[0].shape[1]} sparse)"
+            )
+            return cached
+
+        _BASE_MATRIX_STATS["misses"] += 1
+        build_start = time.time()
+
+        has_home_info = "home_team" in plays_df.columns
+        n_cols = 2 * n_teams + (1 if has_home_info else 0)
+
+        offenses = plays_df["offense"].values
+        defenses = plays_df["defense"].values
+
+        if has_home_info:
+            home_teams = plays_df["home_team"].values
+            home_valid = sum(1 for h in home_teams if pd.notna(h))
+            home_pct = home_valid / n_plays * 100
+            if home_pct < 90:
+                logger.warning(
+                    f"Home team coverage low: {home_valid}/{n_plays} ({home_pct:.1f}%). "
+                    "Neutral-field regression may be unreliable."
+                )
+            else:
+                logger.debug(f"Home team coverage: {home_valid}/{n_plays} ({home_pct:.1f}%)")
+        else:
+            home_teams = None
+
+        # Vectorized sparse COO construction
+        off_idx = np.array([team_to_idx[t] for t in offenses], dtype=np.int32)
+        def_idx = np.array([team_to_idx[t] for t in defenses], dtype=np.int32)
+        play_rows = np.arange(n_plays, dtype=np.int32)
+
+        row_indices = np.concatenate([play_rows, play_rows])
+        col_indices = np.concatenate([off_idx, n_teams + def_idx])
+        data_values = np.concatenate([np.ones(n_plays), -np.ones(n_plays)])
+
+        if has_home_info:
+            off_str = np.asarray(offenses, dtype=object)
+            def_str = np.asarray(defenses, dtype=object)
+            home_str = np.asarray(home_teams, dtype=object)
+            home_valid_mask = np.array([pd.notna(h) for h in home_str], dtype=bool)
+            off_is_home = (off_str == home_str) & home_valid_mask
+            def_is_home = (def_str == home_str) & home_valid_mask
+
+            home_rows = np.concatenate([play_rows[off_is_home], play_rows[def_is_home]])
+            home_cols = np.full(off_is_home.sum() + def_is_home.sum(), n_cols - 1, dtype=np.int32)
+            home_vals = np.concatenate([np.ones(off_is_home.sum()), -np.ones(def_is_home.sum())])
+
+            row_indices = np.concatenate([row_indices, home_rows])
+            col_indices = np.concatenate([col_indices, home_cols])
+            data_values = np.concatenate([data_values, home_vals])
+
+        X_base = sparse.csr_matrix(
+            (data_values, (row_indices, col_indices)),
+            shape=(n_plays, n_cols),
+            dtype=np.float64,
+        )
+
+        build_time = time.time() - build_start
+        logger.debug(
+            f"  X_base cache MISS: {matrix_hash} — built {n_plays:,}×{n_cols} sparse "
+            f"in {build_time*1000:.1f}ms"
+        )
+
+        result = (X_base, has_home_info)
+        _BASE_MATRIX_CACHE[matrix_hash] = result
+        return result
+
     def _ridge_adjust_metric(
         self,
         plays_df: pd.DataFrame,
@@ -976,7 +1126,7 @@ class EfficiencyFoundationModel:
         cache_key = None
         if season is not None and eval_week is not None:
             data_hash = _compute_data_hash(plays_df, metric_col)
-            cache_key = (season, eval_week, metric_col, self.ridge_alpha, data_hash)
+            cache_key = (season, eval_week, metric_col, self.ridge_alpha, self.time_decay, data_hash)
 
             if cache_key in _RIDGE_ADJUST_CACHE:
                 _CACHE_STATS["hits"] += 1
@@ -1006,78 +1156,40 @@ class EfficiencyFoundationModel:
             team_to_idx = {team: i for i, team in enumerate(all_teams)}
         n_teams = len(all_teams)
 
-        # Check if we have home team info for neutral-field regression
-        has_home_info = "home_team" in plays_df.columns
-
-        # P3.1: Build sparse design matrix using COO format (efficient for construction)
-        # Columns: [off_team_0, ..., off_team_n, def_team_0, ..., def_team_n, (home_indicator)]
-        # Each row has exactly 2-3 non-zero entries:
-        #   - 1 for offense team (+1)
-        #   - 1 for defense team (-1)
-        #   - optionally 1 for home indicator (+1 or -1)
-        n_cols = 2 * n_teams + (1 if has_home_info else 0)
-
-        offenses = plays_df["offense"].values
-        defenses = plays_df["defense"].values
-        weights = plays_df["weight"].values if "weight" in plays_df.columns else np.ones(n_plays)
-
-        if has_home_info:
-            home_teams = plays_df["home_team"].values
-            # P0.2: Validate home_team coverage (handle both None and NaN)
-            home_valid = sum(1 for h in home_teams if pd.notna(h))
-            home_pct = home_valid / n_plays * 100
-            if home_pct < 90:
-                logger.warning(
-                    f"Home team coverage low: {home_valid}/{n_plays} ({home_pct:.1f}%). "
-                    "Neutral-field regression may be unreliable."
-                )
-            else:
-                logger.debug(f"Home team coverage: {home_valid}/{n_plays} ({home_pct:.1f}%)")
-        else:
-            home_teams = None
-
-        # P3.1: Vectorized sparse COO construction (replaces Python per-row loop)
-        # Map team names to integer indices via vectorized lookup
-        off_idx = np.array([team_to_idx[t] for t in offenses], dtype=np.int32)
-        def_idx = np.array([team_to_idx[t] for t in defenses], dtype=np.int32)
-        play_rows = np.arange(n_plays, dtype=np.int32)
-
-        # Offense columns: +1.0, Defense columns: -1.0
-        row_indices = np.concatenate([play_rows, play_rows])
-        col_indices = np.concatenate([off_idx, n_teams + def_idx])
-        data_values = np.concatenate([np.ones(n_plays), -np.ones(n_plays)])
-
-        # Home field indicator: +1 if offense is home, -1 if defense is home, skip neutral
-        if has_home_info:
-            # Ensure plain object arrays to avoid Categorical comparison errors
-            off_str = np.asarray(offenses, dtype=object)
-            def_str = np.asarray(defenses, dtype=object)
-            home_str = np.asarray(home_teams, dtype=object)
-            home_valid_mask = np.array([pd.notna(h) for h in home_str], dtype=bool)
-            off_is_home = (off_str == home_str) & home_valid_mask
-            def_is_home = (def_str == home_str) & home_valid_mask
-
-            home_rows = np.concatenate([play_rows[off_is_home], play_rows[def_is_home]])
-            home_cols = np.full(off_is_home.sum() + def_is_home.sum(), n_cols - 1, dtype=np.int32)
-            home_vals = np.concatenate([np.ones(off_is_home.sum()), -np.ones(def_is_home.sum())])
-
-            row_indices = np.concatenate([row_indices, home_rows])
-            col_indices = np.concatenate([col_indices, home_cols])
-            data_values = np.concatenate([data_values, home_vals])
-
-        X_sparse = sparse.csr_matrix(
-            (data_values, (row_indices, col_indices)),
-            shape=(n_plays, n_cols),
-            dtype=np.float64
-        )
+        # =================================================================
+        # X_base: Cached sparse design matrix (independent of weights/targets)
+        # =================================================================
+        X_sparse, has_home_info = self._build_base_matrix(plays_df, team_to_idx, n_teams)
+        n_cols = X_sparse.shape[1]
 
         # Calculate memory usage for logging
-        dense_memory_mb = (n_plays * n_cols * 8) / (1024 * 1024)  # 8 bytes per float64
+        dense_memory_mb = (n_plays * n_cols * 8) / (1024 * 1024)
         sparse_memory_mb = (X_sparse.data.nbytes + X_sparse.indices.nbytes +
                            X_sparse.indptr.nbytes) / (1024 * 1024)
         memory_savings_pct = (1 - sparse_memory_mb / dense_memory_mb) * 100
 
         build_time = time.time() - start_time
+
+        # =================================================================
+        # W: Sample weights with dynamic time decay
+        # =================================================================
+        # base_weight = GT × OOC × RZ × empty_yards (cached alongside X_base)
+        # Time decay applied dynamically per eval_week (NOT cached)
+        base_weights = (
+            plays_df["base_weight"].values
+            if "base_weight" in plays_df.columns
+            else plays_df["weight"].values
+            if "weight" in plays_df.columns
+            else np.ones(n_plays)
+        )
+
+        # Apply time decay dynamically (varies per eval_week)
+        if self.time_decay < 1.0 and "week" in plays_df.columns:
+            decay_ref = eval_week if eval_week is not None else plays_df["week"].max()
+            time_weights = self.time_decay ** (decay_ref - plays_df["week"].values)
+            weights = base_weights * time_weights
+        else:
+            weights = base_weights
 
         # Target: the metric value (e.g., success = 1/0)
         if metric_col == "is_success":
