@@ -841,6 +841,9 @@ python scripts/run_weekly.py --year 2025 --week 10
 
 # With QB injury adjustments
 python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
+
+# With delta cache (only fetches current week from API, loads historical from Parquet cache)
+python scripts/run_weekly.py --year 2025 --week 10 --use-delta-cache
 ```
 
 | Flag | Default | Description |
@@ -848,6 +851,7 @@ python scripts/run_weekly.py --year 2025 --week 10 --qb-out Georgia Texas
 | `--year` | Current | Season year |
 | `--week` | Current | Week to predict |
 | `--qb-out` | None | Teams whose starting QB is out (space-separated) |
+| `--use-delta-cache` | Off | Load historical weeks from Parquet cache, fetch only current week from API |
 
 ---
 
@@ -907,34 +911,45 @@ The learned implicit HFA is small (~0.8 pts) compared to the explicit HFA (~2.5 
 
 Ridge regression for Success Rate and IsoPPP is computationally intensive. During walk-forward backtesting, this led to O(n²) work accumulation—each prediction week recomputes from scratch, rebuilding the sparse design matrix and fitting the model.
 
-**Solution:** Module-level cache keyed by `(season, eval_week, metric_name, ridge_alpha, data_hash)`:
+**Two-tier caching strategy:**
+
+**Tier 1 — X_base Matrix Cache:** The sparse design matrix (team indicators + home field) is cached separately from weights and targets. X_base depends only on play structure (which teams, which plays) and is independent of time decay, so it can be reused when only the eval_week changes.
 
 ```python
-# Cache key structure
-cache_key = (2024, 5, "is_success", 50.0, "a1b2c3d4e5f6")
-#            ^     ^   ^              ^      ^
-#            |     |   |              |      └─ Data fingerprint
+# X_base cache key: hash of play structure (teams, home_team, n_plays)
+# X_base cache value: (sparse CSR matrix, has_home_info)
+```
+
+**Tier 2 — Result Cache:** Full Ridge regression results cached by `(season, eval_week, metric_name, ridge_alpha, time_decay, data_hash)`:
+
+```python
+# Result cache key structure
+cache_key = (2024, 5, "is_success", 50.0, 1.0, "a1b2c3d4e5f6")
+#            ^     ^   ^              ^     ^     ^
+#            |     |   |              |     |     └─ Data fingerprint
+#            |     |   |              |     └─ Time decay factor
 #            |     |   |              └─ Ridge alpha
 #            |     |   └─ Metric column
 #            |     └─ Max training week
 #            └─ Season year
 ```
 
+**Weight pipeline (in `_prepare_plays`):**
+- `base_weight` = GT × OOC × RZ × empty_yards (all non-temporal weights, cacheable with X_base)
+- `weight` = `base_weight` × time_decay (applied dynamically per eval_week in `_ridge_adjust_metric`)
+
 **Why caching is safe:**
 - Ridge regression is deterministic: same inputs → same outputs
-- Cache key includes all parameters that affect results
+- Cache keys include all parameters that affect results
 - `data_hash` guards against edge cases where same (season, week) has different data
-
-**Performance:**
-- Single backtest: Cache helps when same parameters are reused across iterations
-- Parameter sweep: Cache entries are keyed by alpha, preventing cross-contamination
-- Cache statistics logged at end of runs for monitoring
+- X_base is purely structural (team indicators) — independent of weights, targets, and time decay
 
 **API:**
 ```python
 from src.models.efficiency_foundation_model import (
-    clear_ridge_cache,      # Clear and return stats
-    get_ridge_cache_stats,  # Get hits, misses, size, hit_rate
+    clear_ridge_cache,          # Clear result cache and return stats
+    clear_base_matrix_cache,    # Clear X_base cache and return stats
+    get_ridge_cache_stats,      # Get hits, misses, size, hit_rate
 )
 ```
 
@@ -992,6 +1007,8 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
+- **X_base Sparse Matrix Caching** - Refactored EFM Ridge regression pipeline to precompute and cache the sparse design matrix (X_base) separately from sample weights. X_base encodes play structure only (team indicators + home field) and is independent of time decay, enabling reuse when only the eval_week changes. Time decay moved from `_prepare_plays()` to `_ridge_adjust_metric()` for dynamic per-week application. New `base_weight` column stores all non-temporal weights (GT × OOC × RZ × empty_yards). Two-tier caching: X_base by play structure hash, results by (season, week, metric, alpha, time_decay, data_hash). Backtest output identical.
+- **Week-Level Delta Cache for run_weekly.py** - Wired up the existing `WeekDataCache` infrastructure to `run_weekly.py` via `--use-delta-cache` flag. When enabled, historical weeks [1, week-2] are loaded from Parquet cache on disk and only the most recent completed week is fetched from the CFBD API. Graceful cold start: first run populates the cache; subsequent runs fetch 1 API week instead of N-1. Schema enforced via explicit Polars dtypes. Zero behavior change when flag is off.
 - **Explosiveness Uplift: EFM Weights 54/36/10 → 45/45/10** - Equal weighting of Success Rate and IsoPPP (Explosiveness) better captures boom-or-bust offensive teams. Previous 54/36 split over-weighted consistency vs big plays. Results: Core ATS (Close) improved 51.3% → 52.4% (+1.1%), Core ATS (Open) improved 52.8% → 54.0% (+1.2%). Core 5+ Edge (Open) 56.9%, CLV positive and monotonically increasing (+0.75 at 5+ edge). Core MAE +0.02 (12.49 → 12.51, within strict tolerance). All six files updated: `efficiency_foundation_model.py`, `backtest.py`, `calibrate_situational.py`, `benchmark_backtest.py`, `compare_ratings.py`, and documentation.
 - **P0 Audit Fixes (Postseason Chronology + EFM Robustness)** - Fixed 6 structural issues from code audit: (1) Postseason games now mapped to sequential pseudo-weeks by date instead of all lumped into week 16, preserving walk-forward chronology; (2) home_team validated via game join on game_id for reliable neutral-field ridge regression; (3) ATS unmatched mask uses vegas_spread.isna() instead of game_id.isna(); (4) EFM uses pd.notna() for home_team check with coverage logging; (5) Ridge cache hash strengthened with MD5 of team sequences + metric stats; (6) Unused imports removed. Performance tables refreshed with post-fix baseline: Core MAE 12.55, Core ATS 52.0%, Core 5+ Edge 53.2%.
 - **Fixed Double-Damping Bug with Unified Environmental Stack** - Major fix to the adjustment aggregator. The previous four-bucket design applied smoothing to the physical bucket (100%/25%) and then soft cap on top, creating two layers of penalty that destroyed valid betting edges. The fix consolidates all environmental factors (HFA, travel, altitude, rest, consecutive_road) into a single stack with one soft cap layer: threshold 5.0 pts, excess weight 60%. Standard games (stack ≤5.0) get no dampening at all—only extreme stacks are smoothed. Mental bucket (letdown, lookahead, sandwich) unchanged at 100%/50%/25%. Boosts bucket (rivalry) unchanged as linear sum. Performance restored to baseline: Core MAE 12.21, Core 5+ Edge 57.1%.

@@ -69,6 +69,41 @@
 
 ---
 
+## Session: February 6, 2026 (Performance)
+
+### Theme: Caching and Data Plumbing Optimizations
+
+Two performance-focused refactors to reduce API calls and redundant matrix construction.
+
+---
+
+#### Commit: Wire up week-level delta cache (4a57dfa)
+**Impact: Eliminates redundant API calls in weekly production runs**
+
+- **Problem:** `run_weekly.py` fetched ALL weeks (1 through N-1) from the CFBD API on every run, even though historical weeks never change.
+- **Solution:** Wired existing `WeekDataCache` to `run_weekly.py` via `--use-delta-cache` flag:
+  - Historical weeks [1, week-2] loaded from Parquet cache on disk
+  - Only week (week-1) fetched from API and persisted
+  - Graceful cold start: first run populates cache, subsequent runs fetch 1 week
+  - Schema enforced via explicit Polars dtypes for cross-week consistency
+- **Usage:** `python scripts/run_weekly.py --year 2025 --week 10 --use-delta-cache`
+- **Zero behavior change** when flag is off (default)
+
+#### Commit: Refactor EFM to precompute and cache X_base sparse matrix (741f3b7)
+**Impact: Architectural separation of cacheable matrix from dynamic weights**
+
+- **Problem:** `_ridge_adjust_metric()` rebuilt the sparse design matrix from scratch on every call, even when play structure was identical across metrics or time-decay parameter sweeps.
+- **Solution:** Two-tier caching in EFM:
+  1. **X_base cache** (`_BASE_MATRIX_CACHE`): Sparse CSR matrix keyed by play structure hash (teams + home_team). Independent of weights, targets, and time decay.
+  2. **Result cache** (`_RIDGE_ADJUST_CACHE`): Full Ridge output keyed by (season, week, metric, alpha, time_decay, data_hash).
+- **Weight pipeline refactored:**
+  - `_prepare_plays()` stores `base_weight` = GT × OOC × RZ × empty_yards (all non-temporal weights)
+  - Time decay moved to `_ridge_adjust_metric()` — applied dynamically per `eval_week`
+  - `weight` = `base_weight × time_decay` (for raw metrics backward compatibility)
+- **Backtest verified:** MAE 12.52, ATS 52.4%, 3,273 games — identical to baseline
+
+---
+
 ## Session: February 6, 2026 (Council)
 
 ### Chemistry Tax — REJECTED (3-0 Council Vote)

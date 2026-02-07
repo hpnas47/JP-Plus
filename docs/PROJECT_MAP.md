@@ -55,6 +55,7 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 |------|---------|
 | `processors.py` | Data transformation and preprocessing utilities. |
 | `validators.py` | Data validation routines (schema checks, NaN detection). |
+| `week_cache.py` | Week-level Parquet cache for delta loading. Used by `run_weekly.py --use-delta-cache`. |
 
 ---
 
