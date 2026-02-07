@@ -467,7 +467,15 @@ def run_predictions(
         # Fetch play-by-play data for EFM
         logger.info("Fetching play-by-play data for efficiency model...")
         plays_df = _fetch_plays(client, year, week, use_delta_cache)
-        logger.info(f"Loaded {len(plays_df)} plays for EFM training")
+        # Filter to FBS-only plays (matches backtest.py:640-644 pattern)
+        pre_filter = len(plays_df)
+        plays_df = plays_df[
+            plays_df["offense"].isin(fbs_teams) & plays_df["defense"].isin(fbs_teams)
+        ]
+        logger.info(
+            f"Loaded {len(plays_df)} FBS plays for EFM training "
+            f"({pre_filter - len(plays_df)} FCS plays excluded)"
+        )
 
         # Build EFM model
         logger.info("Fitting Efficiency Foundation Model...")
