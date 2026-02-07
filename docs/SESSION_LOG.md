@@ -82,6 +82,15 @@
 - **Accuracy:** Cholesky is 100x more precise (1e-14 vs 1e-6 vs gold standard)
 - **Backtest:** Core MAE 12.51 (-0.01), ATS 52.5% (+0.1%), 3+ Edge 53.5% (+0.2%), 5+ Edge 54.1% (-0.5%, boundary effect — same 473 wins, 8 more games entered cohort under more precise coefficients)
 
+#### Commit: Add LU decomposition fallback to Cholesky solver (3a8a80b)
+**Impact: Robustness safety net for edge-case Gram matrices**
+
+- **Problem:** If `linalg.cho_factor` fails (non-positive-definite Gram matrix), the model crashes with no recovery path.
+- **Fix:** Modified the `except linalg.LinAlgError` block in `_ridge_solve_cholesky()`:
+  1. Log a warning (not error) and attempt `scipy.linalg.solve(G, Xty)` (LU decomposition) as fallback.
+  2. Only raise if LU also fails (truly singular matrix).
+- **Backtest:** No change — Cholesky succeeded on all calls as expected. Fallback path is pure safety net.
+
 ---
 
 ## Session: February 6, 2026 (Performance)
