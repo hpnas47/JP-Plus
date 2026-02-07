@@ -4,6 +4,54 @@
 
 ---
 
+## Session: February 7, 2026 (Continued)
+
+### Theme: Transfer Portal Architecture Audit
+
+---
+
+#### G5→P4 Physicality Tax Sweep — CANCELLED
+**Impact: Strategist killed before backtest — magnitude below noise floor**
+
+- **Proposal:** Test PHYSICALITY_TAX at 0.65, 0.60, 0.55 (from current 0.75) for G5→P4 trench transfers.
+- **Strategist analysis:** With `portal_scale=0.15`, changing 0.75→0.60 produces **0.007 pts per player** and **0.035 pts per team** (even with 5 G5→P4 trench transfers). At MAE=12.99, this is indistinguishable from noise.
+- **FSU/Colorado misdiagnosis:** FSU 2024's portal class was predominantly **P4→P4** (from SEC/ACC programs). Colorado's Sanders poached from SEC/Big Ten — `origin_is_p4 == dest_is_p4` returns 1.0, so the G5 discount never fires. Neither team is actually affected by this parameter.
+- **This is rejection #8** in the micro-fix pattern (Chemistry Tax, MOV, Fraud Tax, GT variants, Zombie Prior, Talent Abandonment, Def Weight Split).
+- Quant Auditor sweep was launched but cancelled before completion after Strategist magnitude analysis.
+
+#### Volume Diminishing Returns (VDR) + Incumbent Symmetry (IS) — REJECTED (Pre-Backtest)
+**Impact: Strategist 3-0 Council rejection — architectural flaws identified**
+
+- **VDR proposal:** If additions > 10, apply 0.98^(additions-10) penalty to net portal value.
+- **IS proposal:** Flat 0.85 multiplier on all incoming_value.
+- **VDR rejection:** Model already has a superior 2-dimensional sigmoid churn penalty (lines 626-688 in `preseason_priors.py`) that uses BOTH returning production (70% weight) AND portal volume (30% weight). VDR only uses volume — strictly inferior.
+- **IS fatal flaw:** The `impact_cap = ±0.12` absorbs the IS reduction for ALL problem teams (FSU, Colorado, TAMU all hit the cap). IS has **zero effect** on the teams we're targeting. For uncapped teams, it creates a 26% penalty on 1:1 replacements (too harsh; existing CONTINUITY_TAX already creates 6%).
+- **Recommendation:** Activate existing dormant churn penalty instead.
+
+#### Roster Churn Penalty Activation — REJECTED (Rejection #9)
+**Impact: 3+ Edge improved but 5+ Edge degraded — same pattern as conf anchor 0.12**
+
+- **Change:** `PreseasonPriors(client, use_churn_penalty=True)` — zero new code, activated existing dormant sigmoid penalty.
+- **Backtest results (--start-week 1):**
+
+| Metric | Baseline | Churn Penalty | Delta |
+|--------|----------|---------------|-------|
+| Core MAE | 12.52 | 12.51 | -0.01 |
+| Phase 1 MAE | 14.82 | 14.80 | -0.02 |
+| Core ATS (Close) | 52.4% | 52.5% | +0.1% |
+| Core 3+ Edge | 53.0% (758-671) | 53.5% (765-665) | **+0.5%** |
+| Core 5+ Edge | 54.5% (475-396) | 54.1% (472-401) | **-0.4%** |
+
+- **Reverted** — 5+ Edge degradation (-0.4%) fails "must not degrade" criterion.
+- **3+/5+ Edge divergence now documented across 3 experiments:**
+  1. Conference anchor 0.12: 3+ Edge +0.7%, 5+ Edge -0.3%
+  2. Churn penalty: 3+ Edge +0.5%, 5+ Edge -0.4%
+  3. Conference anchor 0.15+: Both degraded
+- **Key insight:** Model's highest-conviction disagreements with the market (5+ pts) are already well-calibrated. Broad adjustments that improve moderate-conviction picks dilute signal on the strongest picks.
+- Infrastructure remains dormant (`use_churn_penalty=False`) for future selective activation (e.g., only <40% returning AND >20 transfers).
+
+---
+
 ## Session: February 7, 2026
 
 ### Theme: Defensive Weighting Investigation + Documentation Automation
