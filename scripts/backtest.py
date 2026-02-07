@@ -667,6 +667,18 @@ def walk_forward_predict(
                 f"but predicting week {pred_week}. Training data must be < pred_week."
             )
 
+        # Initialize HFA with team-specific values and trajectory modifiers
+        hfa = HomeFieldAdvantage(base_hfa=hfa_value)
+        # Calculate trajectory modifiers if we have records
+        if team_records:
+            hfa.calculate_trajectory_modifiers(team_records, year)
+
+        # Build team-specific HFA lookup for EFM fraud tax (uses full priority chain)
+        hfa_lookup = {
+            team: hfa.get_hfa_value(team)
+            for team in fbs_teams
+        }
+
         # Build EFM model
         efm = EfficiencyFoundationModel(
             ridge_alpha=ridge_alpha,
@@ -681,6 +693,7 @@ def walk_forward_predict(
             train_plays_pd, train_games_pd,
             max_week=pred_week - 1, season=year,
             team_conferences=team_conferences,
+            hfa_lookup=hfa_lookup,
         )
 
         # Get ratings directly from EFM (full precision, already normalized to std=12)
@@ -707,12 +720,6 @@ def walk_forward_predict(
                 f"Week {pred_week}: blended preseason "
                 f"(preseason weight={1 - min(games_played/prior_weight, 1.0):.0%})"
             )
-
-        # Initialize HFA with team-specific values and trajectory modifiers
-        hfa = HomeFieldAdvantage(base_hfa=hfa_value)
-        # Calculate trajectory modifiers if we have records
-        if team_records:
-            hfa.calculate_trajectory_modifiers(team_records, year)
 
         # Log HFA sources for this week's teams (first week only to avoid spam)
         if pred_week == start_week:

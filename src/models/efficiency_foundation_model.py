@@ -545,65 +545,6 @@ class EfficiencyFoundationModel:
 
         return df
 
-    def _add_rz_scoring_feature(self, plays_df: pd.DataFrame) -> pd.DataFrame:
-        """Add per-play RZ scoring metric for opponent adjustment.
-
-        Creates a play-level feature 'rz_scoring' that captures red zone efficiency:
-        - For plays in the red zone (yards_to_goal <= 20):
-          - TD plays: 7.0
-          - FG plays: 3.0
-          - All other: 0.0
-        - For plays outside RZ: NaN (excluded from RZ metric regression)
-
-        This allows Ridge regression to opponent-adjust RZ scoring ability
-        just like it adjusts SR and IsoPPP.
-
-        Args:
-            plays_df: Prepared plays DataFrame
-
-        Returns:
-            DataFrame with 'rz_scoring' column added
-        """
-        df = plays_df.copy()
-
-        # Initialize rz_scoring column with NaN (non-RZ plays excluded from metric)
-        df["rz_scoring"] = np.nan
-
-        if "yards_to_goal" not in df.columns or "play_type" not in df.columns:
-            logger.debug("Missing columns for RZ scoring feature; skipping")
-            return df
-
-        # Filter to RZ plays
-        rz_mask = df["yards_to_goal"] <= 20
-
-        if not rz_mask.any():
-            logger.debug("No RZ plays found for RZ scoring feature")
-            return df
-
-        # Extract play types for RZ plays
-        play_types = df.loc[rz_mask, "play_type"].fillna("").str.lower()
-
-        # Assign scoring values
-        td_mask = play_types.str.contains("touchdown|rushing td|passing td", case=False, na=False)
-        fg_mask = play_types.str.contains("field goal good", case=False, na=False)
-
-        # Build scoring array for RZ plays only
-        rz_scoring_values = np.zeros(rz_mask.sum())
-        rz_scoring_values[td_mask] = 7.0
-        rz_scoring_values[fg_mask] = 3.0
-
-        # Assign back to DataFrame
-        df.loc[rz_mask, "rz_scoring"] = rz_scoring_values
-
-        rz_count = rz_mask.sum()
-        td_count = td_mask.sum()
-        fg_count = fg_mask.sum()
-        logger.debug(
-            f"  RZ scoring feature: {rz_count} RZ plays, {td_count} TDs, {fg_count} FGs"
-        )
-
-        return df
-
     def _prepare_plays(
         self, plays_df: pd.DataFrame, max_week: int | None = None,
         team_conferences: Optional[dict[str, str]] = None
@@ -851,9 +792,6 @@ class EfficiencyFoundationModel:
 
         prep_time = time.time() - prep_start
         logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")
-
-        # Add RZ scoring feature for opponent adjustment
-        df = self._add_rz_scoring_feature(df)
 
         # P2.1: Verify expected columns exist after preprocessing
         expected_cols = {"is_success", "weight", "offense", "defense", "ppa"}
@@ -1402,6 +1340,7 @@ class EfficiencyFoundationModel:
         max_week: int | None = None,
         season: int | None = None,
         team_conferences: Optional[dict[str, str]] = None,
+        hfa_lookup: Optional[dict[str, float]] = None,
     ) -> dict[str, TeamEFMRating]:
         """Calculate efficiency-based ratings for all teams.
 
@@ -1516,33 +1455,11 @@ class EfficiencyFoundationModel:
             adj_def_isoppp = raw_def_isoppp
             self.learned_hfa_isoppp = None
 
-        # Opponent-adjust RZ scoring efficiency (new feature integration)
-        # Only use RZ plays (where rz_scoring is not NaN)
-        # This allows Ridge to opponent-adjust RZ finishing ability
-        rz_plays = prepared[prepared["rz_scoring"].notna()]
-        adj_off_rz = {}
-        adj_def_rz = {}
-        self.learned_hfa_rz = None
-
-        if len(rz_plays) > 100 and "rz_scoring" in rz_plays.columns:
-            logger.debug("Ridge adjusting RZ scoring efficiency...")
-            adj_off_rz, adj_def_rz, self.learned_hfa_rz = self._ridge_adjust_metric(
-                rz_plays, "rz_scoring", season=season, eval_week=max_week
-            )
-        else:
-            logger.debug(f"Insufficient RZ plays ({len(rz_plays)}) for RZ adjustment; using 0.0")
-            # Default to 0 (no advantage) for all teams
-            for team in self._canonical_teams:
-                adj_off_rz[team] = 0.0
-                adj_def_rz[team] = 0.0
-
         # Store adjusted values
         self.off_success_rate = adj_off_sr
         self.def_success_rate = adj_def_sr
         self.off_isoppp = adj_off_isoppp
         self.def_isoppp = adj_def_isoppp
-        self.off_rz_scoring = adj_off_rz
-        self.def_rz_scoring = adj_def_rz
 
         # Calculate turnover stats if turnover_weight > 0 (P2.6: split O/D)
         if self.turnover_weight > 0 and "play_type" in plays_df.columns:
@@ -1568,9 +1485,6 @@ class EfficiencyFoundationModel:
         valid_isoppp = [adj_off_isoppp[t] for t in off_isoppp_real if t in adj_off_isoppp]
         avg_isoppp = np.mean(valid_isoppp) if valid_isoppp else self.LEAGUE_AVG_ISOPPP
 
-        # Calculate league average RZ scoring (after opponent adjustment)
-        avg_rz = np.mean(list(adj_off_rz.values())) if adj_off_rz else 0.0
-
         # Calculate league average turnover rates for O/D split (P2.6)
         # P3.6: np.mean() is order-independent, no need to sort
         avg_lost = np.mean(list(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
@@ -1582,8 +1496,6 @@ class EfficiencyFoundationModel:
             def_sr = adj_def_sr.get(team, avg_sr)
             off_iso = adj_off_isoppp.get(team, avg_isoppp)
             def_iso = adj_def_isoppp.get(team, avg_isoppp)
-            off_rz = adj_off_rz.get(team, avg_rz)
-            def_rz = adj_def_rz.get(team, avg_rz)
 
             # Convert to point equivalents
             # Offensive efficiency: how much better than average
@@ -1591,23 +1503,12 @@ class EfficiencyFoundationModel:
             # Defensive efficiency: how much better than average (lower = better)
             def_eff_pts = (avg_sr - def_sr) * self.SUCCESS_RATE_TO_POINTS
 
-            # Explosiveness
+            # Explosiveness (IsoPPP only; RZ finishing captured via RZ Leverage play weighting)
             off_exp_pts = (off_iso - avg_isoppp) * self.ISOPPP_TO_POINTS
             def_exp_pts = (avg_isoppp - def_iso) * self.ISOPPP_TO_POINTS
 
-            # RZ scoring efficiency (opponent-adjusted via Ridge)
-            # Ridge regression output is already centered (mean ~ 0 after post-centering in _ridge_adjust_metric)
-            # The magnitude of the Ridge coefficients learned for RZ scoring determines the weight
-            # NO conversion factor needed - Ridge learns the optimal scaling directly from the data
-            off_rz_pts = off_rz
-            def_rz_pts = -def_rz  # Defense: lower opponent RZ scoring = better
-
-            # Combine all three metrics
-            # Ridge regression naturally weights each metric by learning team coefficients
-            # SR and IsoPPP get explicit conversion factors (80.0, 15.0) tuned historically
-            # RZ gets implicit weight via Ridge coefficients - if signal overlaps with IsoPPP, coefs will be small
             efficiency_rating = off_eff_pts + def_eff_pts
-            explosiveness_rating = off_exp_pts + def_exp_pts + off_rz_pts + def_rz_pts
+            explosiveness_rating = off_exp_pts + def_exp_pts
 
             # P2.6: Split turnovers into offensive (ball security) and defensive (takeaways)
             # Apply Bayesian shrinkage to each component separately
@@ -1731,7 +1632,7 @@ class EfficiencyFoundationModel:
         # Addresses the "UCF Paradox" (4-8 teams rating like 8-4 teams) without dragging down elite teams
         # Applied after conference anchor, before normalization (same timing as MOV)
         if self.fraud_tax_enabled:
-            self._apply_efficiency_fraud_tax(games_df, max_week=max_week)
+            self._apply_efficiency_fraud_tax(games_df, max_week=max_week, hfa_lookup=hfa_lookup)
 
         # Normalize ratings to target standard deviation
         # This ensures Team A rating - Team B rating = expected spread
@@ -2065,6 +1966,7 @@ class EfficiencyFoundationModel:
         self,
         games_df: pd.DataFrame,
         max_week: int | None = None,
+        hfa_lookup: Optional[dict[str, float]] = None,
     ) -> None:
         """Apply asymmetric "Efficiency Fraud" tax to ratings.
 
@@ -2101,6 +2003,9 @@ class EfficiencyFoundationModel:
         Args:
             games_df: Games DataFrame with columns: home_team, away_team, home_points, away_points
             max_week: Maximum week to include (for walk-forward chronology)
+            hfa_lookup: Optional dict mapping team names to team-specific HFA values.
+                If provided, uses team-specific HFA for expected win calculations.
+                Falls back to 2.5 for teams not in the lookup.
 
         Side Effects:
             Updates self.team_ratings with fraud tax penalties applied
@@ -2139,8 +2044,8 @@ class EfficiencyFoundationModel:
             for team, rating in self.team_ratings.items()
         }
 
-        # Fixed HFA value for expected win calculation (roughly league average)
-        HFA_POINTS = 2.5
+        # Default HFA value for expected win calculation (roughly league average)
+        DEFAULT_HFA = 2.5
 
         # Logistic function parameter: 7.0 points ≈ 1 std dev of game outcomes
         LOGISTIC_SCALE = 7.0
@@ -2166,27 +2071,29 @@ class EfficiencyFoundationModel:
             # Calculate expected wins using logistic win probability
             expected_wins = 0.0
 
-            # Home games: team gets HFA bonus
+            # Home games: team gets HFA bonus (team-specific if available)
             for _, game in home_games.iterrows():
                 opp = game["away_team"]
+                home_hfa = hfa_lookup.get(team, DEFAULT_HFA) if hfa_lookup else DEFAULT_HFA
                 if opp in team_efm_ratings:
-                    rating_diff = team_efm_ratings[team] - team_efm_ratings[opp] + HFA_POINTS
+                    rating_diff = team_efm_ratings[team] - team_efm_ratings[opp] + home_hfa
                 else:
                     # Opponent not rated (FCS, etc.) - assume team is favored by their rating + HFA
-                    rating_diff = team_efm_ratings[team] + HFA_POINTS
+                    rating_diff = team_efm_ratings[team] + home_hfa
 
                 # Win probability: 1 / (1 + exp(-rating_diff / scale))
                 win_prob = 1.0 / (1.0 + np.exp(-rating_diff / LOGISTIC_SCALE))
                 expected_wins += win_prob
 
-            # Away games: opponent gets HFA bonus
+            # Away games: opponent (home team) gets their HFA bonus
             for _, game in away_games.iterrows():
                 opp = game["home_team"]
+                opp_hfa = hfa_lookup.get(opp, DEFAULT_HFA) if hfa_lookup else DEFAULT_HFA
                 if opp in team_efm_ratings:
-                    rating_diff = team_efm_ratings[team] - team_efm_ratings[opp] - HFA_POINTS
+                    rating_diff = team_efm_ratings[team] - team_efm_ratings[opp] - opp_hfa
                 else:
                     # Opponent not rated (FCS, etc.) - assume team is favored by their rating minus HFA
-                    rating_diff = team_efm_ratings[team] - HFA_POINTS
+                    rating_diff = team_efm_ratings[team] - opp_hfa
 
                 win_prob = 1.0 / (1.0 + np.exp(-rating_diff / LOGISTIC_SCALE))
                 expected_wins += win_prob
