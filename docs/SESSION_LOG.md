@@ -69,6 +69,64 @@
 
 ---
 
+## Session: February 7, 2026
+
+### Theme: Defensive Weighting Investigation + Documentation Automation
+
+---
+
+#### Conference Anchor Param Revert (57f228a)
+**Impact: Preserved 5+ Edge by reverting to conservative anchor params**
+
+- **Context:** Previous session committed aggressive conference anchor params (scale=0.12, prior=20, max=3.0) that improved 3+ Edge (+0.7%) but degraded 5+ Edge (-0.3%).
+- **Decision:** 5+ Edge (~2% over vig) is the binding constraint; 3+ Edge (~1.3% over vig) is secondary.
+- **Action:** Reverted to 0.08/30/2.0 while keeping the separate O/D anchor architecture.
+- **Backtest confirmed:** Core MAE 12.52, 5+ Edge 54.5% — exact baseline match.
+
+#### Defensive SR/IsoPPP Divergence Investigation
+**Impact: Explained cosmetic defensive ranking gaps vs SP+**
+
+- **Discovery:** Massive SR vs IsoPPP divergence on defense for elite teams:
+  - Indiana: Def SR #8, Def IsoPPP #96 → Final #11 (SP+ #2)
+  - Oklahoma: Def SR #1, Def IsoPPP #91 → Final #3
+  - Ole Miss: Def SR #32, Def IsoPPP #104 → Final #40 (SP+ #20)
+  - Notre Dame: SR #12, IsoPPP #21 (no divergence) → Final #5 (SP+ #13) — control case
+- **Root cause:** At 45/45 weighting, poor defensive IsoPPP drags down teams with elite SR.
+
+#### Defensive Weight Split — REJECTED (6dbacc4)
+**Impact: Confirmed 45/45/10 is optimal for both O and D**
+
+- **Hypothesis:** Defense controls SR more than IsoPPP; shift defensive weighting toward SR.
+- **3 variants tested:** 0.55/0.35, 0.60/0.30, 0.65/0.25 (offense unchanged at 0.45/0.45).
+- **All 3 FAILED:** 5+ Edge degraded monotonically (54.5% → 53.7% → 53.5% → 52.7%).
+- MAE also worsened (12.52 → 12.54 → 12.57 → 12.61).
+- **Surprise finding:** Defensive IsoPPP IS predictive — preventing big plays is a persistent defensive trait (scheme discipline, secondary coverage), not random variance.
+- **Infrastructure preserved:** `def_efficiency_weight`, `def_explosiveness_weight`, `def_turnover_weight` params added as dormant infrastructure (default None → shared weights).
+
+#### Documentation Metrics Audit (10e045d)
+**Impact: Verified all docs are in sync with production baseline**
+
+- Scanned 67 markdown files + 15 Python files for stale hardcoded metrics.
+- **1 stale value found:** Quant Auditor agent memory had pre-uplift baseline. Fixed.
+- All project docs (CLAUDE.md, MODEL_ARCHITECTURE.md, SESSION_LOG.md, MODEL_EXPLAINER.md) were already correct.
+- Report: `docs/METRICS_AUDIT_2026-02-07.md`.
+
+#### Commit: Add generate_docs.py (58a3e89)
+**Impact: Automated documentation sync system**
+
+- New script `scripts/generate_docs.py` that runs the backtest, extracts structured metrics, and auto-updates CLAUDE.md + MODEL_ARCHITECTURE.md baseline tables.
+- Features: `--skip-backtest` (use cached metrics), `--dry-run` (preview changes).
+- Metrics cached to `data/last_backtest_metrics.json` for fast re-use.
+- Pre-push git hook installed: warns and blocks push if docs are stale (uses cached metrics, no backtest needed). Bypass with `git push --no-verify`.
+
+#### Commit: Sync docs with fresh backtest (f31467b)
+**Impact: First automated doc sync run**
+
+- Populated metrics cache and updated CLAUDE.md + MODEL_ARCHITECTURE.md via generate_docs.py.
+- Core metrics stable: MAE 12.52, ATS 52.4%, 5+ Edge 54.5%.
+
+---
+
 ## Session: February 6, 2026 (Performance)
 
 ### Theme: Caching and Data Plumbing Optimizations
