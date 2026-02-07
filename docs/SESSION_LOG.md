@@ -87,6 +87,23 @@
 - **Key insight (Code Auditor):** "The UCF/Colorado overrating problem cannot be solved by re-weighting existing signals. The market already knows which teams are bad on 3rd down — we need signals the market DOESN'T have."
 - Infrastructure preserved dormant (defaults=1.0, guard `!= 1.0` prevents execution).
 
+#### Zombie Prior (5% Floor Removal) — REJECTED (Rejection #6, reverted)
+**Impact: Floor encodes real coaching/depth signals — removal degrades 5+ Edge**
+
+- **Hypothesis:** The 5% preseason prior floor in `blend_with_inseason()` (lines 1537-1546 in `preseason_priors.py`) is stale at weeks 9+. After 12 games of play-by-play data, the floor should decay to 0%.
+- **Math analysis:** FSU 2024 (worst-case): `prior_weight=0.05 × prior_value=25.0 = +1.25 phantom pts`, plus talent floor (0.03 × 20.0 = +0.60), total = **+1.85 pts** of preseason ghost signal.
+- **Change:** Set floor from 0.05 → 0.0 at lines 1538 and 1546.
+- **Backtest results (--start-week 1):**
+
+| Metric | Baseline | No Floor | Delta |
+|--------|----------|----------|-------|
+| Core MAE | 12.52 | 12.54 | +0.02 (at boundary) |
+| Core 5+ Edge | 54.6% | 54.2% | **-0.4%** |
+
+- **Reverted** — 5+ Edge degradation fails "must not degrade" criterion.
+- **Key insight:** The 5% floor is NOT a zombie — it encodes persistent coaching quality and roster depth signals that 12 games of play-by-play efficiency don't fully capture. The talent floor alone (3%) is an insufficient substitute; the prior floor provides meaningful late-season stabilization.
+- **Lesson:** Preseason priors contain persistent trait information (coaching quality, scheme fit) beyond what talent composites capture. The floor is intentional SP+ design, not a bug.
+
 ---
 
 ## Session: February 7, 2026
@@ -208,6 +225,38 @@
 - Updated `docs/NON_CONFERENCE_WEIGHTING.md` with full backtest impact (5+ Edge 53.5% → 54.8%), anchor scale sweep (4 variants), Big 12 impact, and garbage time variant results.
 - Added missing "Feb 6 (Model Tuning)" session log entry covering conference anchor, RZ leverage, and 3 rejected experiments (MOV, fraud tax, GT variants).
 - Synced both repos (JP-Plus + JP-Plus-Docs).
+
+---
+
+## Session: February 6, 2026 (Bug Fixes)
+
+### Theme: Special Teams Fixes + Code Cleanup
+
+---
+
+#### Commit: Fix punt touchback net yards (81765b0)
+**Impact: Phase 1 MAE improved 14.94 → 14.80; Core unchanged**
+
+- **Bug:** `calculate_punt_ratings_from_plays()` computed touchback net yards as `np.minimum(gross, 55)`, assuming the ball was downed at the opponent's 45. In reality, touchbacks go to the 25-yard line.
+- **Fix:** Changed to `gross - 25` — a 60-yard punt that touchbacks nets 35 yards (opponent gets ball at 25), not `min(60, 55) = 55`.
+- **Also included:** Refactored FG expected rate lookup to dynamically build from `EXPECTED_FG_RATES` dict (DRY fix, `464299c`).
+- **Backtest:** Core MAE 12.52 (unchanged), Phase 1 MAE 14.94 → 14.80 (-0.14). Improvement concentrated in early season where ST has higher relative weight.
+
+#### Commit: Simplify kickoff per-game normalization (38e2ab7)
+**Impact: Code cleanup — zero backtest delta**
+
+- **Bug:** `calculate_kickoff_ratings_from_plays()` had redundant arithmetic in coverage and return normalization:
+  - Coverage: `(tb_bonus + return_saved) * kicks_per_game / 5.0` where `kicks_per_game = total_kicks / games_played` and `/5.0` was the per-game normalizer. Without `games_played`, the `* X / X` cancelled to 1.0 (identity).
+  - Returns: Same pattern with `* returns_per_game / 3.0`.
+- **Fix:** Replaced with explicit branching — multiply by per-game rate when `games_played` is available, otherwise use raw per-kick value. Clearer intent, same output.
+- **Backtest:** Zero delta confirmed.
+
+#### Other cleanup commits in this session:
+- **QB/pace adjustment ordering** (`9ad696b`): Moved QB adjustment before pace so triple-option compression correctly dampens QB impact.
+- **Vegas numpy import** (`f4d53f2`): Added missing `import numpy as np` to `vegas_comparison.py`.
+- **Edge sign convention docs** (`61b9bba`): Documented edge formula with worked examples in `ValuePlay` dataclass.
+- **RZ scoring ghost feature removal** (`e844046`): Deleted `_add_rz_scoring_feature()` + RZ Ridge regression (-86 lines dead code). Also added team-specific HFA to fraud tax.
+- **Portal impact refactor** (`71783f0`): Decoupled portal from regression factor, applies as direct rating adjustment.
 
 ---
 
