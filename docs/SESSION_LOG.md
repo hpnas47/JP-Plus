@@ -91,6 +91,39 @@
   2. Only raise if LU also fails (truly singular matrix).
 - **Backtest:** No change — Cholesky succeeded on all calls as expected. Fallback path is pure safety net.
 
+#### Commit: Fix kneel-down/end-of-game RZ trips (ffda9ad)
+**Impact: Logic fix — teams no longer penalized for winning efficiently**
+
+- **Bug:** `FinishingDrivesModel.calculate_all_from_plays()` counted kneel-downs, end-of-game, and timeout plays inside the red zone as "FAILED" trips.
+- **Fix:** Added 4-line filter before outcome classification: if last play of a trip has `play_type` containing "kneel", "end of", or "timeout", skip the trip entirely (no failed count, no total trip increment).
+- **Backtest:** No change (FD is shelved at weight=0.0). Fix prepares infrastructure for future reactivation.
+
+#### Commit: Vectorize RZ trip classification (3bc5a4b)
+**Impact: Performance — eliminated Python for-loops in FinishingDrives**
+
+- Replaced two nested Python for-loops (per-team × per-trip) with vectorized pandas operations:
+  - `groupby().tail(1)` extracts last play of every RZ drive in one operation
+  - `str.contains()` masks classify outcomes (TD/FG/TO/FAILED) in bulk
+  - `groupby().size().unstack()` aggregates counts per team
+  - Goal-to-go similarly vectorized
+- Non-competitive trip filter (kneel/timeout) preserved via vectorized `str.contains`.
+- Net -13 lines. Remaining per-team loop only does dict lookups on pre-computed aggregates.
+- **Backtest:** No change (FD shelved). Verified identical output.
+
+#### Commit: Document Portal Churn Investigation outcome (0224fe9)
+**Impact: Closed open investigation doc**
+
+- Updated `docs/PORTAL_CHURN_INVESTIGATION.md` with Chemistry Tax 3-0 Council rejection outcome.
+- Added cross-reference from SESSION_LOG Chemistry Tax entry.
+- Churn penalty infrastructure remains dormant (`use_churn_penalty=False`).
+
+#### Commit: Document conference anchor backtest results (fb0a2f3)
+**Impact: Closed open investigation doc + recovered missing session log**
+
+- Updated `docs/NON_CONFERENCE_WEIGHTING.md` with full backtest impact (5+ Edge 53.5% → 54.8%), anchor scale sweep (4 variants), Big 12 impact, and garbage time variant results.
+- Added missing "Feb 6 (Model Tuning)" session log entry covering conference anchor, RZ leverage, and 3 rejected experiments (MOV, fraud tax, GT variants).
+- Synced both repos (JP-Plus + JP-Plus-Docs).
+
 ---
 
 ## Session: February 6, 2026 (Performance)
