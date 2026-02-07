@@ -87,6 +87,31 @@
 - **Key insight (Code Auditor):** "The UCF/Colorado overrating problem cannot be solved by re-weighting existing signals. The market already knows which teams are bad on 3rd down — we need signals the market DOESN'T have."
 - Infrastructure preserved dormant (defaults=1.0, guard `!= 1.0` prevents execution).
 
+#### Penalty Discipline PPA — REJECTED (Rejection #11)
+**Impact: Strongest pre-backtest signal ever, but still failed 5+ Edge constraint**
+
+- **Hypothesis:** Penalties are invisible to the EFM (filtered via `SCRIMMAGE_PLAY_TYPES`). A team's penalty yards per game is a persistent trait (YoY r=0.503) and could provide a novel "discipline" signal the market underprices.
+- **Exploration (Quant Auditor Phase 1-3):**
+  - YoY stability: r=0.503 (strongest of any tested feature)
+  - Team-level bias: r=-0.1899 (more penalties → worse ATS performance)
+  - Quintile gradient: 3.1 pts between most/least penalized quintiles
+  - Low redundancy: r=-0.10 against existing EFM ratings (genuinely novel signal)
+  - **Passed all 5 decision gates** — first feature to do so
+- **Implementation:** Prior-year penalty yards → post-Ridge adjustment (factor × yards_above_mean). Walk-forward safe using year-1 stats.
+- **Phase 4 Backtest (3 variants, --start-week 4):**
+
+| Variant | Core MAE | Core ATS (Close) | Core 3+ Edge | Core 5+ Edge |
+|---------|----------|-------------------|--------------|--------------|
+| Baseline | 12.52 | 52.4% | 53.0% | 54.1% |
+| Factor 0.03 | 12.53 | 52.1% | 53.0% | 53.2% (-0.9%) |
+| Factor 0.04 | 12.54 | 52.0% | 52.8% | 53.2% (-0.9%) |
+| Factor 0.05 | 12.55 | 52.2% | 52.9% | 53.6% (-0.5%) |
+
+- **All 3 variants FAILED** — 5+ Edge degraded 0.5-0.9% across the board.
+- **Root cause:** Despite low correlation with EFM (r=-0.10), the penalty signal may already be partially priced in by the market. The market likely observes penalties directly (they're in box scores), so this isn't a true blind spot for oddsmakers — only for our model.
+- **Fully reverted** — no code traces remain (CFBDClient method, EFM adjustment, backtest wiring all removed).
+- **Key insight:** "Novel to the model" ≠ "novel to the market." Even signals with excellent statistical properties (stability, gradient, low redundancy) fail if the market already incorporates them. The test is: does the market MISS this signal?
+
 #### Zombie Prior (5% Floor Removal) — REJECTED (Rejection #6, reverted)
 **Impact: Floor encodes real coaching/depth signals — removal degrades 5+ Edge**
 
