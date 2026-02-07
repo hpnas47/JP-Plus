@@ -25,67 +25,6 @@ from src.adjustments.diagnostics import (
 logger = logging.getLogger(__name__)
 
 
-def smooth_correlated_stack(
-    hfa: float,
-    travel: float,
-    altitude: float,
-    cap_start: float = 5.0,
-    cap_factor: float = 0.5,
-    altitude_travel_interaction: float = 0.7,
-) -> tuple[float, float, float]:
-    """DEPRECATED: Use AdjustmentAggregator for consolidated smoothing.
-
-    This function is kept for backward compatibility only. New code should use
-    the AdjustmentAggregator class which consolidates all adjustment smoothing
-    into a single four-bucket algorithm.
-
-    Args:
-        hfa: Home field advantage adjustment (points)
-        travel: Travel adjustment (points)
-        altitude: Altitude adjustment (points)
-        cap_start: Point value where soft cap begins (default 5.0)
-        cap_factor: Factor to multiply excess by (default 0.5 = 50% reduction)
-        altitude_travel_interaction: Reduce altitude by this factor when travel > 1.5
-
-    Returns:
-        Tuple of (smoothed_hfa, smoothed_travel, smoothed_altitude)
-    """
-    import warnings
-    warnings.warn(
-        "smooth_correlated_stack is deprecated. Use AdjustmentAggregator instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    # Step 1: Apply altitude-travel interaction
-    adj_altitude = altitude
-    if travel > 1.5 and altitude > 0:
-        adj_altitude = altitude * altitude_travel_interaction
-
-    # Step 2: Calculate raw stack
-    raw_stack = hfa + travel + adj_altitude
-
-    # Step 3: Apply soft cap
-    if raw_stack <= cap_start:
-        return hfa, travel, adj_altitude
-
-    excess = raw_stack - cap_start
-    reduction = excess * (1 - cap_factor)
-
-    if raw_stack > 0:
-        hfa_share = hfa / raw_stack
-        travel_share = travel / raw_stack
-        altitude_share = adj_altitude / raw_stack
-
-        smoothed_hfa = hfa - reduction * hfa_share
-        smoothed_travel = travel - reduction * travel_share
-        smoothed_altitude = adj_altitude - reduction * altitude_share
-    else:
-        smoothed_hfa, smoothed_travel, smoothed_altitude = hfa, travel, adj_altitude
-
-    return smoothed_hfa, smoothed_travel, smoothed_altitude
-
-
 # TRIPLE_OPTION_TEAMS imported from config.teams (single source of truth)
 
 # Elite FCS teams (based on 2022-2024 performance vs FBS)
