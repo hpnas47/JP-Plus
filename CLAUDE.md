@@ -26,6 +26,7 @@
 | 5+ Edge (Core) | 4–15 | 866 | — | — | 54.6% (473-393) | 56.9% (525-397) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
+- **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
 - **Conference Anchor:** OOC game weighting (1.5x) + Bayesian conference strength anchor. Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 
