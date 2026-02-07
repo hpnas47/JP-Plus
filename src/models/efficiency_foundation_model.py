@@ -785,8 +785,20 @@ class EfficiencyFoundationModel:
         # Hypothesis: "Paper tigers" rack up yards between the 20s but can't finish drives.
         # A successful play at the 30 that gains 4 yards (still at 26) = empty success.
         if self.rz_leverage_enabled and "yards_to_goal" in df.columns and "is_success" in df.columns:
+            # SAFETY CHECK 1: Exclude plays with nonsensical field position data
+            # If yards_to_goal + yards_gained > 100, the field position is flipped or corrupted
+            valid_field_position = pd.Series(True, index=df.index)
+            if "yards_gained" in df.columns:
+                valid_field_position = (df["yards_to_goal"] + df["yards_gained"]) <= 100
+                invalid_count = (~valid_field_position).sum()
+                if invalid_count > 0:
+                    logger.debug(
+                        f"  Empty Yards Filter: {invalid_count:,} plays excluded due to invalid field position "
+                        f"(yards_to_goal + yards_gained > 100)"
+                    )
+
             # Plays in the "empty yards" zone: opponent 40 to 20
-            in_empty_zone = (df["yards_to_goal"] >= 20) & (df["yards_to_goal"] <= 40)
+            in_empty_zone = (df["yards_to_goal"] >= 20) & (df["yards_to_goal"] <= 40) & valid_field_position
 
             # Successful plays in this zone that DON'T enter the red zone or score
             # A play enters the RZ if: yards_to_goal - yards_gained < 20
@@ -817,6 +829,25 @@ class EfficiencyFoundationModel:
                     f"  Empty Yards Filter: {empty_count:,} plays down-weighted ({empty_count/total_plays*100:.1f}%, "
                     f"{self.empty_yards_weight}x weight)"
                 )
+
+            # SAFETY CHECK 2 & 3: Per-team empty yards coverage with warning threshold
+            if empty_count > 0 and "offense" in df.columns:
+                successful_plays = df[df["is_success"] == 1]
+                if len(successful_plays) > 0:
+                    for team in successful_plays["offense"].unique():
+                        team_mask = successful_plays["offense"] == team
+                        team_success_count = team_mask.sum()
+                        team_empty_count = is_empty_success[successful_plays.index[team_mask]].sum()
+                        if team_success_count > 0:
+                            empty_pct = (team_empty_count / team_success_count) * 100
+                            logger.debug(
+                                f"  Empty Yards Filter applied to {empty_pct:.1f}% of successful plays for {team}"
+                            )
+                            if empty_pct > 15.0:
+                                logger.warning(
+                                    f"{team} has {empty_pct:.1f}% successful plays in Empty Yards zone — "
+                                    f"possible field position data error"
+                                )
 
         prep_time = time.time() - prep_start
         logger.debug(f"  Vectorized preprocessing: {prep_time*1000:.1f}ms for {len(df):,} plays")

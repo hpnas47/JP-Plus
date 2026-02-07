@@ -69,6 +69,32 @@
 
 ---
 
+## Session: February 6, 2026 (Council)
+
+### Chemistry Tax — REJECTED (3-0 Council Vote)
+
+**Proposal:** -3.0 pt penalty for teams with <50% Returning Production in Week 1, decaying linearly to 0 by Week 5. Goal: reduce 14.94 early-season MAE.
+
+**Council Findings:**
+
+- **Model Strategist (REJECT):** Redundant with 3 existing mechanisms (RetProd regression, talent floor decay, prior weight decay) that already penalize low-RetProd teams by 5-8 pts in Weeks 1-5. Early-season MAE is a sample-size problem, not a bias problem.
+- **Code Auditor (APPROVED architecturally):** Does not violate Anti-Drift Guardrail (prior modifier, not post-hoc constant). Recommended Option B: explicit `chemistry_penalty` field in `PreseasonRating`, decayed via existing prior weight fade. Use raw `ret_ppa`, not portal-adjusted.
+- **Quant Auditor (REJECT):** Empirical analysis on 2024-2025 found:
+  - <50% RetProd threshold captures 46-56% of FBS (median split, not outlier detector)
+  - Observed bias only +1.28 pts (t=0.87, p>0.38 — not statistically significant)
+  - -3.0 tax overcorrects: would flip bias from +1.28 to -1.72
+  - Signal reverses by Week 4 (+3.25 Week 2 → -1.08 Week 4)
+  - 50-70% RetProd group has 57.5% ATS at 3+ edge — at risk from threshold bleed
+
+**Conclusion:** 14.94 early-season MAE is the structural cost of predicting with 0-2 games of data per team. Not fixable via roster-turnover penalties. The model correctly handles this by treating Weeks 1-3 as "Calibration" and concentrating edge in Core (Weeks 4-15).
+
+**Alternatives Evaluated (Not Pursued):**
+- Targeted version (<25% RetProd, -1.5 pts, Weeks 2-3 only): Would affect ~30 games out of 597, theoretical MAE improvement ~0.08 pts — not worth the complexity.
+- Prior decay recalibration (Week 1 at 92% instead of 100%): No in-season data exists in Week 1 to blend in; early-season mean error is only -0.32, not systematically biased.
+- Early-season confidence gate (raise edge threshold to 7+ in Weeks 1-3): Operational fix, not a model fix. Viable for bankroll management.
+
+---
+
 ## Session: February 6, 2026 (Late Night)
 
 ### Theme: Explosiveness Uplift — Equal SR/IsoPPP Weights (45/45/10)
