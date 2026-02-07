@@ -90,8 +90,6 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 | `benchmark.py` | Performance benchmarking for model computation. |
 | `calibrate_situational.py` | Calibration sweep for situational adjustment weights. |
 | `analyze_stack_bias.py` | Analyzes adjustment stack for systematic bias. |
-| `test_sparse_ridge.py` | Unit tests for sparse ridge regression implementation. |
-| `test_vectorized_efm.py` | Unit tests for vectorized EFM operations. |
 
 ---
 
