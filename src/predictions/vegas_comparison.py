@@ -29,13 +29,25 @@ class VegasLine:
 
 @dataclass
 class ValuePlay:
-    """Container for identified value play."""
+    """Container for identified value play.
+
+    Edge Sign Convention (DO NOT CHANGE):
+        edge = (-model_spread) - vegas_spread
+
+        Negative edge: Model favors HOME more than Vegas → bet HOME.
+        Positive edge: Model favors AWAY more than Vegas → bet AWAY.
+
+        Example (bet HOME): Model spread = +10 (home by 10), Vegas = -3 (home by 3).
+            edge = (-10) - (-3) = -7 → model likes HOME 7 pts more than Vegas.
+        Example (bet AWAY): Model spread = +1 (home by 1), Vegas = -7 (home by 7).
+            edge = (-1) - (-7) = +6 → model likes AWAY 6 pts more than Vegas.
+    """
 
     home_team: str
     away_team: str
     model_spread: float
     vegas_spread: float
-    edge: float  # Model vs Vegas in Vegas convention (negative = model likes home more)
+    edge: float  # Negative = model favors HOME more; Positive = model favors AWAY more
     side: str  # "HOME" or "AWAY"
     confidence: str
     analysis: str
@@ -211,6 +223,11 @@ class VegasComparison:
 
         P0.1 FIX: Uses game_id for reliable matching when available,
         falls back to team name matching for backward compatibility.
+
+        Edge Sign Convention:
+            edge = (-model_spread) - vegas_spread
+            Negative edge → model favors HOME more than Vegas (bet HOME).
+            Positive edge → model favors AWAY more than Vegas (bet AWAY).
 
         Args:
             prediction: Model prediction
