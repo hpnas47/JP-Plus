@@ -50,6 +50,23 @@
 - **Key insight:** Model's highest-conviction disagreements with the market (5+ pts) are already well-calibrated. Broad adjustments that improve moderate-conviction picks dilute signal on the strongest picks.
 - Infrastructure remains dormant (`use_churn_penalty=False`) for future selective activation (e.g., only <40% returning AND >20 transfers).
 
+#### Style Asymmetry Collision Analysis — REJECTED (No Code Change)
+**Impact: Confirmed 45/45/10 weighting handles style mismatches well**
+
+- **Hypothesis:** "Explosive offense vs big-play-limiting defense" collisions cause MAE outages for teams like Indiana and Ole Miss. The 45/45 SR/IsoPPP split may over-value explosive offenses in these matchups.
+- **Method:** Segmented 182 collision games (7.6% of core) where top-20th-pct offensive IsoPPP faced top-20th-pct defensive IsoPPP across 2022–2025.
+- **Results (collision vs core baseline):**
+
+| Metric | Core Baseline | Collision (N=182) | Delta |
+|--------|--------------|-------------------|-------|
+| MAE | 12.50 | 11.58 | **-0.91 (better)** |
+| Mean Error | +0.68 | +0.13 | **near zero bias** |
+| ATS 5+ Edge | 52.6% | 55.6% (N=72) | **+3.0% (stronger)** |
+
+- **Hypothesis rejected:** Collision games are a model **strength**, not weakness. Equal weighting correctly offsets explosive offense IsoPPP against limiting defense IsoPPP.
+- **Magnitude check:** ±2.5 pct pt weight shift produces 0.25 pts per game — below noise floor. Even ±5.0 pct pt (0.49 pts) doesn't reach the 0.5 pt threshold. Flagged for rejection before backtest.
+- **Indiana/Ole Miss root cause:** Priors problems (coaching turnarounds, portal churn) and conference circularity, not style asymmetry. Indiana's largest error (Wk5 -15.5 vs Maryland) occurred before the model captured Cignetti's turnaround.
+
 ---
 
 ## Session: February 7, 2026
