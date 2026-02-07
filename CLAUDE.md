@@ -33,12 +33,12 @@
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,273 | 13.02 | 16.50 | 51.1% | 52.7% |
-| Phase 1 (Calibration) | 1–3 | 597 | 14.94 | — | 47.1% | 48.6% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.52** | **15.84** | **52.4%** | **54.0%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.43 | — | 47.4% | 48.3% |
-| 3+ Edge (Core) | 4–15 | 1,433 | — | — | 53.0% (764-669) | 55.5% (811-650) |
-| 5+ Edge (Core) | 4–15 | 866 | — | — | 54.5% (475-396) | 56.9% (525-397) |
+| **Full (`--start-week 1`)** | 1–Post | 3,273 | 12.99 | 16.46 | 51.0% | 52.9% |
+| Phase 1 (Calibration) | 1–3 | 608 | 14.82 | — | 46.4% | 48.7% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.52** | **15.85** | **52.4%** | **54.2%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.41 | — | 46.8% | 48.9% |
+| 3+ Edge (Core) | 4–15 | 1,457 | — | — | 53.0% (758-671) | 55.4% (813-654) |
+| 5+ Edge (Core) | 4–15 | 890 | — | — | 54.5% (475-396) | 57.0% (527-397) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
@@ -93,3 +93,4 @@
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
 
+<!-- Last validated: 2026-02-07 by generate_docs.py -->
