@@ -571,18 +571,21 @@ class SpreadGenerator:
             + components.fcs_adjustment
         )
 
-        # Pace adjustment for triple-option teams (compress toward 0)
-        components.pace_adjustment = self._get_pace_adjustment(
-            home_team, away_team, spread
-        )
-        spread += components.pace_adjustment
-
         # QB injury adjustment (when starter is flagged as out)
+        # Applied before pace adjustment so triple-option compression
+        # correctly dampens QB impact in low-possession games
         if self.qb_adjuster:
             components.qb_adjustment = self.qb_adjuster.get_adjustment(
                 home_team, away_team
             )
             spread += components.qb_adjustment
+
+        # Pace adjustment for triple-option teams (compress toward 0)
+        # Applied last: compresses the ENTIRE spread including QB adjustment
+        components.pace_adjustment = self._get_pace_adjustment(
+            home_team, away_team, spread
+        )
+        spread += components.pace_adjustment
 
         # Convert to win probability
         win_prob = self._spread_to_probability(spread)
