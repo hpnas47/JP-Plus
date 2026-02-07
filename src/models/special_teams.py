@@ -799,15 +799,14 @@ class SpecialTeamsModel:
             # Return yards saved: convert to points (~0.04 pts/yard)
             return_saved = (23.0 - avg_return_allowed) * self.YARDS_TO_POINTS
 
-            # Estimate games
-            estimated_games = max(1, total_kicks / 5.0)
+            # Coverage rating (in points per kick, not per game)
+            # tb_bonus and return_saved are per-kick averages
+            # When games_played is provided, scale to per-game; otherwise keep per-kick
             if games_played and team in games_played:
-                estimated_games = games_played[team]
-
-            # Per-game coverage rating (in points)
-            # Divisor dampens raw per-game value to prevent ST from dominating spreads
-            kicks_per_game = total_kicks / estimated_games
-            coverage_ratings[team] = (tb_bonus + return_saved) * kicks_per_game / 5.0
+                kicks_per_game = total_kicks / games_played[team]
+                coverage_ratings[team] = (tb_bonus + return_saved) * kicks_per_game
+            else:
+                coverage_ratings[team] = tb_bonus + return_saved
 
         # Return rating (for returning teams) in POINTS
         return_ratings = {}
@@ -819,15 +818,14 @@ class SpecialTeamsModel:
             # Return yards above expected, converted to points (~0.04 pts/yard)
             return_value = (avg_return - 23.0) * self.YARDS_TO_POINTS
 
-            # Estimate games
-            estimated_games = max(1, len(group) / 3.0)  # ~3 non-TB kickoffs per game to return
+            # Return rating (in points per return, not per game)
+            # return_value is per-return average
+            # When games_played is provided, scale to per-game; otherwise keep per-return
             if games_played and team in games_played:
-                estimated_games = games_played[team]
-
-            # Per-game return rating (in points)
-            # Divisor dampens raw per-game value to prevent ST from dominating spreads
-            returns_per_game = len(group) / estimated_games
-            return_ratings[team] = return_value * returns_per_game / 3.0
+                returns_per_game = len(group) / games_played[team]
+                return_ratings[team] = return_value * returns_per_game
+            else:
+                return_ratings[team] = return_value
 
         # Combine coverage and return ratings
         # DETERMINISM: Sort for consistent iteration order
