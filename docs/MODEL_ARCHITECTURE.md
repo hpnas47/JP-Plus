@@ -115,6 +115,33 @@ When measured against opening lines, CLV is strongly positive (+0.75 at 5+ edge)
 - Calibration MAE drops significantly in 2025 (13.42 vs 14-16 in prior years) — better priors calibration
 - RMSE/MAE ratio ~1.27 across all slices, indicating reasonably consistent error distribution
 
+### 2025 Season Performance
+
+JP+'s most recent season — best Core MAE (12.19) and strongest 5+ Edge performance across all years.
+
+#### 2025 vs Closing Line
+
+| Phase | Weeks | Games | MAE | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|---------|
+| Calibration | 1-3 | 153 | 13.42 | 50.7% | 54-51 (51.4%) | 37-34 (52.1%) |
+| **Core** | **4-15** | **638** | **12.19** | **52.7%** | **180-146 (55.2%)** | **108-84 (56.2%)** |
+| Postseason | 16+ | 46 | 12.72 | 43.5% | 11-15 (42.3%) | 8-9 (47.1%) |
+| **Full Season** | **All** | **837** | **12.45** | **51.8%** | **245-212 (53.6%)** | **153-127 (54.6%)** |
+
+#### 2025 vs Opening Line
+
+| Phase | Weeks | Games | MAE | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|---------|
+| Calibration | 1-3 | 153 | 13.42 | 50.7% | 53-48 (52.5%) | 37-32 (53.6%) |
+| **Core** | **4-15** | **638** | **12.19** | **54.1%** | **201-152 (56.9%)** | **118-84 (58.4%)** |
+| Postseason | 16+ | 46 | 12.72 | 43.5% | 11-14 (44.0%) | 8-7 (53.3%) |
+| **Full Season** | **All** | **837** | **12.45** | **52.9%** | **265-214 (55.3%)** | **163-123 (57.0%)** |
+
+**2025 highlights:**
+- Core 5+ Edge at 56.2% (Close) and 58.4% (Open) — strongest single-season performance
+- Full-season 5+ Edge profitable at 54.6% (Close) even including weak Calibration/Postseason phases
+- Postseason weakness persists (43.5% ATS) — bowl opt-outs and motivation remain unmodeled
+
 ### 2025 Top 25 (End of Season Including CFP)
 
 | Rank | Team | Overall | Off (rank) | Def (rank) | ST (rank) |
