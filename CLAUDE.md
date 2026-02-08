@@ -70,6 +70,24 @@
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
 - **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 
+## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
+
+| Slice | Weeks | Games | MAE | ATS (Close) | ATS (Open) |
+|-------|-------|-------|-----|-------------|------------|
+| **Full (`--start-week 1`)** | 1–Post | 2,127 | 13.06 | 53.6% | 53.0% |
+| Phase 1 (Calibration) | 1–3 | 169 | 12.39 | 57.2% | 55.4% |
+| **Phase 2 (Core)** | **4–15** | **1,824** | **13.09** | **53.2%** | **52.6%** |
+| Phase 3 (Postseason) | 16+ | 134 | 13.53 | 54.0% | 55.6% |
+| 3+ Edge (Core) | 4–15 | 997 | — | 55.1% (549-448) | 54.7% (536-444) |
+| 5+ Edge (Core) | 4–15 | 599 | — | 54.5% (323-276) | 55.3% (318-266) |
+
+- **Years:** 2023-2025 only (2022 dropped — scoring environment transition year, 49% ATS).
+- **Ridge Alpha:** 10.0 (optimal for 5+ Edge).
+- **Architecture:** Separate from EFM. Ridge regression on game-level points scored/allowed (not play-level efficiency).
+- **Decay Factor:** 1.0 (no within-season decay — walk-forward handles temporality).
+- **OT Protection:** Disabled (final scores used — Vegas prices OT potential).
+- **Weather:** Available but optional (no ATS improvement — market already prices weather).
+
 ---
 
 ## 📊 JP+ Power Ratings Display Protocol
