@@ -78,9 +78,15 @@ class TotalsModel:
             (Core 5+ Edge: 52.8% at alpha=10).
     """
 
-    def __init__(self, ridge_alpha: float = 10.0, decay_factor: float = 1.0):
+    def __init__(
+        self,
+        ridge_alpha: float = 10.0,
+        decay_factor: float = 1.0,
+        score_cap: Optional[float] = None,
+    ):
         self.ridge_alpha = ridge_alpha
         self.decay_factor = decay_factor  # Within-season recency weight (1.0 = no decay)
+        self.score_cap = score_cap  # Cap for extreme scores (dampens OT contamination)
         self.team_ratings: dict[str, TotalsRating] = {}
         self.baseline: float = 26.0  # Will be set by training
         self._team_to_idx: dict[str, int] = {}
@@ -96,7 +102,8 @@ class TotalsModel:
 
         Args:
             games_df: DataFrame with columns: home_team, away_team, home_points,
-                      away_points, week
+                      away_points, week. Optional: home_line_scores, away_line_scores
+                      (for regulation score extraction).
             fbs_teams: Set of FBS team names to include
             max_week: Only use games from weeks <= max_week (for walk-forward).
                       If None, uses all games.
@@ -145,8 +152,13 @@ class TotalsModel:
         y = []
         weeks = []  # Track week for recency weighting
 
-        # Track games per team
+        # Track games per team and OT usage
         games_per_team = {t: 0 for t in teams}
+        regulation_scores_used = 0
+        capped_scores_used = 0
+
+        # Check if regulation scores (line_scores) are available
+        has_line_scores = 'home_line_scores' in games.columns and 'away_line_scores' in games.columns
 
         for _, g in games.iterrows():
             home = g['home_team']
@@ -154,6 +166,27 @@ class TotalsModel:
             home_pts = g['home_points']
             away_pts = g['away_points']
             game_week = g['week']
+
+            # Priority 1: Use regulation scores if available
+            if has_line_scores:
+                home_line = g.get('home_line_scores')
+                away_line = g.get('away_line_scores')
+                # Check for valid list/array (not NaN/None) with at least 4 quarters
+                if (isinstance(home_line, (list, np.ndarray)) and len(home_line) >= 4 and
+                    isinstance(away_line, (list, np.ndarray)) and len(away_line) >= 4):
+                    # Sum first 4 quarters for regulation score
+                    home_pts = sum(home_line[:4])
+                    away_pts = sum(away_line[:4])
+                    regulation_scores_used += 1
+
+            # Priority 2: Apply score cap if set (fallback for OT contamination)
+            if self.score_cap is not None:
+                if home_pts > self.score_cap:
+                    home_pts = self.score_cap
+                    capped_scores_used += 1
+                if away_pts > self.score_cap:
+                    away_pts = self.score_cap
+                    capped_scores_used += 1
 
             if home not in self._team_to_idx or away not in self._team_to_idx:
                 continue
@@ -198,6 +231,12 @@ class TotalsModel:
         self.baseline = ridge.intercept_
         off_coefs = ridge.coef_[:n_teams]
         def_coefs = ridge.coef_[n_teams:]
+
+        # Log OT contamination handling
+        if regulation_scores_used > 0:
+            logger.info(f"OT Protection: Used regulation scores for {regulation_scores_used} games")
+        if capped_scores_used > 0:
+            logger.info(f"OT Protection: Capped {capped_scores_used} extreme scores at {self.score_cap}")
 
         logger.info(f"Baseline PPG: {self.baseline:.1f}")
         logger.info(f"Offensive adjustments: [{off_coefs.min():.1f}, {off_coefs.max():.1f}]")
