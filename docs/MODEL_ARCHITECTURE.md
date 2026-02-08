@@ -971,6 +971,69 @@ from src.models.efficiency_foundation_model import (
 
 ---
 
+## Totals Model Baseline (2023-2025)
+
+Separate model for over/under prediction using game-level scoring data (not play-level efficiency like EFM).
+
+### Architecture
+
+- **Training data:** Each game → 2 rows: home team scores X vs away defense, away team scores Y vs home defense
+- **Ridge regression:** Solves for team off/def adjustments relative to FBS average (~24 ppg)
+- **Learned HFA:** Home field advantage learned via Ridge column (+3.5 to +4.5 pts typical)
+- **Walk-forward:** Only uses games from weeks prior to prediction week
+
+**Prediction formula:**
+```
+home_expected = baseline + (home_off_adj + away_def_adj) / 2 + hfa_coef
+away_expected = baseline + (away_off_adj + home_def_adj) / 2
+predicted_total = home_expected + away_expected
+```
+
+### Performance by Phase (vs Closing Line)
+
+| Phase | Weeks | Games | MAE | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|---------|
+| Calibration | 1-3 | 169 | 12.42 | 57.9% | 56.7% (59-45) | **61.1%** (44-28) |
+| **Core** | **4-15** | **1,824** | **13.09** | **53.9%** | **54.7%** (539-446) | **54.5%** (334-279) |
+| Postseason | 16+ | 134 | 13.57 | 53.2% | 55.0% (44-36) | 56.5% (26-20) |
+| **Full Season** | **All** | **2,127** | **13.07** | **54.1%** | **54.9%** (642-527) | **55.3%** (404-327) |
+
+### Performance by Phase (vs Opening Line)
+
+| Phase | Weeks | Games | MAE | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|---------|
+| Calibration | 1-3 | 169 | 12.42 | 55.4% | 57.0% (57-43) | **58.7%** (37-26) |
+| **Core** | **4-15** | **1,824** | **13.09** | **53.4%** | **54.2%** (528-447) | **55.3%** (330-267) |
+| Postseason | 16+ | 134 | 13.57 | 54.8% | 55.6% (45-36) | 55.8% (24-19) |
+| **Full Season** | **All** | **2,127** | **13.57** | **53.6%** | **54.5%** (630-526) | **55.6%** (391-312) |
+
+### Core Phase by Year
+
+| Year | Games | MAE | 5+ Edge (Close) | 5+ Edge (Open) |
+|------|-------|-----|-----------------|----------------|
+| 2023 | 597 | 13.46 | 51.6% (111-104) | 54.2% (110-93) |
+| **2024** | **611** | **13.17** | **59.5%** (125-85) | **59.2%** (122-84) |
+| 2025 | 616 | 12.65 | 52.1% (98-90) | 52.1% (98-90) |
+
+### Configuration
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Years | 2023-2025 | 2022 excluded (scoring environment transition, 49% ATS) |
+| Ridge Alpha | 10.0 | Optimal for 5+ Edge |
+| Decay Factor | 1.0 | No within-season decay (walk-forward handles temporality) |
+| Learned HFA | +3.5 to +4.5 pts | Via Ridge column, not fixed value |
+| OT Protection | Disabled | Final scores used (Vegas prices OT potential) |
+| Weather | Optional | Available but no ATS improvement |
+
+### Key Findings
+
+- **Calibration phase strongest** — opposite of spreads model. Early-season totals more predictable.
+- **2024 exceptional** — 59.5% 5+ Edge may reflect market recalibration after scoring shift.
+- **Learned HFA critical** — improved 5+ Edge by +1.6% (Close), +2.1% (Open) vs no/fixed HFA.
+
+---
+
 ## Open Items
 
 ### Needs Validation
@@ -983,7 +1046,7 @@ from src.models.efficiency_foundation_model import (
 ### High Priority
 - [x] **Expose separate O/D/ST ratings** - ✅ DONE. JP+ now exposes separate offensive, defensive, and special teams ratings via `get_offensive_rating()`, `get_defensive_rating()`, `get_special_teams_rating()`, and in `get_ratings_df()` output. This enables future game totals prediction.
 - [x] **Add quarterback-specific adjustments for injuries** - ✅ DONE. Added `QBInjuryAdjuster` class that pre-computes depth charts from CFBD player PPA data. Manual flagging via `--qb-out TEAM` CLI flag. Adjustment = PPA drop × 30 plays/game.
-- [ ] **Game totals prediction (over/under)** - Formula validated: `Total = 2×Avg + (Off_A + Off_B) - (Def_A + Def_B)`. Each team's expected points: `Team_A_points = Avg + Off_A - Def_B`. Ready to implement.
+- [x] **Game totals prediction (over/under)** - ✅ DONE. Separate TotalsModel using Ridge regression on game-level points (not play-level efficiency). Learned HFA via Ridge column (+3.5 to +4.5 pts). Core 5+ Edge: 54.5% (Close), 55.3% (Open). See "Totals Model Baseline" section.
 - [ ] Improve situational adjustment calibration
 
 ### Medium Priority
@@ -1023,6 +1086,7 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
+- **Totals Model (Over/Under Prediction)** - NEW production module for game totals prediction. Separate architecture from EFM: Ridge regression on game-level points scored/allowed (not play-level efficiency). Key innovation: HFA learned via Ridge column (+3.5 to +4.5 pts) rather than assumed fixed value — improved 5+ Edge by +1.6% (Close), +2.1% (Open). Configuration: alpha=10.0, decay=1.0, years 2023-2025 (2022 excluded as scoring transition year). Performance: Core 5+ Edge 54.5% (Close), 55.3% (Open); Full Season 5+ Edge 55.3% (Close), 55.6% (Open). Files: `src/models/totals_model.py`, `scripts/backtest_totals.py`.
 - **HFA Global Offset Calibration (-0.50 pts)** - Error cohort analysis revealed +0.90 pts systematic home bias across 2,489 core games. Added `global_offset` parameter to `HomeFieldAdvantage` that subtracts a fixed amount from ALL team HFA values (floor=0.5). 6-variant sweep (0.0, 0.25, 0.375, 0.50, 0.75, 1.00): offset=0.50 optimal — 5+ Edge Close +0.6% (54.1%→54.7%), Open +0.5% (57.3%→57.8%), mean error halved from +0.90 to +0.46, MAE flat. First experiment where 3+ and 5+ Edge improve together without divergence. CLI: `--hfa-offset` (default 0.50). Also applied in `run_weekly.py` for production.
 - **Conference Strength Anchor (OOC Weighting + Bayesian Anchors)** - Two-mechanism approach to reduce conference circularity: (1) 1.5x play weight for OOC FBS games in Ridge regression, (2) post-Ridge separate offensive and defensive Bayesian conference anchors using OOC scoring data. Parameters: anchor_scale=0.08, prior_games=30, max_adjustment=±2.0. A conference can now have positive offensive anchor but negative defensive anchor. 4-variant sweep tested (0.08, 0.12, 0.15, 0.20) — 0.08 preserved 5+ Edge best; larger scales improved 3+ Edge but degraded 5+ Edge (binding constraint).
 - **Red Zone Leverage Weighting + Empty Yards Filter** - Play-level weighting in `_prepare_plays()`: inside-10=2.0x, inside-20=1.5x, empty yards zone (opp 40-20)=0.7x for successful plays that don't enter RZ. 5+ Edge +0.2%, MAE +0.02 (within tolerance). No outcome data — purely spatial signal.

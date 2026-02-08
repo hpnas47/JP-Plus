@@ -246,6 +246,76 @@ End-of-season power ratings including all postseason (bowls + CFP through Nation
 
 ---
 
+## JP+ Totals Model (Over/Under)
+
+In addition to spreads, JP+ includes a separate **Totals Model** for predicting game over/unders. This uses a different architecture than the spreads model.
+
+### Why a Separate Model?
+
+The spreads model (EFM) measures *efficiency* — how well teams move the ball on each play. But efficiency ratings don't directly translate to total points scored. A team rated +10 isn't going to score 10 more points than average.
+
+The Totals Model uses **game-level scoring data** (points scored and allowed) rather than play-level efficiency. It solves for each team's offensive and defensive scoring adjustments via Ridge regression, just like EFM, but on actual point totals.
+
+### How It Works
+
+- **Training data:** Each game produces 2 observations: home team scores X against away defense, away team scores Y against home defense
+- **Ridge regression:** Solves for team offensive/defensive adjustments relative to FBS average (~24 ppg)
+- **Learned HFA:** Home field advantage is learned from the data (+3.5 to +4.5 pts typical), not assumed
+- **Walk-forward:** Only uses games from weeks prior to the prediction week
+
+**Prediction formula:**
+```
+home_expected = baseline + (home_off_adj + away_def_adj) / 2 + hfa_coef
+away_expected = baseline + (away_off_adj + home_def_adj) / 2
+predicted_total = home_expected + away_expected
+```
+
+### Totals Model Performance (2023-2025)
+
+*Walk-forward backtest across 3 seasons (2,127 games). 2022 excluded — scoring environment transition year with 49% ATS.*
+
+#### Performance by Phase (vs Closing Line)
+
+| Phase | Weeks | Games | MAE | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|---------|
+| Calibration | 1-3 | 169 | 12.42 | 57.9% | 56.7% (59-45) | **61.1%** (44-28) |
+| **Core** | **4-15** | **1,824** | **13.09** | **53.9%** | **54.7%** (539-446) | **54.5%** (334-279) |
+| Postseason | 16+ | 134 | 13.57 | 53.2% | 55.0% (44-36) | 56.5% (26-20) |
+| **Full Season** | **All** | **2,127** | **13.07** | **54.1%** | **54.9%** (642-527) | **55.3%** (404-327) |
+
+#### Performance by Phase (vs Opening Line)
+
+| Phase | Weeks | Games | MAE | ATS % | 3+ Edge | 5+ Edge |
+|-------|-------|-------|-----|-------|---------|---------|
+| Calibration | 1-3 | 169 | 12.42 | 55.4% | 57.0% (57-43) | **58.7%** (37-26) |
+| **Core** | **4-15** | **1,824** | **13.09** | **53.4%** | **54.2%** (528-447) | **55.3%** (330-267) |
+| Postseason | 16+ | 134 | 13.57 | 54.8% | 55.6% (45-36) | 55.8% (24-19) |
+| **Full Season** | **All** | **2,127** | **13.57** | **53.6%** | **54.5%** (630-526) | **55.6%** (391-312) |
+
+#### Core Phase by Year
+
+| Year | Games | MAE | 5+ Edge (Close) | 5+ Edge (Open) |
+|------|-------|-----|-----------------|----------------|
+| 2023 | 597 | 13.46 | 51.6% (111-104) | 54.2% (110-93) |
+| **2024** | **611** | **13.17** | **59.5%** (125-85) | **59.2%** (122-84) |
+| 2025 | 616 | 12.65 | 52.1% (98-90) | 52.1% (98-90) |
+
+### Key Insights
+
+- **Calibration phase is strongest** — opposite of spreads model. Early-season totals are more predictable because scoring baseline is stable.
+- **2024 was exceptional** — 59.5% 5+ Edge. May reflect market recalibration after multi-year scoring environment shift (57 → 53 PPG since 2018).
+- **Core 5+ Edge: 54.5% (Close), 55.3% (Open)** — solidly above the 52.4% breakeven threshold.
+
+### Configuration
+
+- **Years:** 2023-2025 (2022 excluded — transition year)
+- **Ridge Alpha:** 10.0
+- **Decay Factor:** 1.0 (no within-season decay)
+- **Learned HFA:** Via Ridge column (+3.5 to +4.5 pts typical)
+- **Weather:** Available but optional (no ATS improvement)
+
+---
+
 ## Learn More
 
 For technical details on the model architecture, adjustment formulas, parameter values, and implementation:
