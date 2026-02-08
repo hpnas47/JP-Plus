@@ -249,6 +249,28 @@
 - **Weather:** Available but optional
 - **Core 5+ Edge:** 54.5% (close), 55.3% (open)
 
+**Year Intercepts Infrastructure — BUILT (Disabled by Default):**
+- **Problem:** CFB scoring dropped 57.6 → 52.9 PPG from 2018-2025. When training on 3-year rolling window, baseline learned is 3-year average. If 2025 is structurally lower than 2023, model has systematic "Over" bias for 2025 games.
+- **Solution:** Add year indicator columns to Ridge design matrix. Each year gets its own baseline coefficient.
+- **Implementation:**
+  - Added `use_year_intercepts` param (default=False)
+  - Extended sparse matrix to `2*n_teams + 1 + n_years` columns
+  - Year columns: 1 for rows from that year, 0 otherwise
+  - `fit_intercept=False` when year intercepts enabled (year baselines replace global intercept)
+  - `predict_total()` accepts optional `year` param for year-specific baseline
+
+- **Testing results (2023-2025 walk-forward):**
+
+| Metric | Without Year Intercepts | With Year Intercepts | Delta |
+|--------|------------------------|----------------------|-------|
+| Mean Error | -0.59 | **-1.71** | **-1.12 (worse)** |
+| Core 5+ Edge (Close) | 54.5% | 54.4% | -0.1% |
+| Core 5+ Edge (Open) | 55.3% | 55.2% | -0.1% |
+
+- **Root cause of failure:** Ridge regularization shrinks year coefficients toward zero. Learned baselines (e.g., 2025=23.3) are ~3 pts below actual averages (26.2). This creates systematic under-prediction.
+- **Key insight:** Year intercepts would help for multi-year joint training (fit all 3 years at once with different baselines). For walk-forward single-year training (current backtest), each year trains independently — so year intercepts provide no benefit and Ridge shrinkage actively hurts.
+- **Decision:** Infrastructure preserved for future multi-year training mode (e.g., 2026 production with 2023-2025 joint training). Default=False maintains current performance.
+
 ---
 
 ## Session: February 7, 2026 (Continued)
