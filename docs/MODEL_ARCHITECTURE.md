@@ -37,12 +37,12 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,273 gam
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone — 54.6% ATS at 5+ edge vs closing, 56.9% vs opening
+- **Core (Weeks 4-15)**: Profitable zone — 54.7% ATS at 5+ edge vs closing, 57.8% vs opening
 - **Postseason (Weeks 16+)**: Bowl games struggle due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 ### Core Season Detail (Weeks 4-15)
 
-The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,485-game sample.
+The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,489-game sample.
 
 #### Against The Spread (ATS)
 
@@ -58,21 +58,21 @@ Opening line performance exceeds closing line by ~2%, indicating the model captu
 
 | Year | Games | ATS % | 3+ Edge | 5+ Edge |
 |------|-------|-------|---------|---------|
-| 2022 | 596 | 53.5% | 182-177 (50.7%) | 112-105 (51.6%) |
-| 2023 | 598 | 53.0% | 206-168 (55.1%) | 128-102 (55.7%) |
-| 2024 | 617 | 50.1% | 193-170 (53.2%) | 123-100 (55.2%) |
-| 2025 | 626 | 52.9% | 183-154 (54.3%) | 110-86 (56.1%) |
+| 2022 | 605 | 53.2% | 188-172 (52.2%) | 117-105 (52.7%) |
+| 2023 | 611 | 52.5% | 203-165 (55.2%) | 124-101 (55.1%) |
+| 2024 | 631 | 50.4% | 193-167 (53.6%) | 124-101 (55.1%) |
+| 2025 | 638 | 52.7% | 180-146 (55.2%) | 108-84 (56.2%) |
 
-2024 was the weakest overall ATS year, but the Core 5+ edge still hit 55.2%. The edge concentrates in high-conviction plays regardless of year.
+2024 was the weakest overall ATS year, but the Core 5+ edge still hit 55.1%. The edge concentrates in high-conviction plays regardless of year.
 
 #### ATS by Season (Core, vs Opening Line)
 
 | Year | Games | ATS % | 3+ Edge | 5+ Edge |
 |------|-------|-------|---------|---------|
-| 2022 | 593 | 53.6% | 190-158 (54.6%) | 116-102 (53.2%) |
-| 2023 | 598 | 55.5% | 209-168 (55.4%) | 139-101 (57.9%) |
-| 2024 | 625 | 52.5% | 210-169 (55.4%) | 153-106 (59.1%) |
-| 2025 | 634 | 54.3% | 202-155 (56.6%) | 117-88 (57.1%) |
+| 2022 | 605 | 52.6% | 192-160 (54.5%) | 118-100 (54.1%) |
+| 2023 | 611 | 54.8% | 202-158 (56.1%) | 132-97 (57.6%) |
+| 2024 | 631 | 52.0% | 200-173 (53.6%) | 144-101 (58.8%) |
+| 2025 | 638 | 53.7% | 197-151 (56.6%) | 115-84 (57.8%) |
 
 #### Closing Line Value (CLV)
 
@@ -104,15 +104,15 @@ When measured against opening lines, CLV is strongly positive (+0.75 at 5+ edge)
 
 | Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | RMSE (Core) | MAE (Cal) | MAE (Post) |
 |------|-------------|------------|-------------|------------|-------------|-----------|------------|
-| 2022 | 802 | 13.37 | 17.07 | 12.75 | 16.29 | 15.97 | 12.84 |
-| 2023 | 816 | 13.14 | 16.64 | 12.43 | 15.77 | 15.07 | 16.18 |
-| 2024 | 818 | 13.13 | 16.40 | 12.67 | 15.76 | 15.45 | 12.19 |
-| 2025 | 837 | 12.46 | 15.90 | 12.22 | 15.56 | 13.37 | 12.70 |
-| **All** | **3,273** | **13.02** | **16.50** | **12.52** | **15.84** | **14.94** | **13.43** |
+| 2022 | 802 | 13.28 | 16.95 | 12.72 | 16.24 | 15.63 | 12.90 |
+| 2023 | 816 | 13.04 | 16.49 | 12.42 | 15.75 | 14.60 | 16.11 |
+| 2024 | 818 | 13.13 | 16.39 | 12.68 | 15.76 | 15.48 | 12.09 |
+| 2025 | 837 | 12.45 | 15.90 | 12.19 | 15.55 | 13.42 | 12.72 |
+| **All** | **3,273** | **12.97** | **16.43** | **12.50** | **15.82** | **14.77** | **13.41** |
 
 **Notes:**
-- Best MAE in 2025 (12.22 Core), improving from 12.75 in 2022
-- Calibration MAE drops significantly in 2025 (13.37 vs 15-16 in prior years) — better priors calibration
+- Best MAE in 2025 (12.19 Core), improving from 12.72 in 2022
+- Calibration MAE drops significantly in 2025 (13.42 vs 14-16 in prior years) — better priors calibration
 - RMSE/MAE ratio ~1.27 across all slices, indicating reasonably consistent error distribution
 
 ### 2025 Top 25 (End of Season Including CFP)
@@ -1007,6 +1007,9 @@ from src.models.efficiency_foundation_model import (
 ## Changelog
 
 ### February 2026
+- **HFA Global Offset Calibration (-0.50 pts)** - Error cohort analysis revealed +0.90 pts systematic home bias across 2,489 core games. Added `global_offset` parameter to `HomeFieldAdvantage` that subtracts a fixed amount from ALL team HFA values (floor=0.5). 6-variant sweep (0.0, 0.25, 0.375, 0.50, 0.75, 1.00): offset=0.50 optimal — 5+ Edge Close +0.6% (54.1%→54.7%), Open +0.5% (57.3%→57.8%), mean error halved from +0.90 to +0.46, MAE flat. First experiment where 3+ and 5+ Edge improve together without divergence. CLI: `--hfa-offset` (default 0.50). Also applied in `run_weekly.py` for production.
+- **Conference Strength Anchor (OOC Weighting + Bayesian Anchors)** - Two-mechanism approach to reduce conference circularity: (1) 1.5x play weight for OOC FBS games in Ridge regression, (2) post-Ridge separate offensive and defensive Bayesian conference anchors using OOC scoring data. Parameters: anchor_scale=0.08, prior_games=30, max_adjustment=±2.0. A conference can now have positive offensive anchor but negative defensive anchor. 4-variant sweep tested (0.08, 0.12, 0.15, 0.20) — 0.08 preserved 5+ Edge best; larger scales improved 3+ Edge but degraded 5+ Edge (binding constraint).
+- **Red Zone Leverage Weighting + Empty Yards Filter** - Play-level weighting in `_prepare_plays()`: inside-10=2.0x, inside-20=1.5x, empty yards zone (opp 40-20)=0.7x for successful plays that don't enter RZ. 5+ Edge +0.2%, MAE +0.02 (within tolerance). No outcome data — purely spatial signal.
 - **X_base Sparse Matrix Caching** - Refactored EFM Ridge regression pipeline to precompute and cache the sparse design matrix (X_base) separately from sample weights. X_base encodes play structure only (team indicators + home field) and is independent of time decay, enabling reuse when only the eval_week changes. Time decay moved from `_prepare_plays()` to `_ridge_adjust_metric()` for dynamic per-week application. New `base_weight` column stores all non-temporal weights (GT × OOC × RZ × empty_yards). Two-tier caching: X_base by play structure hash, results by (season, week, metric, alpha, time_decay, data_hash). Backtest output identical.
 - **Week-Level Delta Cache for run_weekly.py** - Wired up the existing `WeekDataCache` infrastructure to `run_weekly.py` via `--use-delta-cache` flag. When enabled, historical weeks [1, week-2] are loaded from Parquet cache on disk and only the most recent completed week is fetched from the CFBD API. Graceful cold start: first run populates the cache; subsequent runs fetch 1 API week instead of N-1. Schema enforced via explicit Polars dtypes. Zero behavior change when flag is off.
 - **Explosiveness Uplift: EFM Weights 54/36/10 → 45/45/10** - Equal weighting of Success Rate and IsoPPP (Explosiveness) better captures boom-or-bust offensive teams. Previous 54/36 split over-weighted consistency vs big plays. Results: Core ATS (Close) improved 51.3% → 52.4% (+1.1%), Core ATS (Open) improved 52.8% → 54.0% (+1.2%). Core 5+ Edge (Open) 56.9%, CLV positive and monotonically increasing (+0.75 at 5+ edge). Core MAE +0.02 (12.49 → 12.51, within strict tolerance). All six files updated: `efficiency_foundation_model.py`, `backtest.py`, `calibrate_situational.py`, `benchmark_backtest.py`, `compare_ratings.py`, and documentation.
@@ -1062,6 +1065,14 @@ from src.models.efficiency_foundation_model import (
 - **Reduced Red Zone regression strength (prior_strength 20→10)** - Analysis showed the original prior_strength=20 was too aggressive for end-of-season ratings. With 150+ RZ plays per team, elite RZ performance (like Indiana's 87% TD rate) is a genuine skill, not luck. Reducing to 10 better credits teams that sustain elite RZ efficiency over a full season. This fixed an issue where regression was flipping Indiana's RZ advantage over Ohio State.
 
 ### Explored but Not Included
+- **OOC Credibility Weighting (Rejection #12)** - Hypothesis: weight intra-conference plays by opponent's OOC exposure density to improve relative ordering within G5 conferences. Implementation: Z = ooc_games / league_avg, multiplier `1.0 + scale*(Z-1.0)` for intra-conf plays. 5-variant sweep (0.0, 0.25, 0.50, 0.75, 1.0): monotonic 5+ Edge degradation 54.7%→54.1%. Root cause: G5 circularity is variance-driven (<0.5% bias), so no play-level weight geometry change helps. Infrastructure preserved (default 0.0 = disabled).
+- **Penalty Discipline PPA (Rejection #11)** - Hypothesis: penalty yards per play is a persistent coaching signal not captured by SR/IsoPPP. 3 variants tested (0.5/1.0/2.0 pts per stddev of penalty rate). All degraded 5+ Edge by 0.5-0.9%. Failure mode: market-visible signal — penalties are in every box score, so novel to model but not novel to market.
+- **LASR Money Down Weighting (Rejection #10)** - Hypothesis: 3rd/4th down plays are more revealing of team quality. Weight multiplier for conversion situations. 5+ Edge degraded -0.7%. Failure mode: sub-metric redundancy — success rate already captures conversion efficiency.
+- **Roster Churn Penalty (Rejection #9)** - Portal churn percentage as early-season penalty. 3+ Edge improved but 5+ Edge degraded -0.4%. Classic 3+/5+ divergence pattern.
+- **Defensive Weight Split (Rejection #7)** - Hypothesis: defense controls SR more than IsoPPP, so shift defensive weighting toward SR. 3 variants (55/35, 60/30, 65/25): all degraded 5+ Edge monotonically. Surprise finding: defensive IsoPPP IS predictive — preventing big plays is a persistent trait.
+- **MOV Calibration (Rejection #2)** - 4 weights (0.05-0.20) tested. All degraded 5+ Edge. MOV makes model more like market, reducing edge. The model's value is efficiency insights the market doesn't capture.
+- **Finishing Drives (Rejections #1, 4 variants)** - Post-hoc sub-model with 70-80% signal overlap with EFM's IsoPPP. Not opponent-adjusted. Games with highest FD contribution had worst MAE. Shelved; RZ efficiency integrated as EFM Ridge feature instead.
+- **Time Decay / Recency Weighting** - Full 5×5 grid sweep: 5 alphas × 5 decays (1.0 to 0.92). No decay (1.0) was best across ALL alpha values. Walk-forward already ensures temporal validity; early data provides opponent graph calibration.
 - **Defense Full-Weight Garbage Time** - Hypothesis: when a team is winning by 17+ in Q4, their defense should get full weight (1.0) instead of asymmetric weighting (where trailing offense gets 0.1x). This would give defensive dominance full credit in blowouts. Implementation added `defense_full_weight_gt` parameter with separate O/D regression weights. Results: Rankings improved for teams like Indiana (#4→#2), Georgia (#9→#8), Ole Miss (#14→#12), which matched better with consensus rankings. BUT 5+ edge ATS regressed from 57.3% to 56.5% (-0.8%). Decision: **REJECTED**. The "right" rankings hurt predictive accuracy. Current asymmetric GT appears correctly calibrated—giving defense extra credit in garbage time may overcredit "prevent defense" situations that don't reflect true skill. ATS is our optimization target (Rule #4), so we keep standard asymmetric weighting.
 - **Dynamic Ridge Alpha** - Hypothesis: use higher regularization (alpha=75) early season when data is noisy, lower (alpha=35) late season to let elite teams separate more. Results: Dynamic alpha (75→50→35 by week) produced same MAE but hurt 5+ edge ATS from 56.4% to 55.7% (-0.7%). Decision: **REJECTED**. Walk-forward backtesting already self-regularizes via sample size. Lower alpha late-season benefits ALL teams equally, not just elite ones.
 - **Increased Turnover Shrinkage** - Hypothesis: turnovers are ~50-70% luck, so prior_strength=10 may over-credit turnover margin. Tested prior_strength 5/10/20/30. Results: prior_strength=10 is optimal for 5+ edge (56.4%). Higher shrinkage (20-30) slightly improved 3+ edge but hurt high-conviction bets. Decision: **KEEP current** prior_strength=10.
