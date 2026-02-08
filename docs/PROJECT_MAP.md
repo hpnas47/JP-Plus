@@ -12,6 +12,7 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 | `preseason_priors.py` | Preseason rating engine. Blends prior-year SP+, talent composite, returning production, transfer portal impact, and coaching change adjustments. |
 | `special_teams.py` | Special teams model (FG, punt, kickoff). All outputs are PBTA points per game. |
 | `finishing_drives.py` | Red zone / finishing drives model. Bayesian regression on drive-level RZ trip outcomes. |
+| `totals_model.py` | **Totals Model** - Opponent-adjusted scoring for over/under prediction. Ridge regression on points scored/allowed. Separate from EFM (uses game outcomes, not play-level efficiency). |
 
 ---
 
@@ -83,7 +84,8 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 
 | File | Purpose |
 |------|---------|
-| `backtest.py` | **The Validator.** Walk-forward backtest engine (2022-2025). Trains on weeks < N, predicts week N. Reports MAE, ATS, CLV. |
+| `backtest.py` | **The Validator.** Walk-forward backtest engine for spreads (2022-2025). Trains on weeks < N, predicts week N. Reports MAE, ATS, CLV. |
+| `backtest_totals.py` | Walk-forward backtest for totals/over-unders. Uses TotalsModel with opponent-adjusted scoring. |
 | `run_weekly.py` | Weekly prediction pipeline. Fetches current data, runs EFM, generates spreads. |
 | `weekly_odds_capture.py` | Captures live odds snapshots from OddsAPI to SQLite. |
 | `capture_odds.py` | Odds capture scheduling / orchestration. |
