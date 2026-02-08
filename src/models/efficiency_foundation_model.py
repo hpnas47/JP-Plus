@@ -361,6 +361,7 @@ class EfficiencyFoundationModel:
         def_efficiency_weight: float = None,  # Defensive SR weight (None = use efficiency_weight)
         def_explosiveness_weight: float = None,  # Defensive IsoPPP weight (None = use explosiveness_weight)
         def_turnover_weight: float = None,  # Defensive TO weight (None = use turnover_weight)
+        ooc_credibility_weight: float = 0.0,  # OOC Credibility Anchor scale (0.0 = disabled) - REJECTED: monotonic 5+ Edge degradation
     ):
         """Initialize Efficiency Foundation Model.
 
@@ -423,6 +424,7 @@ class EfficiencyFoundationModel:
         self.empty_yards_weight = empty_yards_weight
         self.money_down_weight = money_down_weight
         self.empty_success_weight = empty_success_weight
+        self.ooc_credibility_weight = ooc_credibility_weight
         self.def_efficiency_weight = def_efficiency_weight if def_efficiency_weight is not None else self.efficiency_weight
         self.def_explosiveness_weight = def_explosiveness_weight if def_explosiveness_weight is not None else self.explosiveness_weight
         self.def_turnover_weight = def_turnover_weight if def_turnover_weight is not None else self.turnover_weight
@@ -704,6 +706,62 @@ class EfficiencyFoundationModel:
             if ooc_count > 0:
                 df["weight"] = np.where(is_ooc_fbs, df["weight"] * 1.5, df["weight"])
                 logger.debug(f"  Applied 1.5x weight to {ooc_count:,} non-conference FBS plays")
+
+            # OOC Credibility Anchor: weight intra-conference plays by opponent's OOC exposure
+            # Teams with more OOC games are better-calibrated by external data, so plays AGAINST
+            # them carry more information for Ridge regression. This improves relative ordering
+            # within conferences (spread) rather than conference-level shifts.
+            # Z_opponent = ooc_games / league_avg_ooc_games, clamped to [0.5, 1.5]
+            # W_play *= 1.0 + ooc_credibility_weight * (Z_opponent - 1.0)
+            if self.ooc_credibility_weight > 0:
+                # Count OOC FBS games per team (unique game_ids where team played OOC)
+                if "game_id" in df.columns:
+                    # Build per-team OOC game count from plays
+                    ooc_plays = df[is_ooc_fbs]
+                    off_ooc_games = ooc_plays.groupby("offense")["game_id"].nunique()
+                    def_ooc_games = ooc_plays.groupby("defense")["game_id"].nunique()
+                    # Combine: total unique OOC games per team
+                    all_teams = set(off_ooc_games.index) | set(def_ooc_games.index)
+                    team_ooc_counts = {}
+                    for team in all_teams:
+                        # A team's OOC games appear in both offense and defense rows
+                        # Use max of the two since same game appears in both
+                        off_n = off_ooc_games.get(team, 0)
+                        def_n = def_ooc_games.get(team, 0)
+                        team_ooc_counts[team] = max(off_n, def_n)
+
+                    if team_ooc_counts:
+                        avg_ooc = np.mean(list(team_ooc_counts.values()))
+                        if avg_ooc > 0:
+                            # Compute Z for each team: ratio to league average, clamped
+                            team_z = {
+                                team: np.clip(count / avg_ooc, 0.5, 1.5)
+                                for team, count in team_ooc_counts.items()
+                            }
+
+                            # For intra-conference plays, multiply weight by credibility of OPPONENT
+                            # (defense column = opponent when offense has the ball)
+                            is_intra_conf = off_conf.notna() & def_conf.notna() & (off_conf == def_conf)
+                            intra_count = is_intra_conf.sum()
+
+                            if intra_count > 0:
+                                # Map opponent (defense) Z values for each play
+                                opp_z = df["defense"].map(team_z).fillna(1.0)
+                                # Credibility multiplier: 1.0 + scale * (Z - 1.0)
+                                cred_mult = 1.0 + self.ooc_credibility_weight * (opp_z - 1.0)
+                                df["weight"] = np.where(
+                                    is_intra_conf,
+                                    df["weight"] * cred_mult,
+                                    df["weight"]
+                                )
+                                # Log stats
+                                z_values = [team_z.get(t, 1.0) for t in team_ooc_counts]
+                                logger.debug(
+                                    f"  OOC Credibility Anchor: {intra_count:,} intra-conf plays weighted, "
+                                    f"avg Z={np.mean(z_values):.3f}, "
+                                    f"range [{min(z_values):.2f}, {max(z_values):.2f}], "
+                                    f"avg OOC games={avg_ooc:.1f}"
+                                )
 
         # Apply Red Zone Leverage weighting (up-weight plays near the goal line)
         # Hypothesis: Finishing efficiency in the red zone is more revealing than field-position efficiency.

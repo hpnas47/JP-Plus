@@ -584,6 +584,7 @@ def walk_forward_predict(
     historical_rankings: Optional[HistoricalRankings] = None,
     team_conferences: Optional[dict[str, str]] = None,
     hfa_global_offset: float = 0.0,
+    ooc_credibility_weight: float = 0.0,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -689,6 +690,7 @@ def walk_forward_predict(
             turnover_weight=turnover_weight,
             garbage_time_weight=garbage_time_weight,
             asymmetric_garbage=asymmetric_garbage,
+            ooc_credibility_weight=ooc_credibility_weight,
         )
 
         efm.calculate_ratings(
@@ -2058,6 +2060,7 @@ def _process_single_season(
     fcs_penalty_standard: float,
     use_opening_line: bool,
     hfa_global_offset: float = 0.0,
+    ooc_credibility_weight: float = 0.0,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2108,6 +2111,7 @@ def _process_single_season(
         historical_rankings=historical_rankings,
         team_conferences=team_conferences,
         hfa_global_offset=hfa_global_offset,
+        ooc_credibility_weight=ooc_credibility_weight,
     )
 
     # Calculate ATS
@@ -2145,6 +2149,7 @@ def run_backtest(
     use_season_cache: bool = True,
     force_refresh: bool = False,
     hfa_global_offset: float = 0.0,
+    ooc_credibility_weight: float = 0.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2239,6 +2244,7 @@ def run_backtest(
         fcs_penalty_standard=fcs_penalty_standard,
         use_opening_line=use_opening_line,
         hfa_global_offset=hfa_global_offset,
+        ooc_credibility_weight=ooc_credibility_weight,
     )
 
     if len(years) > 1:
@@ -2615,6 +2621,12 @@ def main():
         help="Points subtracted from ALL HFA values globally (default: 0.50, calibrated Feb 2026)",
     )
     parser.add_argument(
+        "--ooc-cred-weight",
+        type=float,
+        default=0.0,
+        help="OOC Credibility Anchor scale for intra-conf play weighting (default: 0.0 = disabled, REJECTED: degraded 5+ Edge)",
+    )
+    parser.add_argument(
         "--prior-weight",
         type=int,
         default=8,
@@ -2776,6 +2788,7 @@ def main():
         use_opening_line=args.opening_line,
         season_data=season_data,  # Use pre-fetched data
         hfa_global_offset=args.hfa_offset,
+        ooc_credibility_weight=args.ooc_cred_weight,
     )
 
     # P3.4: Print results with ATS data for sanity report

@@ -6,7 +6,7 @@
 
 ## Session: February 8, 2026
 
-### Theme: Error Cohort Diagnostic + HFA Calibration
+### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation
 
 ---
 
@@ -43,6 +43,41 @@
 - **No 3+/5+ divergence** — both improve together (first time in 12 experiments).
 - **Effect**: LSU 4.0→3.5, Ohio State 3.75→3.25, SEC default 2.75→2.25, UMass 1.5→1.0.
 - **Also applied to `run_weekly.py`** for production predictions.
+
+#### G5 Circular Inflation Investigation — RESEARCH (No Code Change)
+**Impact: Diagnosed root cause as variance-driven, not bias-driven. Recommended betting filter over model adjustment.**
+
+- **Dual analysis:** Model Strategist + Quant Auditor ran in parallel.
+- **Key findings:**
+  1. **Variance, not bias**: All problem conferences have <0.5% systematic bias. 100% of excess error is pure variance.
+  2. **Big 12 Paradox**: Worst compression ratio (0.47) but BEST 5+ Edge ATS (64.2%). Market is equally confused — our errors are uncorrelated with market errors.
+  3. **AAC/Sun Belt/MW are ATS dead zones**: 48-52% at 5+ Edge, combined 97-97 (50.0%). No betting edge.
+  4. **Counterfactual ceiling**: Fixing all G5 to SEC-level MAE = only 0.65 overall improvement, all variance-driven.
+  5. **Worst-predicted teams are conference additions**: Arizona (17.89), Colorado (16.66), ASU (14.37), UCF (14.36).
+  6. **Year-over-year instability**: AAC 2024 = 16.47 MAE (spike), MW cycles between 10.14 and 15.13.
+- **Strategist recommendation**: OOC Credibility Weighting (weight intra-conf plays by opponent's OOC exposure density).
+- **Quant recommendation**: Betting confidence filter on AAC/SB/MW intra-conference games.
+- Full reports: `.claude/agent-memory/quant-auditor/g5-circularity-deep-dive.md`, `.claude/agent-memory/model-strategist/`
+
+#### OOC Credibility Weighting — REJECTED (Rejection #12)
+**Impact: Monotonic 5+ Edge degradation across all tested weights**
+
+- **Hypothesis:** Weight intra-conference plays by opponent's OOC exposure density (Z = ooc_games / league_avg). Teams with more OOC games are better-calibrated, so plays against them carry more information for Ridge regression.
+- **Implementation:** In `_prepare_plays()`, after existing 1.5x OOC weighting, added credibility multiplier `W_play *= 1.0 + scale * (Z_opponent - 1.0)` for intra-conference plays only.
+- **5-variant sweep (weights 0.0, 0.25, 0.50, 0.75, 1.0):**
+
+| Weight | Core MAE | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
+|--------|----------|-----------------|-----------------|----------------|
+| **0.00 (baseline)** | **12.50** | **54.0%** (764-650) | **54.7%** (473-391) | **54.1%** (508-431) |
+| 0.25 | 12.50 | 54.2% (766-648) | 54.5% (476-398) | 53.8% (511-439) |
+| 0.50 | 12.51 | 54.1% (770-653) | 54.4% (478-401) | 53.7% (512-441) |
+| 0.75 | 12.52 | 54.1% (764-649) | 54.2% (479-405) | 53.5% (512-445) |
+| 1.00 | 12.54 | 54.4% (771-647) | 54.1% (488-414) | 53.5% (521-453) |
+
+- **Failure mode**: Sub-metric redundancy + variance-driven problem. Re-weighting existing information doesn't create new signal. Confirms quant auditor's diagnosis that no play-level weight geometry change can fix variance.
+- **Big 12 guardrail never triggered** — feature failed the global 5+ Edge test first.
+- **Infrastructure preserved**: `ooc_credibility_weight` param in EFM + CLI `--ooc-cred-weight` (default 0.0 = disabled).
+- **Decision**: Conference circularity to be addressed via betting confidence filter (operational change, not model change).
 
 ---
 
