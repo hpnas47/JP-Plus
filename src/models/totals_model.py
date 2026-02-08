@@ -216,7 +216,7 @@ class TotalsModel:
             n_entries = 7 * n_games
             row_indices = np.empty(n_entries, dtype=np.int32)
             col_indices = np.empty(n_entries, dtype=np.int32)
-            data = np.ones(n_entries, dtype=np.float64)
+            data = np.ones(n_entries, dtype=np.float32)  # float32 for perf
 
             # Row 2i (home): offense + defense + HFA + year
             row_indices[0::7] = 2 * game_range
@@ -240,7 +240,7 @@ class TotalsModel:
             n_entries = 5 * n_games
             row_indices = np.empty(n_entries, dtype=np.int32)
             col_indices = np.empty(n_entries, dtype=np.int32)
-            data = np.ones(n_entries, dtype=np.float64)
+            data = np.ones(n_entries, dtype=np.float32)  # float32 for perf
 
             # Row 2i (home): offense + defense + HFA
             row_indices[0::5] = 2 * game_range
@@ -259,12 +259,12 @@ class TotalsModel:
         X = coo_matrix((data, (row_indices, col_indices)), shape=(n_rows, n_cols)).tocsr()
 
         # Build y vector: [home_pts_0, away_pts_0, home_pts_1, away_pts_1, ...]
-        y = np.empty(n_rows, dtype=np.float64)
+        y = np.empty(n_rows, dtype=np.float32)  # float32 for perf
         y[0::2] = home_pts
         y[1::2] = away_pts
 
         # Build weeks vector for recency weighting
-        weeks = np.empty(n_rows, dtype=np.float64)
+        weeks = np.empty(n_rows, dtype=np.float32)  # float32 for perf
         weeks[0::2] = game_weeks
         weeks[1::2] = game_weeks
 
@@ -272,7 +272,7 @@ class TotalsModel:
         # pred_week = max_week + 1 (we predict the week after training data)
         pred_week = (max_week or int(weeks.max())) + 1
         weeks_ago = pred_week - weeks
-        sample_weights = self.decay_factor ** weeks_ago
+        sample_weights = (self.decay_factor ** weeks_ago).astype(np.float32)  # float32 for perf
 
         # Fit Ridge regression with sample weights
         # fit_intercept: True unless using year intercepts (which serve as baselines)
