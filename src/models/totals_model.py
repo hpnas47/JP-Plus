@@ -29,6 +29,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import polars as pl
+from scipy.sparse import coo_matrix
 from sklearn.linear_model import Ridge
 
 from src.adjustments.weather import WeatherAdjuster, WeatherConditions, WeatherAdjustment
@@ -136,53 +137,68 @@ class TotalsModel:
 
         logger.info(f"Training totals model: {len(games)} games, {n_teams} teams, max_week={max_week}")
 
-        # Build design matrix
+        # Build design matrix using sparse COO construction (vectorized)
         # Each game contributes two rows:
         # Row 1: home_team scores home_points against away_team defense
         # Row 2: away_team scores away_points against home_team defense
 
-        X = []
-        y = []
-        weeks = []  # Track week for recency weighting
+        # Map team names to indices
+        home_idx = games['home_team'].map(self._team_to_idx)
+        away_idx = games['away_team'].map(self._team_to_idx)
+
+        # Filter out games where either team is not in index (shouldn't happen after FBS filter)
+        valid_mask = home_idx.notna() & away_idx.notna()
+        games = games[valid_mask].reset_index(drop=True)
+        home_idx = home_idx[valid_mask].astype(int).values
+        away_idx = away_idx[valid_mask].astype(int).values
+
+        n_games = len(games)
+        home_pts = games['home_points'].values
+        away_pts = games['away_points'].values
+        game_weeks = games['week'].values
 
         # Track games per team
         games_per_team = {t: 0 for t in teams}
+        for h, a in zip(games['home_team'], games['away_team']):
+            games_per_team[h] += 1
+            games_per_team[a] += 1
 
-        for _, g in games.iterrows():
-            home = g['home_team']
-            away = g['away_team']
-            home_pts = g['home_points']
-            away_pts = g['away_points']
-            game_week = g['week']
+        # Build sparse matrix: each game = 2 rows, each row has 2 non-zero entries
+        # Row 2i:   home_off (col=home_idx), away_def (col=n_teams+away_idx)
+        # Row 2i+1: away_off (col=away_idx), home_def (col=n_teams+home_idx)
+        n_rows = 2 * n_games
+        n_cols = 2 * n_teams
 
-            if home not in self._team_to_idx or away not in self._team_to_idx:
-                continue
+        # COO matrix arrays: 4 entries per game (2 rows × 2 cols each)
+        row_indices = np.empty(4 * n_games, dtype=np.int32)
+        col_indices = np.empty(4 * n_games, dtype=np.int32)
+        data = np.ones(4 * n_games, dtype=np.float64)
 
-            home_idx = self._team_to_idx[home]
-            away_idx = self._team_to_idx[away]
+        game_range = np.arange(n_games)
 
-            games_per_team[home] += 1
-            games_per_team[away] += 1
+        # Row 2i: home offense + away defense
+        row_indices[0::4] = 2 * game_range          # home offense entry
+        col_indices[0::4] = home_idx                # offense column
+        row_indices[1::4] = 2 * game_range          # away defense entry (same row)
+        col_indices[1::4] = n_teams + away_idx      # defense column
 
-            # Home team offense vs Away team defense
-            row1 = np.zeros(n_teams * 2)
-            row1[home_idx] = 1  # Home offense
-            row1[n_teams + away_idx] = 1  # Away defense (+ = allows more = worse)
-            X.append(row1)
-            y.append(home_pts)
-            weeks.append(game_week)
+        # Row 2i+1: away offense + home defense
+        row_indices[2::4] = 2 * game_range + 1      # away offense entry
+        col_indices[2::4] = away_idx                # offense column
+        row_indices[3::4] = 2 * game_range + 1      # home defense entry (same row)
+        col_indices[3::4] = n_teams + home_idx      # defense column
 
-            # Away team offense vs Home team defense
-            row2 = np.zeros(n_teams * 2)
-            row2[away_idx] = 1  # Away offense
-            row2[n_teams + home_idx] = 1  # Home defense
-            X.append(row2)
-            y.append(away_pts)
-            weeks.append(game_week)
+        X = coo_matrix((data, (row_indices, col_indices)), shape=(n_rows, n_cols)).tocsr()
 
-        X = np.array(X)
-        y = np.array(y)
-        weeks = np.array(weeks)
+        # Build y vector: [home_pts_0, away_pts_0, home_pts_1, away_pts_1, ...]
+        y = np.empty(n_rows, dtype=np.float64)
+        y[0::2] = home_pts
+        y[1::2] = away_pts
+
+        # Build weeks vector for recency weighting
+        weeks = np.empty(n_rows, dtype=np.float64)
+        weeks[0::2] = game_weeks
+        weeks[1::2] = game_weeks
 
         # Compute sample weights for recency (decay_factor^weeks_ago)
         # pred_week = max_week + 1 (we predict the week after training data)
