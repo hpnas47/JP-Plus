@@ -81,14 +81,24 @@ def backtest_totals_season(
         games['away_points'].notna()
     ]
 
-    # Merge betting data for over/under
-    if 'over_under' in betting.columns or 'total' in betting.columns:
-        ou_col = 'over_under' if 'over_under' in betting.columns else 'total'
-        betting_slim = betting[['game_id', ou_col]].drop_duplicates()
-        betting_slim = betting_slim.rename(columns={ou_col: 'vegas_total', 'game_id': 'id'})
+    # Merge betting data for over/under (both opening and closing)
+    if 'over_under' in betting.columns:
+        cols_to_get = ['game_id', 'over_under']
+        if 'over_under_open' in betting.columns:
+            cols_to_get.append('over_under_open')
+        betting_slim = betting[cols_to_get].drop_duplicates()
+        betting_slim = betting_slim.rename(columns={
+            'over_under': 'vegas_total_close',
+            'over_under_open': 'vegas_total_open',
+            'game_id': 'id'
+        })
         games = games.merge(betting_slim, on='id', how='left')
+        # Fallback: if no opening line, use closing
+        if 'vegas_total_open' not in games.columns:
+            games['vegas_total_open'] = games['vegas_total_close']
     else:
-        games['vegas_total'] = np.nan
+        games['vegas_total_close'] = np.nan
+        games['vegas_total_open'] = np.nan
 
     # Fetch weather data if needed
     weather_by_game = {}
@@ -140,7 +150,8 @@ def backtest_totals_season(
 
             if pred:
                 actual_total = g['home_points'] + g['away_points']
-                vegas_total = g.get('vegas_total')
+                vegas_total_close = g.get('vegas_total_close')
+                vegas_total_open = g.get('vegas_total_open')
 
                 predictions.append({
                     'year': year,
@@ -155,7 +166,8 @@ def backtest_totals_season(
                     'home_expected': pred.home_expected,
                     'away_expected': pred.away_expected,
                     'actual_total': actual_total,
-                    'vegas_total': vegas_total,
+                    'vegas_total_close': vegas_total_close,
+                    'vegas_total_open': vegas_total_open,
                     'jp_error': pred.adjusted_total - actual_total,
                     'jp_abs_error': abs(pred.adjusted_total - actual_total),
                 })
@@ -164,25 +176,30 @@ def backtest_totals_season(
     return predictions
 
 
-def calculate_ou_ats(preds_df: pd.DataFrame, edge_min: float = 0) -> tuple:
+def calculate_ou_ats(
+    preds_df: pd.DataFrame,
+    edge_min: float = 0,
+    vegas_col: str = 'vegas_total_close'
+) -> tuple:
     """Calculate over/under ATS performance.
 
     Args:
-        preds_df: DataFrame with predicted_total, vegas_total, actual_total
+        preds_df: DataFrame with predicted_total, vegas_total_close/open, actual_total
         edge_min: Minimum edge (abs difference from Vegas) to include
+        vegas_col: Column name for Vegas total ('vegas_total_close' or 'vegas_total_open')
 
     Returns:
         Tuple of (wins, losses, pushes)
     """
-    valid = preds_df[preds_df['vegas_total'].notna()].copy()
-    valid['edge'] = abs(valid['predicted_total'] - valid['vegas_total'])
+    valid = preds_df[preds_df[vegas_col].notna()].copy()
+    valid['edge'] = abs(valid['predicted_total'] - valid[vegas_col])
     valid = valid[valid['edge'] >= edge_min]
 
     wins, losses, pushes = 0, 0, 0
 
     for _, r in valid.iterrows():
         jp_total = r['predicted_total']
-        vegas_total = r['vegas_total']
+        vegas_total = r[vegas_col]
         actual = r['actual_total']
 
         # JP+ pick: over if jp > vegas, under if jp < vegas
@@ -261,20 +278,22 @@ def main():
     print(f"RMSE: {np.sqrt((preds_df['jp_error']**2).mean()):.2f}")
 
     # Vegas comparison
-    valid_ou = preds_df[preds_df['vegas_total'].notna()].copy()
-    if len(valid_ou) > 0:
-        valid_ou['vegas_error'] = valid_ou['vegas_total'] - valid_ou['actual_total']
-        valid_ou['vegas_abs_error'] = abs(valid_ou['vegas_error'])
-        print(f"\nGames with Vegas O/U: {len(valid_ou)}")
-        print(f"Vegas MAE: {valid_ou['vegas_abs_error'].mean():.2f}")
-        print(f"JP+ MAE: {valid_ou['jp_abs_error'].mean():.2f}")
+    valid_close = preds_df[preds_df['vegas_total_close'].notna()].copy()
+    valid_open = preds_df[preds_df['vegas_total_open'].notna()].copy()
+    if len(valid_close) > 0:
+        valid_close['vegas_error'] = valid_close['vegas_total_close'] - valid_close['actual_total']
+        valid_close['vegas_abs_error'] = abs(valid_close['vegas_error'])
+        print(f"\nGames with Vegas O/U (Close): {len(valid_close)}")
+        print(f"Games with Vegas O/U (Open): {len(valid_open)}")
+        print(f"Vegas MAE (Close): {valid_close['vegas_abs_error'].mean():.2f}")
+        print(f"JP+ MAE: {valid_close['jp_abs_error'].mean():.2f}")
 
-    # Phase breakdown
-    print("\n" + "-" * 80)
-    print("PERFORMANCE BY PHASE")
-    print("-" * 80)
+    # Phase breakdown - Closing Line
+    print("\n" + "-" * 100)
+    print("PERFORMANCE BY PHASE (vs CLOSING LINE)")
+    print("-" * 100)
     print(f"{'Phase':<25} {'Weeks':<8} {'Games':<8} {'MAE':<8} {'ATS %':<10} {'3+ Edge':<15} {'5+ Edge':<15}")
-    print("-" * 80)
+    print("-" * 100)
 
     phases = [
         ('Phase 1 (Calibration)', '1-3'),
@@ -288,29 +307,58 @@ def main():
             continue
 
         mae = sub['jp_abs_error'].mean()
-        w0, l0, _ = calculate_ou_ats(sub, edge_min=0)
-        w3, l3, _ = calculate_ou_ats(sub, edge_min=3)
-        w5, l5, _ = calculate_ou_ats(sub, edge_min=5)
+        w0, l0, _ = calculate_ou_ats(sub, edge_min=0, vegas_col='vegas_total_close')
+        w3, l3, _ = calculate_ou_ats(sub, edge_min=3, vegas_col='vegas_total_close')
+        w5, l5, _ = calculate_ou_ats(sub, edge_min=5, vegas_col='vegas_total_close')
 
         ats0 = w0 / (w0 + l0) * 100 if (w0 + l0) > 0 else 0
 
         print(f"{phase:<25} {weeks:<8} {len(sub):<8} {mae:<8.2f} {ats0:<10.1f} {format_ats(w3, l3):<15} {format_ats(w5, l5):<15}")
 
-    # Full season totals
-    print("-" * 80)
+    # Full season totals - Closing
+    print("-" * 100)
     mae = preds_df['jp_abs_error'].mean()
-    w0, l0, _ = calculate_ou_ats(preds_df, edge_min=0)
-    w3, l3, _ = calculate_ou_ats(preds_df, edge_min=3)
-    w5, l5, _ = calculate_ou_ats(preds_df, edge_min=5)
+    w0, l0, _ = calculate_ou_ats(preds_df, edge_min=0, vegas_col='vegas_total_close')
+    w3, l3, _ = calculate_ou_ats(preds_df, edge_min=3, vegas_col='vegas_total_close')
+    w5, l5, _ = calculate_ou_ats(preds_df, edge_min=5, vegas_col='vegas_total_close')
     ats0 = w0 / (w0 + l0) * 100 if (w0 + l0) > 0 else 0
     print(f"{'Full Season':<25} {'All':<8} {len(preds_df):<8} {mae:<8.2f} {ats0:<10.1f} {format_ats(w3, l3):<15} {format_ats(w5, l5):<15}")
 
-    # Year breakdown (Core phase only)
-    print("\n" + "-" * 80)
+    # Phase breakdown - Opening Line
+    print("\n" + "-" * 100)
+    print("PERFORMANCE BY PHASE (vs OPENING LINE)")
+    print("-" * 100)
+    print(f"{'Phase':<25} {'Weeks':<8} {'Games':<8} {'MAE':<8} {'ATS %':<10} {'3+ Edge':<15} {'5+ Edge':<15}")
+    print("-" * 100)
+
+    for phase, weeks in phases:
+        sub = preds_df[preds_df['phase'] == phase]
+        if len(sub) == 0:
+            continue
+
+        mae = sub['jp_abs_error'].mean()
+        w0, l0, _ = calculate_ou_ats(sub, edge_min=0, vegas_col='vegas_total_open')
+        w3, l3, _ = calculate_ou_ats(sub, edge_min=3, vegas_col='vegas_total_open')
+        w5, l5, _ = calculate_ou_ats(sub, edge_min=5, vegas_col='vegas_total_open')
+
+        ats0 = w0 / (w0 + l0) * 100 if (w0 + l0) > 0 else 0
+
+        print(f"{phase:<25} {weeks:<8} {len(sub):<8} {mae:<8.2f} {ats0:<10.1f} {format_ats(w3, l3):<15} {format_ats(w5, l5):<15}")
+
+    # Full season totals - Opening
+    print("-" * 100)
+    w0, l0, _ = calculate_ou_ats(preds_df, edge_min=0, vegas_col='vegas_total_open')
+    w3, l3, _ = calculate_ou_ats(preds_df, edge_min=3, vegas_col='vegas_total_open')
+    w5, l5, _ = calculate_ou_ats(preds_df, edge_min=5, vegas_col='vegas_total_open')
+    ats0 = w0 / (w0 + l0) * 100 if (w0 + l0) > 0 else 0
+    print(f"{'Full Season':<25} {'All':<8} {len(preds_df):<8} {mae:<8.2f} {ats0:<10.1f} {format_ats(w3, l3):<15} {format_ats(w5, l5):<15}")
+
+    # Year breakdown (Core phase only) - both lines
+    print("\n" + "-" * 100)
     print("CORE PHASE BY YEAR (Weeks 4-15)")
-    print("-" * 80)
-    print(f"{'Year':<8} {'Games':<8} {'MAE':<8} {'ATS %':<10} {'3+ Edge':<15} {'5+ Edge':<15}")
-    print("-" * 80)
+    print("-" * 100)
+    print(f"{'Year':<8} {'Games':<8} {'MAE':<8} {'5+ Close':<15} {'5+ Open':<15}")
+    print("-" * 100)
 
     core = preds_df[preds_df['phase'] == 'Phase 2 (Core)']
     for year in args.years:
@@ -319,12 +367,10 @@ def main():
             continue
 
         mae = yr['jp_abs_error'].mean()
-        w0, l0, _ = calculate_ou_ats(yr, edge_min=0)
-        w3, l3, _ = calculate_ou_ats(yr, edge_min=3)
-        w5, l5, _ = calculate_ou_ats(yr, edge_min=5)
-        ats0 = w0 / (w0 + l0) * 100 if (w0 + l0) > 0 else 0
+        w5c, l5c, _ = calculate_ou_ats(yr, edge_min=5, vegas_col='vegas_total_close')
+        w5o, l5o, _ = calculate_ou_ats(yr, edge_min=5, vegas_col='vegas_total_open')
 
-        print(f"{year:<8} {len(yr):<8} {mae:<8.2f} {ats0:<10.1f} {format_ats(w3, l3):<15} {format_ats(w5, l5):<15}")
+        print(f"{year:<8} {len(yr):<8} {mae:<8.2f} {format_ats(w5c, l5c):<15} {format_ats(w5o, l5o):<15}")
 
 
 if __name__ == '__main__':

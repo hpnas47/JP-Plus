@@ -297,6 +297,7 @@ def fetch_season_data(
             if selected_line and selected_line.spread is not None:
                 # CFBD spread is already from home team perspective
                 # (negative = home favored, positive = away favored)
+                ou_open = getattr(selected_line, 'over_under_open', None)
                 betting.append({
                     "game_id": game_lines.id,
                     "home_team": game_lines.home_team,
@@ -304,6 +305,7 @@ def fetch_season_data(
                     "spread_close": selected_line.spread,
                     "spread_open": selected_line.spread_open if selected_line.spread_open is not None else selected_line.spread,
                     "over_under": selected_line.over_under,
+                    "over_under_open": ou_open if ou_open is not None else selected_line.over_under,
                     "provider": selected_line.provider,
                 })
 
