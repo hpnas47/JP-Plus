@@ -276,8 +276,9 @@ class TotalsModel:
 
         # Fit Ridge regression with sample weights
         # fit_intercept: True unless using year intercepts (which serve as baselines)
+        # solver='sparse_cg': Conjugate gradient for sparse CSR, deterministic, no densification
         use_intercept = not (n_years > 0)
-        ridge = Ridge(alpha=self.ridge_alpha, fit_intercept=use_intercept)
+        ridge = Ridge(alpha=self.ridge_alpha, fit_intercept=use_intercept, solver='sparse_cg')
         ridge.fit(X, y, sample_weight=sample_weights)
 
         # Extract coefficients
