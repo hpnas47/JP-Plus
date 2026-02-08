@@ -223,8 +223,6 @@ def fetch_season_data(
                     "away_team": game.away_team,
                     "home_points": game.home_points,
                     "away_points": game.away_points,
-                    "home_line_scores": game.home_line_scores,
-                    "away_line_scores": game.away_line_scores,
                     "neutral_site": game.neutral_site or False,
                 })
                 week_game_count += 1
@@ -253,8 +251,6 @@ def fetch_season_data(
                 "away_team": game.away_team,
                 "home_points": game.home_points,
                 "away_points": game.away_points,
-                "home_line_scores": game.home_line_scores,
-                "away_line_scores": game.away_line_scores,
                 "neutral_site": game.neutral_site or True,  # Bowl games are usually neutral
             })
             postseason_count += 1
