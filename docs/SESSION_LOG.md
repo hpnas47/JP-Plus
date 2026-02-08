@@ -172,6 +172,29 @@
 - Scoring environment shift is cross-year (57→53 PPG), not within-season
 - Infrastructure preserved: `decay_factor` param (default 1.0 = disabled)
 
+**OT Protection (Regulation Scores) — REJECTED:**
+- **Hypothesis:** Overtime points are noise (coin flip after regulation tie). Training on final scores contaminates team ratings.
+- **Implementation:** Extract regulation scores from CFBD `line_scores` (sum first 4 quarters). Example: Vanderbilt-VT 34-27 final → 27-27 regulation.
+- **Coverage:** 99.8% of games have line_scores available
+- **Backtest results (2023-2025):**
+
+| Metric | Before OT Fix | After OT Fix | Delta |
+|--------|---------------|--------------|-------|
+| Core 5+ Edge (Close) | 54.5% | 53.9% | **-0.6%** |
+| Core 5+ Edge (Open) | 55.3% | 54.5% | **-0.8%** |
+
+- **2025 worst affected:** 52.1% → 49.4% (-2.7%)
+- **Reverted** — Vegas already prices OT potential; final scores contain market-relevant signal
+- **Key lesson:** "Cleaner" data ≠ better betting edge. Market prices what it prices.
+
+**Totals Model Final Configuration (Production):**
+- **Years:** 2023-2025 (dropped 2022 transition year)
+- **Ridge Alpha:** 10.0
+- **Decay Factor:** 1.0 (no within-season decay)
+- **OT Protection:** Disabled (final scores used)
+- **Weather:** Available but optional
+- **Core 5+ Edge:** 54.5% (close), 55.3% (open)
+
 ---
 
 ## Session: February 7, 2026 (Continued)
