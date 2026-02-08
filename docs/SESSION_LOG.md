@@ -203,6 +203,20 @@
 - **Key insight:** Current Ridge on raw points already captures pace implicitly through opponent adjustment. A team scoring 35 in 85 plays generates different coefficients than one scoring 35 in 60 plays.
 - **Not backtested** — killed on theoretical grounds.
 
+**Asymmetric Ridge Regularization — REJECTED (Audit Disproved Hypothesis):**
+- **Hypothesis:** Symmetric Ridge shrinkage may be suppressing defense signal. Test block-regularized Ridge with different penalties for offense vs defense coefficients.
+- **Hard reject rule:** 5+ Edge must improve by ≥0.3%
+- **Coefficient audit results (2023-2025, 403 team-seasons):**
+
+| Metric | Offense | Defense | Ratio |
+|--------|---------|---------|-------|
+| Std Dev | 3.49 | 3.46 | 1.02 |
+| Range | [-8.6, +10.3] | [-9.7, +10.0] | ~equal |
+| Off-Def Correlation | -0.36 to -0.50 | (expected) | — |
+
+- **Verdict:** Hypothesis disproved by data. Variance ratio=1.02 means coefficients already symmetric. No evidence of over-shrinkage on defense.
+- **Not backtested** — audit showed nothing to fix.
+
 **Totals Model Final Configuration (Production):**
 - **Years:** 2023-2025 (dropped 2022 transition year)
 - **Ridge Alpha:** 10.0
