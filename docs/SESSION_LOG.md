@@ -297,6 +297,34 @@
 - **Betting impact**: ~2-3 games/year at 5+ Edge, estimated 0.1-0.2% overall impact
 - **Decision**: Accept as known limitation. Market already prices this; fixing would be micro-targeting below noise floor.
 
+#### TotalsModel Performance Optimization — INFRASTRUCTURE
+**Impact: 13x speedup on ATS calculation, 50% memory reduction, infrastructure hardening**
+
+Systematic performance audit of `TotalsModel` and `backtest_totals.py`:
+
+| Optimization | Change | Result |
+|--------------|--------|--------|
+| **iterrows → itertuples** | `calculate_ou_ats()` loop | **13.2x speedup** (0.86s → 0.07s for 54 calls) |
+| **iterrows → itertuples** | Prediction loop | 1.01x (Ridge.fit dominates) |
+| **Cache team universe** | `set_team_universe()` once per season | ~1.0x (dict build is O(134), trivial) |
+| **float64 → float32** | COO data, y vector, sample_weights | **50% memory reduction**, 1.02x timing |
+| **Vectorize games_per_team** | `value_counts().add()` vs Python loop | Cleaner code, marginal speedup |
+| **Explicit solver=sparse_cg** | Ridge solver hardening | No perf change (stability win) |
+
+**Solver Evaluation for Sparse CSR:**
+- `sparse_cg`: **SELECTED** — deterministic, sparse-native, 0.0 coef diff vs auto
+- `lsqr`: REJECTED — 5.3e-3 coef diff (above 1e-4 threshold)
+- `svd/cholesky`: REJECTED — require dense matrix
+- `sag/saga`: REJECTED — stochastic variance, saga fails with sample_weight
+
+**Key Learnings:**
+1. Real bottleneck is `Ridge.fit()` — matrix/loop optimizations are dwarfed by solver time
+2. `itertuples` wins big when called many times (13x for ATS, called 54x per backtest)
+3. float32 doesn't help sklearn timing — LAPACK/BLAS internally use float64
+4. Architecture wins > micro-optimizations (team universe caching is cleaner but no speedup)
+
+**All changes verified:** Backtest output unchanged (706 preds, MAE 13.03, 5+ Edge 58.6%)
+
 ---
 
 ## Session: February 7, 2026 (Continued)
