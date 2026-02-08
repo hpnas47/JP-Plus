@@ -194,6 +194,15 @@
 - **Bit-accurate:** Results identical to original iterrows implementation
 - Performance improvement for ~800 games/iteration training loops
 
+**PPP × Pace Architecture — REJECTED (Pre-Backtest):**
+- **Proposal:** Decouple efficiency from pace. Train Ridge on points-per-play (PPP), build separate pace model, predict Total = efficiency × pace.
+- **Strategist verdict: NO-GO** — 3 independent kill signals:
+  1. **Mathematical equivalence:** PPP × Pace = Points. Decomposing and recombining compounds estimation error from two models. Single Ridge is more efficient.
+  2. **Market-visible signal:** Pace is one of the most market-efficient variables. Vegas adjusts 7-10 pts for pace differentials. Same failure as Penalty Discipline.
+  3. **Pattern match:** 0-for-12 on features that decompose existing data or add market-visible info.
+- **Key insight:** Current Ridge on raw points already captures pace implicitly through opponent adjustment. A team scoring 35 in 85 plays generates different coefficients than one scoring 35 in 60 plays.
+- **Not backtested** — killed on theoretical grounds.
+
 **Totals Model Final Configuration (Production):**
 - **Years:** 2023-2025 (dropped 2022 transition year)
 - **Ridge Alpha:** 10.0
