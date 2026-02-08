@@ -215,31 +215,3 @@ class TravelAdjuster:
 
         return total, breakdown
 
-    def get_hawaii_adjustment(
-        self,
-        away_team: str,
-        home_team: str,
-    ) -> float:
-        """Special case adjustment for games involving Hawaii.
-
-        Hawaii games have unique travel challenges:
-        - 6 hour time difference during DST (5 hrs after DST ends)
-        - 2500+ miles from nearest continental team
-        - Jet lag recovery time
-
-        Note: Hawaii's tz_offset uses DST-era value (6) per P2.12 policy.
-
-        Args:
-            away_team: Traveling team
-            home_team: Host team
-
-        Returns:
-            Additional points adjustment (negative = penalty for traveler)
-        """
-        if home_team == "Hawaii" and away_team != "Hawaii":
-            # Mainland team traveling to Hawaii
-            return -2.0  # Significant travel penalty
-        elif away_team == "Hawaii" and home_team != "Hawaii":
-            # Hawaii traveling to mainland
-            return -1.5  # Slightly less due to familiarity with travel
-        return 0.0
