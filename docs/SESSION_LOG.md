@@ -79,6 +79,12 @@
 - **Infrastructure preserved**: `ooc_credibility_weight` param in EFM + CLI `--ooc-cred-weight` (default 0.0 = disabled).
 - **Decision**: Conference circularity to be addressed via betting confidence filter (operational change, not model change).
 
+#### Documentation Sync (All Three Docs)
+- **MODEL_ARCHITECTURE.md**: Updated per-year MAE/RMSE tables, per-year ATS tables (Close + Open), added changelog entries (HFA Global Offset, Conference Anchor, RZ Leverage), added 8 rejections to "Explored but Not Included", added 2025 Season Performance section with consolidated phase-by-phase table.
+- **CLAUDE.md**: Auto-synced via `generate_docs.py` with fresh backtest metrics.
+- **MODEL_EXPLAINER.md** (JP-Plus-Docs only): Synced all per-year ATS tables, MAE/RMSE table, CLV core season numbers, added 2025 Season Performance section, updated HFA description with global offset. All numbers now match MODEL_ARCHITECTURE.md.
+- Both repos pushed: JP-Plus (code) and JP-Plus-Docs (docs-only).
+
 ---
 
 ## Session: February 7, 2026 (Continued)
