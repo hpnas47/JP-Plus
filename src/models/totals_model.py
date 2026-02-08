@@ -467,14 +467,14 @@ def walk_forward_totals_backtest(
         # Predict games in pred_week
         week_games = games[games['week'] == pred_week]
 
-        for _, g in week_games.iterrows():
-            pred = model.predict_total(g['home_team'], g['away_team'])
+        for g in week_games.itertuples():
+            pred = model.predict_total(g.home_team, g.away_team)
             if pred:
-                actual_total = g['home_points'] + g['away_points']
+                actual_total = g.home_points + g.away_points
                 predictions.append({
                     'week': pred_week,
-                    'home_team': g['home_team'],
-                    'away_team': g['away_team'],
+                    'home_team': g.home_team,
+                    'away_team': g.away_team,
                     'predicted_total': pred.predicted_total,
                     'actual_total': actual_total,
                     'error': pred.predicted_total - actual_total,

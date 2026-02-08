@@ -136,8 +136,8 @@ def backtest_totals_season(
         # Predict games in pred_week
         week_games = games[games['week'] == pred_week]
 
-        for _, g in week_games.iterrows():
-            game_id = g['id']
+        for g in week_games.itertuples():
+            game_id = g.id
 
             # Get weather adjustment if available
             weather_adj = 0.0
@@ -148,24 +148,24 @@ def backtest_totals_season(
                 weather_adj = adj.total_adjustment
 
             pred = model.predict_total(
-                g['home_team'],
-                g['away_team'],
+                g.home_team,
+                g.away_team,
                 weather_adjustment=weather_adj,
                 year=year,
             )
 
             if pred:
-                actual_total = g['home_points'] + g['away_points']
-                vegas_total_close = g.get('vegas_total_close')
-                vegas_total_open = g.get('vegas_total_open')
+                actual_total = g.home_points + g.away_points
+                vegas_total_close = getattr(g, 'vegas_total_close', None)
+                vegas_total_open = getattr(g, 'vegas_total_open', None)
 
                 predictions.append({
                     'year': year,
                     'week': pred_week,
                     'phase': get_phase(pred_week),
                     'game_id': game_id,
-                    'home_team': g['home_team'],
-                    'away_team': g['away_team'],
+                    'home_team': g.home_team,
+                    'away_team': g.away_team,
                     'predicted_total': pred.predicted_total,
                     'adjusted_total': pred.adjusted_total,
                     'weather_adjustment': weather_adj,
@@ -203,10 +203,10 @@ def calculate_ou_ats(
 
     wins, losses, pushes = 0, 0, 0
 
-    for _, r in valid.iterrows():
-        jp_total = r['predicted_total']
-        vegas_total = r[vegas_col]
-        actual = r['actual_total']
+    for r in valid.itertuples():
+        jp_total = r.predicted_total
+        vegas_total = getattr(r, vegas_col)
+        actual = r.actual_total
 
         # JP+ pick: over if jp > vegas, under if jp < vegas
         jp_says_over = jp_total > vegas_total
