@@ -78,8 +78,9 @@ class TotalsModel:
             (Core 5+ Edge: 52.8% at alpha=10).
     """
 
-    def __init__(self, ridge_alpha: float = 10.0):
+    def __init__(self, ridge_alpha: float = 10.0, decay_factor: float = 1.0):
         self.ridge_alpha = ridge_alpha
+        self.decay_factor = decay_factor  # Within-season recency weight (1.0 = no decay)
         self.team_ratings: dict[str, TotalsRating] = {}
         self.baseline: float = 26.0  # Will be set by training
         self._team_to_idx: dict[str, int] = {}
@@ -142,6 +143,7 @@ class TotalsModel:
 
         X = []
         y = []
+        weeks = []  # Track week for recency weighting
 
         # Track games per team
         games_per_team = {t: 0 for t in teams}
@@ -151,6 +153,7 @@ class TotalsModel:
             away = g['away_team']
             home_pts = g['home_points']
             away_pts = g['away_points']
+            game_week = g['week']
 
             if home not in self._team_to_idx or away not in self._team_to_idx:
                 continue
@@ -167,6 +170,7 @@ class TotalsModel:
             row1[n_teams + away_idx] = 1  # Away defense (+ = allows more = worse)
             X.append(row1)
             y.append(home_pts)
+            weeks.append(game_week)
 
             # Away team offense vs Home team defense
             row2 = np.zeros(n_teams * 2)
@@ -174,13 +178,21 @@ class TotalsModel:
             row2[n_teams + home_idx] = 1  # Home defense
             X.append(row2)
             y.append(away_pts)
+            weeks.append(game_week)
 
         X = np.array(X)
         y = np.array(y)
+        weeks = np.array(weeks)
 
-        # Fit Ridge regression
+        # Compute sample weights for recency (decay_factor^weeks_ago)
+        # pred_week = max_week + 1 (we predict the week after training data)
+        pred_week = (max_week or int(weeks.max())) + 1
+        weeks_ago = pred_week - weeks
+        sample_weights = self.decay_factor ** weeks_ago
+
+        # Fit Ridge regression with sample weights
         ridge = Ridge(alpha=self.ridge_alpha, fit_intercept=True)
-        ridge.fit(X, y)
+        ridge.fit(X, y, sample_weight=sample_weights)
 
         # Extract coefficients
         self.baseline = ridge.intercept_

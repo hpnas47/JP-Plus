@@ -48,6 +48,7 @@ def backtest_totals_season(
     year: int,
     start_week: int = 4,
     ridge_alpha: float = 10.0,
+    decay_factor: float = 1.0,
     use_weather: bool = False,
 ) -> list:
     """Backtest totals for a single season.
@@ -57,12 +58,13 @@ def backtest_totals_season(
         year: Season year
         start_week: First week to predict (need training data from earlier weeks)
         ridge_alpha: Ridge regression regularization strength
+        decay_factor: Within-season recency decay (1.0 = no decay)
         use_weather: Whether to apply weather adjustments
 
     Returns:
         List of prediction dicts
     """
-    logger.info(f"Backtesting {year} (weather={use_weather})...")
+    logger.info(f"Backtesting {year} (decay={decay_factor}, weather={use_weather})...")
 
     # Fetch data
     games_df, betting_df = fetch_season_data(client, year)
@@ -117,7 +119,7 @@ def backtest_totals_season(
 
     for pred_week in range(start_week, max_week + 1):
         # Train on weeks < pred_week (walk-forward)
-        model = TotalsModel(ridge_alpha=ridge_alpha)
+        model = TotalsModel(ridge_alpha=ridge_alpha, decay_factor=decay_factor)
         train_games = games[games['week'] < pred_week]
 
         if len(train_games) < 50:
@@ -233,12 +235,14 @@ def format_ats(w: int, l: int) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description='Backtest totals model')
-    parser.add_argument('--years', type=int, nargs='+', default=[2022, 2023, 2024, 2025],
-                        help='Years to backtest')
+    parser.add_argument('--years', type=int, nargs='+', default=[2023, 2024, 2025],
+                        help='Years to backtest (default: 2023-2025, excludes 2022 transition year)')
     parser.add_argument('--start-week', type=int, default=1,
                         help='First week to predict (default: 1)')
     parser.add_argument('--alpha', type=float, default=10.0,
                         help='Ridge alpha (default: 10.0)')
+    parser.add_argument('--decay', type=float, default=1.0,
+                        help='Within-season recency decay factor (default: 1.0 = no decay)')
     parser.add_argument('--weather', action='store_true',
                         help='Apply weather adjustments')
     args = parser.parse_args()
@@ -252,6 +256,7 @@ def main():
             client, year,
             start_week=args.start_week,
             ridge_alpha=args.alpha,
+            decay_factor=args.decay,
             use_weather=args.weather,
         )
         all_predictions.extend(preds)
@@ -269,6 +274,7 @@ def main():
     print(f"Years: {args.years}")
     print(f"Start Week: {args.start_week}")
     print(f"Ridge Alpha: {args.alpha}")
+    print(f"Decay Factor: {args.decay}")
     print(f"Weather: {'Enabled' if args.weather else 'Disabled'}")
 
     # Overall metrics
