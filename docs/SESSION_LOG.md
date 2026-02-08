@@ -217,10 +217,34 @@
 - **Verdict:** Hypothesis disproved by data. Variance ratio=1.02 means coefficients already symmetric. No evidence of over-shrinkage on defense.
 - **Not backtested** — audit showed nothing to fix.
 
+**Learned HFA Column — APPROVED:**
+- **Proposal:** Add HFA column to Ridge design matrix (1 for home rows, 0 for away rows). Let Ridge learn optimal home advantage from data instead of assuming fixed value.
+- **Implementation:** Extended sparse matrix from `2*n_teams` to `2*n_teams+1` columns. HFA column (last column) = 1 for home team rows only.
+- **Learned HFA coefficients:**
+
+| Year | Learned HFA |
+|------|-------------|
+| 2023 | +3.35 pts |
+| 2024 | +4.05 pts |
+| 2025 | +4.46 pts |
+
+- **Backtest results (2023-2025):**
+
+| Metric | Before HFA | After HFA | Delta |
+|--------|------------|-----------|-------|
+| Core 5+ Edge (Close) | 52.9% | **54.5%** | **+1.6%** |
+| Core 5+ Edge (Open) | 53.2% | **55.3%** | **+2.1%** |
+| Core 3+ Edge (Close) | 51.7% | **54.7%** | **+3.0%** |
+| Core MAE | 13.71 | **13.09** | **-0.62** |
+
+- **Key insight:** HFA for totals is different from spreads HFA. Totals HFA affects expected scoring (home team scores more), not margin. Learned value (~+4 pts) is larger than expected because it captures the full home advantage in scoring, not just the margin contribution.
+- Prediction formula: `home_expected = baseline + (home_off_adj + away_def_adj) / 2 + hfa_coef`
+
 **Totals Model Final Configuration (Production):**
 - **Years:** 2023-2025 (dropped 2022 transition year)
 - **Ridge Alpha:** 10.0
 - **Decay Factor:** 1.0 (no within-season decay)
+- **Learned HFA:** Via Ridge column (+3.5 to +4.5 pts typical)
 - **OT Protection:** Disabled (final scores used)
 - **Weather:** Available but optional
 - **Core 5+ Edge:** 54.5% (close), 55.3% (open)

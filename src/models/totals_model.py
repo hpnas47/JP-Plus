@@ -10,9 +10,10 @@ Architecture:
 - Uses game outcomes (points scored/allowed) not play-level efficiency
 - Ridge regression solves for "true" offensive/defensive scoring vs average opponents
 - Walk-forward training: only uses games from weeks < prediction_week
+- Learned HFA: Home field advantage is learned from data (typically +3-4 pts)
 
 Formula:
-    home_expected = baseline + (home_off_adj + away_def_adj) / 2
+    home_expected = baseline + (home_off_adj + away_def_adj) / 2 + hfa_coef
     away_expected = baseline + (away_off_adj + home_def_adj) / 2
     total = home_expected + away_expected
 
@@ -20,6 +21,7 @@ Where:
     - baseline = average points per team in FBS (typically ~26-27)
     - off_adj = team's offensive adjustment (+ = scores more than avg)
     - def_adj = team's defensive adjustment (+ = allows more than avg, i.e. worse defense)
+    - hfa_coef = learned home field advantage (typically +3-4 pts for home team)
 """
 
 import logging
@@ -84,6 +86,7 @@ class TotalsModel:
         self.decay_factor = decay_factor  # Within-season recency weight (1.0 = no decay)
         self.team_ratings: dict[str, TotalsRating] = {}
         self.baseline: float = 26.0  # Will be set by training
+        self.hfa_coef: float = 0.0  # Learned home field advantage
         self._team_to_idx: dict[str, int] = {}
         self._trained = False
 
@@ -163,30 +166,36 @@ class TotalsModel:
             games_per_team[h] += 1
             games_per_team[a] += 1
 
-        # Build sparse matrix: each game = 2 rows, each row has 2 non-zero entries
-        # Row 2i:   home_off (col=home_idx), away_def (col=n_teams+away_idx)
-        # Row 2i+1: away_off (col=away_idx), home_def (col=n_teams+home_idx)
+        # Build sparse matrix: each game = 2 rows
+        # Columns: [0..n_teams-1] = offense, [n_teams..2*n_teams-1] = defense, [2*n_teams] = HFA
+        # Row 2i:   home_off (col=home_idx), away_def (col=n_teams+away_idx), HFA=1
+        # Row 2i+1: away_off (col=away_idx), home_def (col=n_teams+home_idx), HFA=0
         n_rows = 2 * n_games
-        n_cols = 2 * n_teams
+        n_cols = 2 * n_teams + 1  # +1 for HFA column
 
-        # COO matrix arrays: 4 entries per game (2 rows × 2 cols each)
-        row_indices = np.empty(4 * n_games, dtype=np.int32)
-        col_indices = np.empty(4 * n_games, dtype=np.int32)
-        data = np.ones(4 * n_games, dtype=np.float64)
+        # COO matrix arrays: 5 entries per game (home row has 3, away row has 2)
+        # Home rows: offense + defense + HFA (3 entries)
+        # Away rows: offense + defense (2 entries)
+        n_entries = 5 * n_games
+        row_indices = np.empty(n_entries, dtype=np.int32)
+        col_indices = np.empty(n_entries, dtype=np.int32)
+        data = np.ones(n_entries, dtype=np.float64)
 
         game_range = np.arange(n_games)
 
-        # Row 2i: home offense + away defense
-        row_indices[0::4] = 2 * game_range          # home offense entry
-        col_indices[0::4] = home_idx                # offense column
-        row_indices[1::4] = 2 * game_range          # away defense entry (same row)
-        col_indices[1::4] = n_teams + away_idx      # defense column
+        # Row 2i (home): offense + defense + HFA
+        row_indices[0::5] = 2 * game_range          # home offense entry
+        col_indices[0::5] = home_idx                # offense column
+        row_indices[1::5] = 2 * game_range          # away defense entry (same row)
+        col_indices[1::5] = n_teams + away_idx      # defense column
+        row_indices[2::5] = 2 * game_range          # HFA entry (same row)
+        col_indices[2::5] = 2 * n_teams             # HFA column (last column)
 
-        # Row 2i+1: away offense + home defense
-        row_indices[2::4] = 2 * game_range + 1      # away offense entry
-        col_indices[2::4] = away_idx                # offense column
-        row_indices[3::4] = 2 * game_range + 1      # home defense entry (same row)
-        col_indices[3::4] = n_teams + home_idx      # defense column
+        # Row 2i+1 (away): offense + defense only
+        row_indices[3::5] = 2 * game_range + 1      # away offense entry
+        col_indices[3::5] = away_idx                # offense column
+        row_indices[4::5] = 2 * game_range + 1      # home defense entry (same row)
+        col_indices[4::5] = n_teams + home_idx      # defense column
 
         X = coo_matrix((data, (row_indices, col_indices)), shape=(n_rows, n_cols)).tocsr()
 
@@ -213,11 +222,13 @@ class TotalsModel:
         # Extract coefficients
         self.baseline = ridge.intercept_
         off_coefs = ridge.coef_[:n_teams]
-        def_coefs = ridge.coef_[n_teams:]
+        def_coefs = ridge.coef_[n_teams:2 * n_teams]
+        self.hfa_coef = ridge.coef_[2 * n_teams]  # HFA is last column
 
         logger.info(f"Baseline PPG: {self.baseline:.1f}")
         logger.info(f"Offensive adjustments: [{off_coefs.min():.1f}, {off_coefs.max():.1f}]")
         logger.info(f"Defensive adjustments: [{def_coefs.min():.1f}, {def_coefs.max():.1f}]")
+        logger.info(f"Learned HFA: {self.hfa_coef:+.1f} pts")
 
         # Build ratings dict
         self.team_ratings = {}
@@ -263,9 +274,10 @@ class TotalsModel:
             logger.warning(f"Team not found: {away_team}")
             return None
 
-        # SP+-style formula:
+        # SP+-style formula with learned HFA:
         # Each team's expected points = (their offense adj + opposing defense adj) / 2 + baseline
-        home_expected = self.baseline + (home.off_adjustment + away.def_adjustment) / 2
+        # Home team gets additional HFA boost (typically +3-4 pts)
+        home_expected = self.baseline + (home.off_adjustment + away.def_adjustment) / 2 + self.hfa_coef
         away_expected = self.baseline + (away.off_adjustment + home.def_adjustment) / 2
 
         predicted_total = home_expected + away_expected
