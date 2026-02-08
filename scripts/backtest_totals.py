@@ -120,9 +120,12 @@ def backtest_totals_season(
     max_week = int(games['week'].max())
     predictions = []
 
+    # Create model once per season - team universe is fixed
+    model = TotalsModel(ridge_alpha=ridge_alpha, decay_factor=decay_factor)
+    model.set_team_universe(fbs_set)
+
     for pred_week in range(start_week, max_week + 1):
         # Train on weeks < pred_week (walk-forward)
-        model = TotalsModel(ridge_alpha=ridge_alpha, decay_factor=decay_factor)
         train_games = games[games['week'] < pred_week]
 
         if len(train_games) < 50:

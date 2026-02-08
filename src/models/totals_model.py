@@ -91,8 +91,27 @@ class TotalsModel:
         self.year_baselines: dict[int, float] = {}  # Year-specific baselines (if enabled)
         self.hfa_coef: float = 0.0  # Learned home field advantage
         self._team_to_idx: dict[str, int] = {}
+        self._n_teams: int = 0  # Cached team count for column layout
+        self._team_universe_set: bool = False  # Lock flag for team universe
         self._year_to_idx: dict[int, int] = {}  # Year to column index mapping
         self._trained = False
+
+    def set_team_universe(self, fbs_teams: set[str]) -> None:
+        """Set the team universe once for reuse across train() calls.
+
+        This locks the team-to-index mapping so column layout is consistent
+        across walk-forward weeks. Teams that haven't played yet get zero
+        columns in the design matrix (Ridge shrinks their coefficients to 0).
+
+        Args:
+            fbs_teams: Full set of FBS team names for this season
+        """
+        if self._team_universe_set:
+            return  # Already set, no-op for idempotence
+        teams = sorted(fbs_teams)
+        self._team_to_idx = {t: i for i, t in enumerate(teams)}
+        self._n_teams = len(teams)
+        self._team_universe_set = True
 
     def train(
         self,
@@ -137,10 +156,10 @@ class TotalsModel:
                 logger.error("Insufficient games for training")
                 return
 
-        # Get all teams
-        teams = sorted(set(games['home_team'].unique()) | set(games['away_team'].unique()))
-        self._team_to_idx = {t: i for i, t in enumerate(teams)}
-        n_teams = len(teams)
+        # Set team universe if not already set (allows reuse across train() calls)
+        if not self._team_universe_set:
+            self.set_team_universe(fbs_teams)
+        n_teams = self._n_teams
 
         logger.info(f"Training totals model: {len(games)} games, {n_teams} teams, max_week={max_week}")
 
@@ -164,8 +183,8 @@ class TotalsModel:
         away_pts = games['away_points'].values
         game_weeks = games['week'].values
 
-        # Track games per team
-        games_per_team = {t: 0 for t in teams}
+        # Track games per team (use full universe so teams without games get 0)
+        games_per_team = {t: 0 for t in self._team_to_idx}
         for h, a in zip(games['home_team'], games['away_team']):
             games_per_team[h] += 1
             games_per_team[a] += 1
@@ -284,17 +303,18 @@ class TotalsModel:
         logger.info(f"Defensive adjustments: [{def_coefs.min():.1f}, {def_coefs.max():.1f}]")
         logger.info(f"Learned HFA: {self.hfa_coef:+.1f} pts")
 
-        # Build ratings dict
+        # Build ratings dict (only for teams with games - preserves prediction behavior)
         self.team_ratings = {}
         for team, idx in self._team_to_idx.items():
-            self.team_ratings[team] = TotalsRating(
-                team=team,
-                adj_off_ppg=self.baseline + off_coefs[idx],
-                adj_def_ppg=self.baseline + def_coefs[idx],
-                off_adjustment=off_coefs[idx],
-                def_adjustment=def_coefs[idx],
-                games_played=games_per_team[team],
-            )
+            if games_per_team[team] > 0:  # Only include teams that have played
+                self.team_ratings[team] = TotalsRating(
+                    team=team,
+                    adj_off_ppg=self.baseline + off_coefs[idx],
+                    adj_def_ppg=self.baseline + def_coefs[idx],
+                    off_adjustment=off_coefs[idx],
+                    def_adjustment=def_coefs[idx],
+                    games_played=games_per_team[team],
+                )
 
         self._trained = True
 
