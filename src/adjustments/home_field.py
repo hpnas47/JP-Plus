@@ -113,16 +113,20 @@ class HomeFieldAdvantage:
         self,
         base_hfa: Optional[float] = None,
         data_path: Optional[Path] = None,
+        global_offset: float = 0.0,
     ):
         """Initialize HFA calculator.
 
         Args:
             base_hfa: Default HFA value. If None, uses settings.
             data_path: Path to historical HFA data file.
+            global_offset: Points subtracted from ALL HFA values (for sweep testing).
+                           Positive offset = reduce HFA. Default 0.0 (no change).
         """
         settings = get_settings()
         self.base_hfa = base_hfa if base_hfa is not None else settings.base_hfa
         self.data_path = data_path or (settings.historical_dir / "hfa_by_team.json")
+        self.global_offset = global_offset
 
         self.team_hfa: dict[str, float] = {}
         self.trajectory_modifiers: dict[str, float] = {}  # Team trajectory adjustments
@@ -512,6 +516,11 @@ class HomeFieldAdvantage:
             base = max(1.0, min(5.0, base))
             trajectory_applied = True
             source += f"+traj({modifier:+.2f})"
+
+        # Apply global offset (for HFA sweep testing)
+        if self.global_offset != 0.0:
+            base = max(0.5, base - self.global_offset)
+            source += f"+offset({-self.global_offset:+.2f})"
 
         return base, source
 

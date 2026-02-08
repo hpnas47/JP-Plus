@@ -53,19 +53,20 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-07)
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-08)
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,273 | 12.99 | 16.46 | 51.0% | 52.9% |
-| Phase 1 (Calibration) | 1–3 | 608 | 14.82 | — | 46.4% | 48.7% |
-| **Phase 2 (Core)** | **4–15** | **2,489** | **12.52** | **15.85** | **52.4%** | **54.2%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.41 | — | 46.8% | 48.9% |
-| 3+ Edge (Core) | 4–15 | 1,457 | — | — | 53.0% (758-671) | 55.4% (813-654) |
-| 5+ Edge (Core) | 4–15 | 890 | — | — | 54.5% (475-396) | 57.0% (527-397) |
+| **Full (`--start-week 1`)** | 1–Post | 3,273 | 12.97 | 16.43 | 51.0% | 52.3% |
+| Phase 1 (Calibration) | 1–3 | 608 | 14.77 | — | 47.1% | 48.6% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.50** | **15.82** | **52.2%** | **53.5%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.41 | — | 47.4% | 48.3% |
+| 3+ Edge (Core) | 4–15 | 1,441 | — | — | 54.0% (764-650) | 55.6% (810-648) |
+| 5+ Edge (Core) | 4–15 | 882 | — | — | 54.7% (473-391) | 57.8% (525-384) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
+- **HFA Global Offset:** -0.50 pts applied to all HFA values (calibrated Feb 2026). Reduces systematic home bias from +0.90 to +0.46.
 - **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
 - **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 
@@ -109,12 +110,12 @@
 ## 📊 Quant Auditor (The Analyst)
 - **Role:** Weight optimization, MAE/ATS validation, and **redundancy detection**.
 - **Success Metrics (Core Phase, Weeks 4–15, 2,485 games):**
-    - **MAE Baseline:** 12.52 (Strict Tolerance: +0.02).
-    - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 53.5%.
+    - **MAE Baseline:** 12.5 (Strict Tolerance: +0.02).
+    - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 54.0%.
 - **Redundancy Protocol:** For any new signal, you must report the **Correlation Coefficient** against existing PPA/IsoPPP metrics.
 - **Validation Slices (Mandatory):**
     - **EFM/In-Season:** `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
 
-<!-- Last validated: 2026-02-07 by generate_docs.py -->
+<!-- Last validated: 2026-02-08 by generate_docs.py -->

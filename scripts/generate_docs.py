@@ -82,6 +82,7 @@ def run_backtest_and_extract() -> dict:
         use_portal=True,
         portal_scale=0.15,
         use_opening_line=False,  # Closing line is default for ATS
+        hfa_global_offset=0.50,  # Calibrated Feb 2026
     )
 
     predictions_df = results["predictions"]

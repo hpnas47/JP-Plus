@@ -4,6 +4,48 @@
 
 ---
 
+## Session: February 8, 2026
+
+### Theme: Error Cohort Diagnostic + HFA Calibration
+
+---
+
+#### Error Cohort Diagnostic Analysis — COMPLETED (Research Only)
+**Impact: Identified systematic home bias and G5 circular inflation as top addressable patterns**
+
+- **Scope:** 2,489 core games (weeks 4-15, 2022-2025) segmented into error buckets and analyzed across 5 dimensions.
+- **Key findings:**
+  1. **Turnovers are #1 error driver** (r=-0.48): Lopsided TO games have MAE 16.98 vs 12.09 normal. NOT fixable — inherent game variance.
+  2. **Persistent home/favorite bias**: +0.90 pts overall, +3.4 in catastrophic (25+ error) games. Model systematically over-predicts home team.
+  3. **G5 circular inflation**: AAC intra-conf MAE 13.94, Sun Belt 13.52, Big 12 13.17 — all suffer from within-conference rating inflation.
+  4. **Late season WORSE than early**: Early (W4-7) MAE 12.30 vs Late (W8-15) 12.64. W14 championships = 13.43 (worst).
+  5. **Team-level biases are persistent**: Notre Dame under-rated by -9.5 pts (4yr avg), Charlotte over-rated by +7.0 pts.
+- **No single fix addresses >5% of error budget.** Error distribution is remarkably uniform across weeks, spread sizes, and years.
+- Full report: `.claude/agent-memory/quant-auditor/error-cohort-analysis.md`
+
+#### HFA Global Offset Calibration — APPROVED
+**Impact: 5+ Edge +0.6% (Close), +0.5% (Open) — first improvement on binding constraint since Explosiveness Uplift**
+
+- **Hypothesis:** Error cohort analysis revealed +0.90 pts home bias. Modern CFB HFA may be declining due to portal churn, NIL, and general trend across sports.
+- **Implementation:** Added `global_offset` parameter to `HomeFieldAdvantage` that subtracts a fixed amount from ALL team HFA values (floor=0.5). Threaded through backtest via `--hfa-offset` CLI flag.
+- **6-variant sweep (offsets 0.0, 0.25, 0.375, 0.50, 0.75, 1.00):**
+
+| Offset | Core MAE | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) | Mean Error |
+|--------|----------|-----------------|-----------------|-----------------|------------|
+| 0.00 (baseline) | 12.51 | 53.5% (765-666) | 54.1% (473-401) | 57.3% (531-396) | +0.90 |
+| 0.25 | 12.50 | 53.6% (765-663) | 54.4% (472-396) | — | +0.68 |
+| 0.375 | 12.50 | 53.8% (764-655) | 54.5% (475-396) | — | +0.57 |
+| **0.50** | **12.50** | **54.0% (764-650)** | **54.7% (473-391)** | **57.8% (525-384)** | **+0.46** |
+| 0.75 | 12.49 | 54.0% (760-647) | 54.6% (471-392) | — | +0.24 |
+| 1.00 | 12.50 | 53.8% (762-654) | 54.5% (476-397) | — | +0.02 |
+
+- **Offset=0.50 selected** — peak 5+ Edge, diminishing returns beyond.
+- **No 3+/5+ divergence** — both improve together (first time in 12 experiments).
+- **Effect**: LSU 4.0→3.5, Ohio State 3.75→3.25, SEC default 2.75→2.25, UMass 1.5→1.0.
+- **Also applied to `run_weekly.py`** for production predictions.
+
+---
+
 ## Session: February 7, 2026 (Continued)
 
 ### Theme: Transfer Portal Architecture Audit

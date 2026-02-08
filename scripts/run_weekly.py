@@ -494,7 +494,7 @@ def run_predictions(
 
         # Calculate HFA
         logger.info("Calculating home field advantages...")
-        hfa = HomeFieldAdvantage()
+        hfa = HomeFieldAdvantage(global_offset=0.50)
         hfa.calculate_all_team_hfa(combined_for_hfa, team_ratings)
 
         # Special teams (simplified without detailed data)

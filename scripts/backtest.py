@@ -583,6 +583,7 @@ def walk_forward_predict(
     st_plays_df: Optional[pl.DataFrame] = None,
     historical_rankings: Optional[HistoricalRankings] = None,
     team_conferences: Optional[dict[str, str]] = None,
+    hfa_global_offset: float = 0.0,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -614,6 +615,7 @@ def walk_forward_predict(
         st_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
         historical_rankings: Week-by-week AP poll rankings for letdown spot detection
         team_conferences: Dict mapping team name to conference name for conference strength anchor
+        hfa_global_offset: Points subtracted from ALL HFA values (for sweep testing). Default 0.0.
 
     Returns:
         List of prediction result dictionaries
@@ -668,7 +670,7 @@ def walk_forward_predict(
             )
 
         # Initialize HFA with team-specific values and trajectory modifiers
-        hfa = HomeFieldAdvantage(base_hfa=hfa_value)
+        hfa = HomeFieldAdvantage(base_hfa=hfa_value, global_offset=hfa_global_offset)
         # Calculate trajectory modifiers if we have records
         if team_records:
             hfa.calculate_trajectory_modifiers(team_records, year)
@@ -2055,6 +2057,7 @@ def _process_single_season(
     fcs_penalty_elite: float,
     fcs_penalty_standard: float,
     use_opening_line: bool,
+    hfa_global_offset: float = 0.0,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2104,6 +2107,7 @@ def _process_single_season(
         st_plays_df=st_plays_df,
         historical_rankings=historical_rankings,
         team_conferences=team_conferences,
+        hfa_global_offset=hfa_global_offset,
     )
 
     # Calculate ATS
@@ -2140,6 +2144,7 @@ def run_backtest(
     clear_cache: bool = True,
     use_season_cache: bool = True,
     force_refresh: bool = False,
+    hfa_global_offset: float = 0.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2164,6 +2169,7 @@ def run_backtest(
         clear_cache: Whether to clear ridge adjustment cache at start (default True)
         use_season_cache: Whether to use disk cache for season data (default True)
         force_refresh: If True, bypass all caches and force fresh API calls (default False)
+        hfa_global_offset: Points subtracted from ALL HFA values (for sweep testing). Default 0.0.
 
     Returns:
         Dictionary with backtest results
@@ -2232,6 +2238,7 @@ def run_backtest(
         fcs_penalty_elite=fcs_penalty_elite,
         fcs_penalty_standard=fcs_penalty_standard,
         use_opening_line=use_opening_line,
+        hfa_global_offset=hfa_global_offset,
     )
 
     if len(years) > 1:
@@ -2602,6 +2609,12 @@ def main():
         help="Base home field advantage in points (default: 2.5)",
     )
     parser.add_argument(
+        "--hfa-offset",
+        type=float,
+        default=0.50,
+        help="Points subtracted from ALL HFA values globally (default: 0.50, calibrated Feb 2026)",
+    )
+    parser.add_argument(
         "--prior-weight",
         type=int,
         default=8,
@@ -2738,7 +2751,7 @@ def main():
     print(f"  Ridge alpha:        {args.alpha}")
     print(f"  Preseason priors:   {'disabled' if args.no_priors else 'enabled'}")
     print(f"  Transfer portal:    {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
-    print(f"  HFA:                team-specific (fallback={args.hfa})")
+    print(f"  HFA:                team-specific (fallback={args.hfa}, global_offset={args.hfa_offset})")
     print(f"  EFM weights:        SR={args.efficiency_weight}, IsoPPP={args.explosiveness_weight}, TO={args.turnover_weight}")
     print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
     print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
@@ -2762,6 +2775,7 @@ def main():
         portal_scale=args.portal_scale,
         use_opening_line=args.opening_line,
         season_data=season_data,  # Use pre-fetched data
+        hfa_global_offset=args.hfa_offset,
     )
 
     # P3.4: Print results with ATS data for sanity report
