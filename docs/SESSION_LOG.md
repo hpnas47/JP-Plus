@@ -271,6 +271,32 @@
 - **Key insight:** Year intercepts would help for multi-year joint training (fit all 3 years at once with different baselines). For walk-forward single-year training (current backtest), each year trains independently — so year intercepts provide no benefit and Ridge shrinkage actively hurts.
 - **Decision:** Infrastructure preserved for future multi-year training mode (e.g., 2026 production with 2023-2025 joint training). Default=False maintains current performance.
 
+**Service Academy vs Service Academy — DOCUMENTED LIMITATION (No Fix):**
+- **Hypothesis:** When two triple-option teams (Army, Navy, Air Force) play, the slowdown is multiplicative, not additive. Linear Ridge model can't capture "Slow × Slow = Slower" interaction.
+- **Evidence (2023-2025, N=7 games):**
+
+| Metric | JP+ Model | Vegas |
+|--------|-----------|-------|
+| Mean Error | **+17.5** | +3.6 |
+| MAE | **20.0** | 8.9 |
+
+- JP+ predicts 47-56 pts for games that are mostly 23-41 pts actual
+- Vegas already adjusts (sets 28-50 pts vs our 47-56)
+
+- **Gate failures:**
+  1. **Sample size**: N=7 games (0.3% of sample), below noise floor for coefficient fitting
+  2. **Counter-example**: 2025 AF @ Navy = 65 total points (we under-predicted by 9)
+  3. **Generalizability**: Tested "slow vs slow" matchups (bottom 10% pace, N=64). Effect does NOT generalize — Navy/Air Force aren't even in bottom 10% pace. Effect is scheme-specific (triple-option), not pace-specific.
+  4. **Market awareness**: Vegas already prices this (~15 pts lower than JP+)
+
+- **Why no fix:**
+  - Hardcoded -15 adjustment → overfitting to 7 games
+  - Triple-option detection → adds complexity for ~2 games/year
+  - Pace interaction term → data shows it doesn't generalize (counter-examples: Minnesota @ Northwestern 71 pts, Michigan @ Minnesota 62 pts)
+
+- **Betting impact**: ~2-3 games/year at 5+ Edge, estimated 0.1-0.2% overall impact
+- **Decision**: Accept as known limitation. Market already prices this; fixing would be micro-targeting below noise floor.
+
 ---
 
 ## Session: February 7, 2026 (Continued)
