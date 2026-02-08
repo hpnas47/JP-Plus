@@ -183,11 +183,11 @@ class TotalsModel:
         away_pts = games['away_points'].values
         game_weeks = games['week'].values
 
-        # Track games per team (use full universe so teams without games get 0)
-        games_per_team = {t: 0 for t in self._team_to_idx}
-        for h, a in zip(games['home_team'], games['away_team']):
-            games_per_team[h] += 1
-            games_per_team[a] += 1
+        # Track games per team (vectorized - use full universe so teams without games get 0)
+        home_counts = games['home_team'].value_counts()
+        away_counts = games['away_team'].value_counts()
+        all_counts = home_counts.add(away_counts, fill_value=0).astype(int)
+        games_per_team = {t: int(all_counts.get(t, 0)) for t in self._team_to_idx}
 
         # Get years for year intercepts (handles scoring environment shift)
         # Only used when use_year_intercepts=True (for multi-year training)
