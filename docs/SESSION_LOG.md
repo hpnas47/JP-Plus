@@ -121,6 +121,56 @@
   - Without weather: Core MAE 13.23, Core 5+ Edge 52.8%
   - With weather: Core MAE 13.19 (-0.04), Core 5+ Edge 52.8% (unchanged)
 - Weather improves MAE marginally but no ATS improvement (market already prices weather)
+- **Note:** Weather data from CFBD is look-back (actual game-day), not forecast — not operationally useful without forecast API
+
+**Opening vs Closing Line Comparison:**
+- Added `over_under_open` extraction from CFBD API
+- Opening line slightly better than closing (as expected — less market efficiency):
+
+| Line | Core 5+ Edge | Record |
+|------|--------------|--------|
+| Closing | 52.8% | 479-428 |
+| **Opening** | **53.3%** | 448-393 |
+
+**Scoring Environment Trend Discovery:**
+- Analyzed FBS average total PPG across years:
+
+| Year | Avg Total |
+|------|-----------|
+| 2018 | 57.6 |
+| 2019 | 56.0 |
+| 2022 | 54.8 |
+| 2023 | 53.8 |
+| 2024 | 53.9 |
+| 2025 | 52.9 |
+
+- **CFB scoring dropped ~5 PPG since 2018** — structural shift (better defenses, portal roster balance, rule enforcement)
+- 2022 was transition year with poor ATS (49%) — data hurts model
+
+**Drop 2022 from Evaluation — APPROVED:**
+
+| Metric | With 2022 | Without 2022 | Delta |
+|--------|-----------|--------------|-------|
+| Core 5+ Edge (Close) | 52.8% | **54.5%** | **+1.7%** |
+| Core 5+ Edge (Open) | 53.3% | **55.3%** | **+2.0%** |
+
+- Default years updated to 2023-2025
+
+**Within-Season Decay — REJECTED:**
+- Strategist hypothesized cupcake games inflate baseline; decay would help
+- Tested decay_factor 0.97/0.95/0.93 (Week 1 game weighted 71%/54%/42% at Week 12)
+- **All variants degraded 5+ Edge:**
+
+| Decay | Core 5+ Edge | Delta |
+|-------|--------------|-------|
+| 1.00 (baseline) | 54.5% | — |
+| 0.97 | 54.2% | -0.3% |
+| 0.95 | 53.9% | -0.6% |
+| 0.93 | 53.7% | -0.8% |
+
+- **Same pattern as spreads**: walk-forward already handles temporality; cupcake games still calibrate team strength; early OOC anchors opponent graph
+- Scoring environment shift is cross-year (57→53 PPG), not within-season
+- Infrastructure preserved: `decay_factor` param (default 1.0 = disabled)
 
 ---
 
