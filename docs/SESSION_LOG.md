@@ -85,6 +85,43 @@
 - **MODEL_EXPLAINER.md** (JP-Plus-Docs only): Synced all per-year ATS tables, MAE/RMSE table, CLV core season numbers, added 2025 Season Performance section, updated HFA description with global offset. All numbers now match MODEL_ARCHITECTURE.md.
 - Both repos pushed: JP-Plus (code) and JP-Plus-Docs (docs-only).
 
+#### Totals Model Built From Scratch — NEW PRODUCTION MODULE
+**Impact: New over/under prediction capability with 52.8% Core 5+ Edge ATS**
+
+- **Background:** EFM ratings cannot be directly used for totals prediction (ratings are "points better than average efficiency" scaled for spreads, not raw points). Attempted SP+-style formula produced totals 15-18 pts too high (e.g., Indiana-Miami predicted 66, actual 48).
+- **Solution:** Built new `TotalsModel` using opponent-adjusted Ridge regression on **game-level points scored/allowed** (not play-level efficiency like EFM).
+
+**Architecture:**
+- Each game produces 2 training rows: home_off + away_def → home_pts, away_off + home_def → away_pts
+- Ridge regression solves for team offensive/defensive adjustments relative to FBS average
+- Formula: `home_expected = baseline + (home_off_adj + away_def_adj) / 2`
+- Walk-forward training: only uses games from weeks < prediction_week
+
+**Ridge Alpha Sweep (Core Phase, Weeks 4-15):**
+
+| Alpha | Core MAE | Core ATS | 3+ Edge | 5+ Edge |
+|-------|----------|----------|---------|---------|
+| 5.0 | 13.12 | 52.5% | 51.9% | 52.4% |
+| **10.0** | **13.23** | **52.4%** | **52.7%** | **52.8%** |
+| 15.0 | 13.40 | 52.3% | 52.4% | 52.5% |
+| 20.0 | 13.62 | 52.0% | 52.1% | 52.0% |
+
+- **Alpha=10.0 selected** — best Core 5+ Edge ATS (52.8%)
+- **Calibration phase (weeks 1-3) is surprisingly strong**: 57.4% at 5+ edge — opposite of spreads model pattern
+- **Phase 3 (postseason) unstable**: ~48% ATS, high variance, small sample
+
+**Files Created:**
+- `src/models/totals_model.py` — Core model with TotalsModel, TotalsRating, TotalsPrediction classes
+- `scripts/backtest_totals.py` — Walk-forward backtest with phase filtering, ATS calculations
+
+**Weather Integration:**
+- Added `predict_total_with_weather()` method using existing WeatherAdjuster
+- Added `--weather` flag to backtest_totals.py
+- **Backtest comparison:**
+  - Without weather: Core MAE 13.23, Core 5+ Edge 52.8%
+  - With weather: Core MAE 13.19 (-0.04), Core 5+ Edge 52.8% (unchanged)
+- Weather improves MAE marginally but no ATS improvement (market already prices weather)
+
 ---
 
 ## Session: February 7, 2026 (Continued)
