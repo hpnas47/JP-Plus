@@ -187,6 +187,13 @@
 - **Reverted** — Vegas already prices OT potential; final scores contain market-relevant signal
 - **Key lesson:** "Cleaner" data ≠ better betting edge. Market prices what it prices.
 
+**Sparse Matrix Optimization:**
+- Replaced `iterrows()` loop with vectorized numpy + scipy.sparse.coo_matrix
+- Build COO matrix from index arrays, convert to CSR for Ridge regression
+- Memory: O(4×games) sparse vs O(games × 2×teams) dense
+- **Bit-accurate:** Results identical to original iterrows implementation
+- Performance improvement for ~800 games/iteration training loops
+
 **Totals Model Final Configuration (Production):**
 - **Years:** 2023-2025 (dropped 2022 transition year)
 - **Ridge Alpha:** 10.0
