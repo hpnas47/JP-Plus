@@ -11,14 +11,15 @@ Architecture:
 - Ridge regression solves for "true" offensive/defensive scoring vs average opponents
 - Walk-forward training: only uses games from weeks < prediction_week
 - Learned HFA: Home field advantage is learned from data (typically +3-4 pts)
+- Year intercepts: Each year gets its own baseline to handle scoring environment shifts
 
 Formula:
-    home_expected = baseline + (home_off_adj + away_def_adj) / 2 + hfa_coef
-    away_expected = baseline + (away_off_adj + home_def_adj) / 2
+    home_expected = year_baseline + (home_off_adj + away_def_adj) / 2 + hfa_coef
+    away_expected = year_baseline + (away_off_adj + home_def_adj) / 2
     total = home_expected + away_expected
 
 Where:
-    - baseline = average points per team in FBS (typically ~26-27)
+    - year_baseline = year-specific average points per team (handles 57→53 PPG trend)
     - off_adj = team's offensive adjustment (+ = scores more than avg)
     - def_adj = team's defensive adjustment (+ = allows more than avg, i.e. worse defense)
     - hfa_coef = learned home field advantage (typically +3-4 pts for home team)
@@ -81,13 +82,16 @@ class TotalsModel:
             (Core 5+ Edge: 52.8% at alpha=10).
     """
 
-    def __init__(self, ridge_alpha: float = 10.0, decay_factor: float = 1.0):
+    def __init__(self, ridge_alpha: float = 10.0, decay_factor: float = 1.0, use_year_intercepts: bool = False):
         self.ridge_alpha = ridge_alpha
         self.decay_factor = decay_factor  # Within-season recency weight (1.0 = no decay)
+        self.use_year_intercepts = use_year_intercepts  # Per-year baselines for multi-year training
         self.team_ratings: dict[str, TotalsRating] = {}
         self.baseline: float = 26.0  # Will be set by training
+        self.year_baselines: dict[int, float] = {}  # Year-specific baselines (if enabled)
         self.hfa_coef: float = 0.0  # Learned home field advantage
         self._team_to_idx: dict[str, int] = {}
+        self._year_to_idx: dict[int, int] = {}  # Year to column index mapping
         self._trained = False
 
     def train(
@@ -166,36 +170,72 @@ class TotalsModel:
             games_per_team[h] += 1
             games_per_team[a] += 1
 
+        # Get years for year intercepts (handles scoring environment shift)
+        # Only used when use_year_intercepts=True (for multi-year training)
+        if self.use_year_intercepts and 'year' in games.columns:
+            game_years = games['year'].values
+            years = sorted(set(game_years))
+            self._year_to_idx = {y: i for i, y in enumerate(years)}
+            n_years = len(years)
+        else:
+            years = []
+            n_years = 0
+
         # Build sparse matrix: each game = 2 rows
         # Columns: [0..n_teams-1] = offense, [n_teams..2*n_teams-1] = defense, [2*n_teams] = HFA
-        # Row 2i:   home_off (col=home_idx), away_def (col=n_teams+away_idx), HFA=1
-        # Row 2i+1: away_off (col=away_idx), home_def (col=n_teams+home_idx), HFA=0
+        # Optional: [2*n_teams+1..] = year indicators (if use_year_intercepts)
         n_rows = 2 * n_games
-        n_cols = 2 * n_teams + 1  # +1 for HFA column
-
-        # COO matrix arrays: 5 entries per game (home row has 3, away row has 2)
-        # Home rows: offense + defense + HFA (3 entries)
-        # Away rows: offense + defense (2 entries)
-        n_entries = 5 * n_games
-        row_indices = np.empty(n_entries, dtype=np.int32)
-        col_indices = np.empty(n_entries, dtype=np.int32)
-        data = np.ones(n_entries, dtype=np.float64)
+        n_cols = 2 * n_teams + 1 + n_years  # +1 HFA + n_years for year intercepts
 
         game_range = np.arange(n_games)
 
-        # Row 2i (home): offense + defense + HFA
-        row_indices[0::5] = 2 * game_range          # home offense entry
-        col_indices[0::5] = home_idx                # offense column
-        row_indices[1::5] = 2 * game_range          # away defense entry (same row)
-        col_indices[1::5] = n_teams + away_idx      # defense column
-        row_indices[2::5] = 2 * game_range          # HFA entry (same row)
-        col_indices[2::5] = 2 * n_teams             # HFA column (last column)
+        if n_years > 0:
+            # With year intercepts: 7 entries per game
+            year_col_base = 2 * n_teams + 1
+            game_year_cols = np.array([self._year_to_idx[y] for y in game_years], dtype=np.int32)
 
-        # Row 2i+1 (away): offense + defense only
-        row_indices[3::5] = 2 * game_range + 1      # away offense entry
-        col_indices[3::5] = away_idx                # offense column
-        row_indices[4::5] = 2 * game_range + 1      # home defense entry (same row)
-        col_indices[4::5] = n_teams + home_idx      # defense column
+            n_entries = 7 * n_games
+            row_indices = np.empty(n_entries, dtype=np.int32)
+            col_indices = np.empty(n_entries, dtype=np.int32)
+            data = np.ones(n_entries, dtype=np.float64)
+
+            # Row 2i (home): offense + defense + HFA + year
+            row_indices[0::7] = 2 * game_range
+            col_indices[0::7] = home_idx
+            row_indices[1::7] = 2 * game_range
+            col_indices[1::7] = n_teams + away_idx
+            row_indices[2::7] = 2 * game_range
+            col_indices[2::7] = 2 * n_teams  # HFA
+            row_indices[3::7] = 2 * game_range
+            col_indices[3::7] = year_col_base + game_year_cols
+
+            # Row 2i+1 (away): offense + defense + year (no HFA)
+            row_indices[4::7] = 2 * game_range + 1
+            col_indices[4::7] = away_idx
+            row_indices[5::7] = 2 * game_range + 1
+            col_indices[5::7] = n_teams + home_idx
+            row_indices[6::7] = 2 * game_range + 1
+            col_indices[6::7] = year_col_base + game_year_cols
+        else:
+            # Without year intercepts: 5 entries per game (original approach)
+            n_entries = 5 * n_games
+            row_indices = np.empty(n_entries, dtype=np.int32)
+            col_indices = np.empty(n_entries, dtype=np.int32)
+            data = np.ones(n_entries, dtype=np.float64)
+
+            # Row 2i (home): offense + defense + HFA
+            row_indices[0::5] = 2 * game_range
+            col_indices[0::5] = home_idx
+            row_indices[1::5] = 2 * game_range
+            col_indices[1::5] = n_teams + away_idx
+            row_indices[2::5] = 2 * game_range
+            col_indices[2::5] = 2 * n_teams  # HFA
+
+            # Row 2i+1 (away): offense + defense (no HFA)
+            row_indices[3::5] = 2 * game_range + 1
+            col_indices[3::5] = away_idx
+            row_indices[4::5] = 2 * game_range + 1
+            col_indices[4::5] = n_teams + home_idx
 
         X = coo_matrix((data, (row_indices, col_indices)), shape=(n_rows, n_cols)).tocsr()
 
@@ -216,16 +256,30 @@ class TotalsModel:
         sample_weights = self.decay_factor ** weeks_ago
 
         # Fit Ridge regression with sample weights
-        ridge = Ridge(alpha=self.ridge_alpha, fit_intercept=True)
+        # fit_intercept: True unless using year intercepts (which serve as baselines)
+        use_intercept = not (n_years > 0)
+        ridge = Ridge(alpha=self.ridge_alpha, fit_intercept=use_intercept)
         ridge.fit(X, y, sample_weight=sample_weights)
 
         # Extract coefficients
-        self.baseline = ridge.intercept_
         off_coefs = ridge.coef_[:n_teams]
         def_coefs = ridge.coef_[n_teams:2 * n_teams]
-        self.hfa_coef = ridge.coef_[2 * n_teams]  # HFA is last column
+        self.hfa_coef = ridge.coef_[2 * n_teams]  # HFA column
 
-        logger.info(f"Baseline PPG: {self.baseline:.1f}")
+        if n_years > 0:
+            # Year intercepts mode
+            year_coefs = ridge.coef_[2 * n_teams + 1:]
+            self.year_baselines = {year: year_coefs[idx] for year, idx in self._year_to_idx.items()}
+            most_recent_year = max(years)
+            self.baseline = self.year_baselines[most_recent_year]
+            year_str = ", ".join(f"{y}: {self.year_baselines[y]:.1f}" for y in sorted(years))
+            logger.info(f"Year baselines: {year_str}")
+        else:
+            # Standard mode with intercept
+            self.baseline = ridge.intercept_
+            self.year_baselines = {}
+            logger.info(f"Baseline PPG: {self.baseline:.1f}")
+
         logger.info(f"Offensive adjustments: [{off_coefs.min():.1f}, {off_coefs.max():.1f}]")
         logger.info(f"Defensive adjustments: [{def_coefs.min():.1f}, {def_coefs.max():.1f}]")
         logger.info(f"Learned HFA: {self.hfa_coef:+.1f} pts")
@@ -249,6 +303,7 @@ class TotalsModel:
         home_team: str,
         away_team: str,
         weather_adjustment: float = 0.0,
+        year: Optional[int] = None,
     ) -> Optional[TotalsPrediction]:
         """Predict the total for a game.
 
@@ -256,6 +311,7 @@ class TotalsModel:
             home_team: Home team name
             away_team: Away team name
             weather_adjustment: Optional adjustment for weather (negative = lower total)
+            year: Optional year for year-specific baseline (uses most recent if not provided)
 
         Returns:
             TotalsPrediction with breakdown, or None if teams not found
@@ -274,11 +330,17 @@ class TotalsModel:
             logger.warning(f"Team not found: {away_team}")
             return None
 
+        # Get year-specific baseline (handles scoring environment shift)
+        if year is not None and year in self.year_baselines:
+            baseline = self.year_baselines[year]
+        else:
+            baseline = self.baseline  # Most recent year's baseline
+
         # SP+-style formula with learned HFA:
         # Each team's expected points = (their offense adj + opposing defense adj) / 2 + baseline
         # Home team gets additional HFA boost (typically +3-4 pts)
-        home_expected = self.baseline + (home.off_adjustment + away.def_adjustment) / 2 + self.hfa_coef
-        away_expected = self.baseline + (away.off_adjustment + home.def_adjustment) / 2
+        home_expected = baseline + (home.off_adjustment + away.def_adjustment) / 2 + self.hfa_coef
+        away_expected = baseline + (away.off_adjustment + home.def_adjustment) / 2
 
         predicted_total = home_expected + away_expected
 
@@ -288,7 +350,7 @@ class TotalsModel:
             predicted_total=predicted_total,
             home_expected=home_expected,
             away_expected=away_expected,
-            baseline=self.baseline,
+            baseline=baseline,
             weather_adjustment=weather_adjustment,
         )
 

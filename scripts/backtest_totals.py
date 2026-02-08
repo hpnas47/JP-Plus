@@ -81,7 +81,10 @@ def backtest_totals_season(
         games['away_team'].isin(fbs_set) &
         games['home_points'].notna() &
         games['away_points'].notna()
-    ]
+    ].copy()
+
+    # Add year column for year intercepts (handles scoring environment shift)
+    games['year'] = year
 
     # Merge betting data for over/under (both opening and closing)
     if 'over_under' in betting.columns:
@@ -148,6 +151,7 @@ def backtest_totals_season(
                 g['home_team'],
                 g['away_team'],
                 weather_adjustment=weather_adj,
+                year=year,
             )
 
             if pred:
