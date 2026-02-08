@@ -31,6 +31,8 @@ import pandas as pd
 import polars as pl
 from sklearn.linear_model import Ridge
 
+from src.adjustments.weather import WeatherAdjuster, WeatherConditions, WeatherAdjustment
+
 logger = logging.getLogger(__name__)
 
 
@@ -248,6 +250,49 @@ class TotalsModel:
             away_expected=away_expected,
             baseline=self.baseline,
             weather_adjustment=weather_adjustment,
+        )
+
+    def predict_total_with_weather(
+        self,
+        home_team: str,
+        away_team: str,
+        weather_data,
+        weather_adjuster: Optional[WeatherAdjuster] = None,
+    ) -> Optional[TotalsPrediction]:
+        """Predict total with automatic weather adjustment.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+            weather_data: CFBD GameWeather object or WeatherConditions
+            weather_adjuster: WeatherAdjuster instance (uses default if None)
+
+        Returns:
+            TotalsPrediction with weather adjustment applied
+        """
+        if weather_adjuster is None:
+            weather_adjuster = WeatherAdjuster()
+
+        # Convert API object to WeatherConditions if needed
+        if hasattr(weather_data, 'game_indoors'):
+            # It's a CFBD API GameWeather object
+            weather_adj = weather_adjuster.calculate_adjustment_from_api(weather_data)
+        elif isinstance(weather_data, WeatherConditions):
+            weather_adj = weather_adjuster.calculate_adjustment(weather_data)
+        else:
+            logger.warning(f"Unknown weather data type: {type(weather_data)}")
+            weather_adj = WeatherAdjustment(
+                total_adjustment=0.0,
+                wind_adjustment=0.0,
+                temperature_adjustment=0.0,
+                precipitation_adjustment=0.0,
+                is_indoor=False,
+            )
+
+        return self.predict_total(
+            home_team=home_team,
+            away_team=away_team,
+            weather_adjustment=weather_adj.total_adjustment,
         )
 
     def get_ratings_df(self) -> pd.DataFrame:
