@@ -11,7 +11,11 @@ import pandas as pd
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
 from src.adjustments.home_field import HomeFieldAdvantage
-from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
+from src.adjustments.situational import (
+    SituationalAdjuster,
+    SituationalFactors,
+    HistoricalRankings,
+)
 from src.adjustments.travel import TravelAdjuster
 from config.teams import TRIPLE_OPTION_TEAMS
 from src.adjustments.altitude import AltitudeAdjuster
@@ -30,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Elite FCS teams (based on 2022-2024 performance vs FBS)
 # These teams average +2 to +15 margin vs FBS (compared to +30 for average FCS)
 # Criteria: avg margin < 20 with multiple FBS games, or FCS playoff regulars
+# Note: James Madison (2022) and Sam Houston (2023) graduated to FBS
 ELITE_FCS_TEAMS = frozenset({
     # Top performers vs FBS (data-driven)
     "Sacramento State",
@@ -46,15 +51,13 @@ ELITE_FCS_TEAMS = frozenset({
     "Montana State",
     "Montana",
     # Traditional FCS powers (playoff regulars)
-    "James Madison",  # Now FBS but was elite FCS
-    "Sam Houston",  # Now FBS but was elite FCS
     "Villanova",
     "UC Davis",
     "Eastern Washington",
     "Northern Iowa",
     "Delaware",
     "Richmond",
-    "Furman",  # 2022 was outlier, generally competitive
+    "Furman",
 })
 
 
@@ -144,6 +147,7 @@ class PredictedSpread:
         Use self.spread directly for full precision (e.g., MAE calculation).
         """
         return {
+            "game_id": self.game_id,
             "home_team": self.home_team,
             "away_team": self.away_team,
             "spread": round(self.spread * 2) / 2,  # Round to 0.5 for display
@@ -423,6 +427,7 @@ class SpreadGenerator:
         neutral_site: bool = False,
         historical_rankings: Optional[HistoricalRankings] = None,
         game_date: Optional[datetime] = None,
+        game_id: Optional[int] = None,
     ) -> PredictedSpread:
         """Generate predicted spread for a matchup.
 
@@ -441,6 +446,7 @@ class SpreadGenerator:
             neutral_site: Whether game is at neutral site
             historical_rankings: Week-by-week historical rankings (for letdown spot detection)
             game_date: Date of current game (for rest day calculation)
+            game_id: CFBD game ID (for reliable Vegas line matching)
 
         Returns:
             PredictedSpread with full component breakdown
@@ -487,7 +493,6 @@ class SpreadGenerator:
             )
         else:
             # No schedule data - use empty factors
-            from src.adjustments.situational import SituationalFactors
             home_factors = SituationalFactors(team=home_team)
             away_factors = SituationalFactors(team=away_team)
 
@@ -568,6 +573,7 @@ class SpreadGenerator:
             home_win_probability=win_prob,
             components=components,
             confidence=confidence,
+            game_id=game_id,
         )
 
         # P2.11: Track adjustment stack for diagnostics
@@ -598,7 +604,12 @@ class SpreadGenerator:
         """Generate predictions for a full week of games.
 
         Args:
-            games: List of game dicts with 'home_team', 'away_team', 'neutral_site', 'start_date'
+            games: List of game dicts with keys:
+                - home_team (required): Home team name
+                - away_team (required): Away team name
+                - neutral_site (optional): Whether neutral site game (default False)
+                - start_date (optional): Game datetime for rest day calculation
+                - id or game_id (optional): CFBD game ID for Vegas line matching
             week: Week number
             schedule_df: Full season schedule (must have start_date for rest calculation)
             rankings: Team rankings (current week snapshot)
@@ -612,6 +623,8 @@ class SpreadGenerator:
         for game in games:
             # Extract game date for rest day calculation
             game_date = game.get("start_date")
+            # Extract game_id for reliable Vegas line matching (P0.1)
+            game_id = game.get("id") or game.get("game_id")
 
             pred = self.predict_spread(
                 home_team=game["home_team"],
@@ -622,6 +635,7 @@ class SpreadGenerator:
                 neutral_site=game.get("neutral_site", False),
                 historical_rankings=historical_rankings,
                 game_date=game_date,
+                game_id=game_id,
             )
             predictions.append(pred)
 
