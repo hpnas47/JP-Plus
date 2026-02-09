@@ -4,6 +4,65 @@
 
 ---
 
+## Session: February 9, 2026
+
+### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property
+
+---
+
+#### MAE Regression Investigation — RESOLVED
+**Impact: Identified and fixed bug causing MAE regression from 12.50 → 12.62**
+
+- **Symptom**: Backtest MAE was 12.62, but documented baseline is 12.50.
+- **Bisect approach**: Tested midpoint commits between `d456ee5` (known good) and HEAD.
+- **Root cause**: Commit `2ebfbe7` ("Add safeguards for misspelled team names") introduced a faulty FCS safeguard.
+
+**The Bug:**
+```python
+# Faulty logic:
+if not home_is_fbs and home_in_ratings:
+    home_is_fbs = True  # Skip FCS penalty
+```
+
+**Why it was wrong:** The safeguard assumed "if team is in ratings but not in fbs_teams, it must be a misspelled FBS team." But FCS teams that play FBS opponents (Chattanooga, Rhode Island, Fordham, etc.) ARE in `self.ratings` because the EFM generates ratings for all teams in play data. The safeguard was incorrectly skipping FCS penalties for legitimate FCS teams.
+
+**Evidence during backtest:**
+```
+WARNING - Team 'Chattanooga' is in ratings but NOT in fbs_teams. Possible data inconsistency — skipping FCS penalty.
+WARNING - Team 'Rhode Island' is in ratings but NOT in fbs_teams. Possible data inconsistency — skipping FCS penalty.
+... (dozens of legitimate FCS teams)
+```
+
+**Fix**: Removed the faulty safeguard. FCS penalty now correctly applies based on `fbs_teams` set membership only.
+
+| Metric | Before Fix | After Fix |
+|--------|-----------|-----------|
+| Core MAE | 12.62 | **12.50** |
+| 5+ Edge | 54.9% | 54.7% |
+
+- **Commit**: `94f95b1` (Fix FCS safeguard that incorrectly skipped penalties for legitimate FCS teams)
+- **Kept**: Warning logs for "not found in ratings" (47 FCS teams with minimal data).
+- **Removed**: Faulty "in ratings but not fbs_teams = misspelled" assumption (-18 lines).
+
+---
+
+#### Smoothed Correlated Stack Property — COMMITTED
+**Impact: Better diagnostics for raw vs post-smoothing environmental adjustment values**
+
+Added `smoothed_correlated_stack` property to `SpreadComponents`:
+- `correlated_stack`: Raw HFA + travel + altitude (pre-smoothing, for transparency)
+- `smoothed_correlated_stack`: Post-soft-cap value from aggregator (what actually hit the spread)
+- `env_score` field: Stores `aggregated.env_score`
+
+Updated:
+- `_determine_confidence()`: Uses smoothed stack for decisions
+- Extreme stack warnings: Show both raw and smoothed values
+- `to_dict()`: Exports both `correlated_stack` and `correlated_stack_smoothed`
+
+**Commit**: `cc5cec4` (Add smoothed_correlated_stack property to SpreadComponents)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
