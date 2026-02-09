@@ -37,6 +37,7 @@ import logging
 import os
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -222,47 +223,18 @@ def capture_odds(
             'credits_remaining': snapshot.credits_remaining,
         }
 
-    # Store snapshot
-    # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve snapshot_id (avoids orphaned lines)
-    # P1.1: Store snapshot_type as just "opening"/"closing" with season/week in dedicated columns
+    # P0: Wrap entire insertion in explicit transaction for all-or-nothing semantics
+    # If any insert fails, the entire batch is rolled back (no partial writes)
     cursor = conn.cursor()
     snapshot_label = f"{snapshot_type}_{year}_week{week}"
 
-    cursor.execute("""
-        INSERT INTO odds_snapshots
-        (snapshot_type, snapshot_time, captured_at, credits_used, season, week)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(snapshot_type, snapshot_time) DO UPDATE SET
-            captured_at = excluded.captured_at,
-            credits_used = excluded.credits_used,
-            season = excluded.season,
-            week = excluded.week
-    """, (
-        snapshot_label,
-        snapshot.timestamp.isoformat(),
-        datetime.now(timezone.utc).isoformat(),  # P2.3: UTC-normalized timestamp
-        snapshot.credits_used,
-        year,
-        week,
-    ))
-
-    # P0.2: Retrieve the actual snapshot_id (lastrowid may be 0 on UPDATE)
-    cursor.execute(
-        "SELECT id FROM odds_snapshots WHERE snapshot_type = ? AND snapshot_time = ?",
-        (snapshot_label, snapshot.timestamp.isoformat())
-    )
-    snapshot_id = cursor.fetchone()[0]
-
-    # Store lines
-    # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve row identity
-    games_seen = set()
-    spread_anomalies = 0
+    # Pre-filter lines with null spreads before starting transaction
+    valid_lines = []
     null_spread_skipped = 0
-    insert_errors = 0
+    spread_anomalies = 0
 
     for line in snapshot.lines:
         # P0: Filter out lines with null spreads (table requires NOT NULL)
-        # API occasionally returns lines without spreads (futures, props, etc.)
         if line.spread_home is None or line.spread_away is None:
             null_spread_skipped += 1
             logger.debug(
@@ -270,8 +242,6 @@ def capture_odds(
                 f"({line.sportsbook}): home={line.spread_home}, away={line.spread_away}"
             )
             continue
-
-        games_seen.add(line.game_id)
 
         # P1.3: Spread consistency check (home + away should be near-zero)
         if abs(line.spread_home + line.spread_away) > 0.5:
@@ -282,8 +252,46 @@ def capture_odds(
                 f"sum={line.spread_home + line.spread_away:.1f}"
             )
 
-        # P0: Wrap INSERT in try/except so one bad line doesn't abort the batch
-        try:
+        valid_lines.append(line)
+
+    if null_spread_skipped > 0:
+        logger.warning(f"P0: Filtered out {null_spread_skipped} lines with null spreads")
+
+    # Begin explicit transaction
+    try:
+        cursor.execute("BEGIN")
+
+        # Store snapshot
+        # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve snapshot_id
+        cursor.execute("""
+            INSERT INTO odds_snapshots
+            (snapshot_type, snapshot_time, captured_at, credits_used, season, week)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_type, snapshot_time) DO UPDATE SET
+                captured_at = excluded.captured_at,
+                credits_used = excluded.credits_used,
+                season = excluded.season,
+                week = excluded.week
+        """, (
+            snapshot_label,
+            snapshot.timestamp.isoformat(),
+            datetime.now(timezone.utc).isoformat(),
+            snapshot.credits_used,
+            year,
+            week,
+        ))
+
+        # P0.2: Retrieve the actual snapshot_id (lastrowid may be 0 on UPDATE)
+        cursor.execute(
+            "SELECT id FROM odds_snapshots WHERE snapshot_type = ? AND snapshot_time = ?",
+            (snapshot_label, snapshot.timestamp.isoformat())
+        )
+        snapshot_id = cursor.fetchone()[0]
+
+        # Store all valid lines
+        games_seen = set()
+        for line in valid_lines:
+            games_seen.add(line.game_id)
             cursor.execute("""
                 INSERT INTO odds_lines
                 (snapshot_id, game_id, sportsbook, home_team, away_team,
@@ -309,23 +317,18 @@ def capture_odds(
                 line.commence_time.isoformat() if line.commence_time else None,
                 line.last_update.isoformat() if line.last_update else None,
             ))
-        except sqlite3.IntegrityError as e:
-            insert_errors += 1
-            logger.error(
-                f"Failed to insert line: {line.away_team} @ {line.home_team} "
-                f"({line.sportsbook}): {e}"
-            )
 
-    conn.commit()
+        # All inserts succeeded - commit transaction
+        conn.commit()
+        logger.info(f"Transaction committed: {len(valid_lines)} lines for {len(games_seen)} games")
 
-    # Log filtering/error summary
-    if null_spread_skipped > 0:
-        logger.warning(f"P0: Skipped {null_spread_skipped} lines with null spreads")
-    if insert_errors > 0:
-        logger.error(f"P0: {insert_errors} lines failed to insert (see errors above)")
+    except Exception as e:
+        # Any error - rollback entire transaction
+        conn.rollback()
+        logger.error(f"Transaction rolled back due to error: {e}")
+        raise  # Re-raise so caller knows capture failed
 
-    lines_stored = len(snapshot.lines) - null_spread_skipped - insert_errors
-    logger.info(f"Stored {lines_stored} lines for {len(games_seen)} games")
+    # Log summary (games_seen is set in the try block, only reached on success)
     if spread_anomalies > 0:
         logger.warning(f"P1.3: {spread_anomalies} spread anomalies detected (home+away != 0)")
     logger.info(f"Credits remaining: {snapshot.credits_remaining}")
@@ -335,10 +338,9 @@ def capture_odds(
         'year': year,
         'week': week,
         'games': len(games_seen),
-        'lines': lines_stored,
+        'lines': len(valid_lines),
         'lines_from_api': len(snapshot.lines),
         'null_spread_skipped': null_spread_skipped,
-        'insert_errors': insert_errors,
         'credits_remaining': snapshot.credits_remaining,
     }
 
@@ -429,10 +431,10 @@ def main():
     if args.preview:
         preview_odds(client, year=args.year, week=args.week)
     else:
-        conn = init_database()
+        # P0: Use closing() to ensure conn.close() even if capture_odds() raises
         snapshot_type = "opening" if args.opening else "closing"
-        result = capture_odds(client, conn, snapshot_type, year=args.year, week=args.week)
-        conn.close()
+        with closing(init_database()) as conn:
+            result = capture_odds(client, conn, snapshot_type, year=args.year, week=args.week)
 
         print(f"\n{snapshot_type.title()} lines captured:")
         print(f"  Season: {result['year']} Week {result['week']}")
@@ -440,8 +442,6 @@ def main():
         print(f"  Lines stored: {result['lines']}")
         if result.get('null_spread_skipped', 0) > 0:
             print(f"  ⚠ Skipped (null spread): {result['null_spread_skipped']}")
-        if result.get('insert_errors', 0) > 0:
-            print(f"  ⚠ Insert errors: {result['insert_errors']}")
         print(f"  Credits remaining: {result['credits_remaining']}")
 
 

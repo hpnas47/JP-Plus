@@ -505,6 +505,39 @@ DataNotAvailableError: No games found for 2025 week 19. The CFB season typically
 
 ---
 
+#### Transaction Safety for Odds Capture — COMMITTED
+**Impact: Prevents partial writes and ensures connection cleanup on error**
+
+**The Bug:** If `capture_odds()` raised an exception (API error, IntegrityError), `conn.close()` was never called and partial writes could be left in an inconsistent state.
+
+**Fix (two parts):**
+1. **`contextlib.closing()`**: Wrap database connection to ensure `close()` even on exception
+2. **Explicit transaction**: `BEGIN`/`COMMIT`/`ROLLBACK` for all-or-nothing semantics
+
+**Before:**
+```python
+conn = init_database()
+result = capture_odds(...)  # If this raises, conn never closed
+conn.close()
+```
+
+**After:**
+```python
+with closing(init_database()) as conn:
+    result = capture_odds(...)  # conn.close() guaranteed
+```
+
+**Transaction semantics:**
+- Pre-filter lines with null spreads before starting transaction
+- `BEGIN` explicit transaction
+- Insert snapshot + all lines
+- On success: `COMMIT` (all lines saved)
+- On any error: `ROLLBACK` (no partial writes) + re-raise
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
