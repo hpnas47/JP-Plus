@@ -118,6 +118,20 @@
 - **MODEL_EXPLAINER.md** (JP-Plus-Docs only): Synced all per-year ATS tables, MAE/RMSE table, CLV core season numbers, added 2025 Season Performance section, updated HFA description with global offset. All numbers now match MODEL_ARCHITECTURE.md.
 - Both repos pushed: JP-Plus (code) and JP-Plus-Docs (docs-only).
 
+#### Open Items & Parking Lot Cleanup
+**Impact: 4 items closed, documentation reflects actual state of experiments**
+
+Updated MODEL_ARCHITECTURE.md Open Items and Parking Lot sections:
+
+| Item | Status | Rationale |
+|------|--------|-----------|
+| Improve situational adjustment calibration | **DONE** | HFA offset (-0.50) + stack smoothing |
+| Soft cap on asymmetric GT | **INVESTIGATED, NOT IMPLEMENTING** | All GT weight variants degraded 5+ Edge |
+| Reduce turnover weight for 3+ Edge | **INVESTIGATED, KEEPING 10%** | 3+/5+ Edge divergence trap; 5+ is binding |
+| EV-weighted performance metric | **PARTIALLY IMPLEMENTED** | CLV tracking done; Kelly sizing remains open |
+
+Remaining open: Real-time line movement, automated betting recommendations, coaching pedigree normalization.
+
 #### Totals Model Built From Scratch — NEW PRODUCTION MODULE
 **Impact: New over/under prediction capability with 52.8% Core 5+ Edge ATS**
 
