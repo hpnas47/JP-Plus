@@ -1119,7 +1119,74 @@ predicted_total = home_expected + away_expected
 ### Low Priority
 - [ ] Real-time line movement tracking
 - [ ] Expected value calculations with Kelly criterion
-- [ ] Automated betting recommendations
+
+### 2026 Production Planning
+
+#### Bet Execution Automation
+
+**Problem:** Major US sportsbooks (DraftKings, FanDuel, BetMGM, Caesars) prohibit API-based betting. All wagers must be placed manually through their apps/websites, creating friction between model signal and bet execution.
+
+**Solution: Discord-Based Alert System with Deep Links**
+
+1. **Discord Bot Integration**
+   - Model generates betting signals (Thursday weather watchlist, weekly spread picks)
+   - Bot posts to private Discord channel with formatted alerts
+   - Alerts include: matchup, JP+ line, Vegas line, edge, recommended stake
+   - Supports role-based notifications (@weather-bets, @spread-bets, @5pt-edge)
+
+2. **Mobile Deep Links**
+   - Generate sportsbook-specific deep links that open directly to the bet slip
+   - DraftKings: `draftkings://sportsbook/event/{event_id}`
+   - FanDuel: `fanduel://sportsbook/event/{event_id}`
+   - One-tap from Discord notification → pre-populated bet slip
+   - Reduces execution time from ~60 seconds to ~10 seconds
+
+3. **Execution Tracking**
+   - Bot tracks which alerts were acted on (reaction-based confirmation)
+   - Logs actual bet placement for P&L tracking
+   - Compares intended vs actual execution for slippage analysis
+
+**Implementation:** `src/notifications/discord_bot.py`, `src/notifications/deep_links.py`
+
+#### API Betting Exchanges (Full Automation)
+
+**Opportunity:** Sports betting exchanges allow programmatic order placement, enabling true automation without manual intervention.
+
+**Platforms to Evaluate:**
+
+1. **Sporttrade**
+   - US-regulated exchange (NJ, CO)
+   - REST API for order placement
+   - Spread betting via limit orders
+   - Commission: ~2% on winnings
+   - **Key question:** Liquidity depth on CFB spreads/totals. NFL likely deep, CFB may be thin.
+
+2. **ProphetX (Prophet Exchange)**
+   - US-regulated (NJ)
+   - WebSocket API for real-time odds
+   - Supports spread and total markets
+   - Commission: ~2% on winnings
+   - **Key question:** Can we get filled at our target price, or do we move the market?
+
+3. **Novig**
+   - Peer-to-peer model
+   - Lower margins than traditional books
+   - API access available
+   - **Key question:** Counterparty availability for CFB markets
+
+**Liquidity Analysis Required:**
+- Monitor order book depth for 20+ CFB games across 4 weeks
+- Measure bid-ask spread at various stake sizes ($100, $500, $1000)
+- Track fill rates and slippage on simulated orders
+- Compare effective odds to DK/FD closing lines
+
+**If Liquidity Sufficient:**
+- Full automation pipeline: Model signal → API order → Execution confirmation
+- Kelly-sized stakes based on edge magnitude
+- Real-time P&L dashboard
+- Automatic hedging on line movement
+
+**Implementation:** `src/betting/exchange_client.py`, `src/betting/order_manager.py`
 
 ### Parking Lot (Needs Evidence Before Implementation)
 - [x] **Pace-based margin scaling** - Theory: Fast games have more plays, so efficiency edges should compound into larger margins. JP+ should scale predicted margins by expected pace. **Status:** INVESTIGATED, NOT IMPLEMENTING. Empirical analysis (2023-2025) shows the theory doesn't match reality: (1) Fast games actually have smaller margins (R²=2.2% correlation), (2) JP+ over-predicts fast game margins (mean error -2.1), not under-predicts, (3) ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Efficiency metrics implicitly capture tempo. Adding pace scaling would add complexity without benefit.
