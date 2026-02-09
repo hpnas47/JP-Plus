@@ -86,6 +86,10 @@ class AggregatedAdjustments:
     raw_rest: float = 0.0
     raw_consecutive_road: float = 0.0
 
+    # Pro-rata smoothing support (for accurate per-bucket reporting)
+    env_smoothing_factor: float = 1.0  # env_score / raw_env_stack (for pro-rata allocation)
+    situational_score: float = 0.0  # Pure situational: smoothed rest/consec + mental + boosts
+
     # Pre-cap raw total (for debugging)
     raw_total: float = 0.0
     env_was_capped: bool = False  # True if soft cap was applied to env stack
@@ -97,6 +101,8 @@ class AggregatedAdjustments:
             "net_adjustment": self.net_adjustment,
             "raw_env_stack": self.raw_env_stack,
             "env_score": self.env_score,
+            "env_smoothing_factor": self.env_smoothing_factor,
+            "situational_score": self.situational_score,
             "mental_bucket": self.mental_bucket,
             "boosts_bucket": self.boosts_bucket,
             "raw_hfa": self.raw_hfa,
@@ -263,6 +269,13 @@ class AdjustmentAggregator:
                 f"(threshold={self.env_soft_cap}, excess={excess:.2f})"
             )
 
+        # Calculate pro-rata smoothing factor for per-component allocation
+        # This allows SpreadGenerator to report accurate post-smoothing values
+        if abs(raw_stack) > 0.001:
+            result.env_smoothing_factor = result.env_score / raw_stack
+        else:
+            result.env_smoothing_factor = 1.0
+
         # =====================================================================
         # STEP 4: Mental Bucket (Standard Smoothing)
         # Components: letdown, lookahead, sandwich
@@ -310,6 +323,21 @@ class AdjustmentAggregator:
         # Away team rivalry boost (favor away, hurt home)
         if away_factors.rivalry_boost > 0:
             result.boosts_bucket -= away_factors.rivalry_boost
+
+        # =====================================================================
+        # STEP 5.5: Calculate Pure Situational Score
+        # This is what SpreadGenerator should report as "situational"
+        # Includes: rest, consecutive_road (both pro-rata smoothed), mental, boosts
+        # Excludes: HFA, travel, altitude (those are separate components)
+        # =====================================================================
+        smoothed_rest = result.raw_rest * result.env_smoothing_factor
+        smoothed_consec = result.raw_consecutive_road * result.env_smoothing_factor
+        result.situational_score = (
+            smoothed_rest
+            + smoothed_consec
+            + result.mental_bucket
+            + result.boosts_bucket
+        )
 
         # =====================================================================
         # STEP 6: Final Calculation

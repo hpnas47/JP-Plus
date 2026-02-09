@@ -76,21 +76,21 @@ class SpreadComponents:
 
     @property
     def correlated_stack(self) -> float:
-        """Sum of RAW correlated adjustments (HFA + travel + altitude).
+        """Sum of venue-related adjustments (HFA + travel + altitude).
 
-        These are the pre-smoothing values for diagnostics/transparency.
-        For the actual values that hit the spread, use smoothed_correlated_stack.
+        These are POST-smoothing values (pro-rata allocation from env soft cap).
+        They represent what actually hit the spread for these three components.
         """
         return self.home_field + self.travel + self.altitude
 
     @property
-    def smoothed_correlated_stack(self) -> float:
-        """Post-smoothing environmental stack (HFA + travel + altitude after soft cap).
+    def full_env_stack(self) -> float:
+        """Full environmental stack after soft cap (HFA + travel + altitude + rest + consec).
 
-        This is what actually hit the spread. Use this for:
+        This is env_score from the aggregator. Use this for:
         - _determine_confidence() decisions
         - Extreme-stack warnings
-        - Any logic that should reflect actual spread impact
+        - Any logic that should reflect total environmental impact
         """
         return self.env_score
 
@@ -157,8 +157,8 @@ class PredictedSpread:
             "situational": self.components.situational,
             "travel": self.components.travel,
             "altitude": self.components.altitude,
-            "correlated_stack": self.components.correlated_stack,  # P2.11: raw HFA+travel+altitude
-            "correlated_stack_smoothed": self.components.smoothed_correlated_stack,  # Post-cap value
+            "correlated_stack": self.components.correlated_stack,  # HFA+travel+altitude (post-smoothing)
+            "full_env_stack": self.components.full_env_stack,  # Full env stack (includes rest, consec)
             "special_teams": self.components.special_teams,
             "finishing_drives": self.components.finishing_drives,
             "fcs_adj": self.components.fcs_adjustment,
@@ -404,7 +404,7 @@ class SpreadGenerator:
             score += 1
 
         # Large correlated stacks reduce confidence (use smoothed, not raw)
-        if abs(components.smoothed_correlated_stack) <= 4:
+        if abs(components.full_env_stack) <= 4:
             score += 1
 
         if score >= 3:
@@ -501,21 +501,17 @@ class SpreadGenerator:
             away_factors=away_factors,
         )
 
-        # Store components (for backward compatibility with SpreadComponents)
-        # The aggregator uses unified env stack, so we extract raw values for display
-        components.home_field = aggregated.raw_hfa
-        components.travel = aggregated.raw_travel
-        components.altitude = aggregated.raw_altitude
-        components.env_score = aggregated.env_score  # Post-smoothing for confidence/warnings
-        # Situational = everything in net_adjustment except HFA, travel, altitude
-        # This includes: rest, consecutive_road, mental factors, and boosts
-        # Plus any soft cap reduction applied to the env stack
-        components.situational = (
-            aggregated.net_adjustment
-            - aggregated.raw_hfa
-            - aggregated.raw_travel
-            - aggregated.raw_altitude
-        )
+        # Store components with pro-rata smoothing applied
+        # The aggregator applies soft-cap to env stack; we use env_smoothing_factor
+        # to allocate the reduction proportionally across HFA, travel, altitude
+        factor = aggregated.env_smoothing_factor
+        components.home_field = aggregated.raw_hfa * factor
+        components.travel = aggregated.raw_travel * factor
+        components.altitude = aggregated.raw_altitude * factor
+        components.env_score = aggregated.env_score  # Post-smoothing env total
+        # Situational is now a clean value from aggregator (rest, consec, mental, boosts)
+        # No longer polluted by smoothing delta residuals
+        components.situational = aggregated.situational_score
 
         # Special teams differential (P2.7: applied as adjustment layer)
         components.special_teams = self.special_teams.get_matchup_differential(
@@ -580,7 +576,7 @@ class SpreadGenerator:
             self.diagnostics.add_game(stack)
             if stack.is_extreme_stack:
                 # Use smoothed stack for warning (what actually hit the spread)
-                smoothed = components.smoothed_correlated_stack
+                smoothed = components.full_env_stack
                 raw = components.correlated_stack
                 logger.warning(
                     f"Extreme adjustment stack (smoothed={smoothed:.1f}, raw={raw:.1f} pts): "
