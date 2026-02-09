@@ -601,6 +601,56 @@ def is_garbage_time(...):
 
 ---
 
+#### Prevent Caller Mutation in run_backtest() — COMMITTED
+**Impact: Fixes sweep cache pollution from trajectory year merging**
+
+**The Bug:** `run_backtest()` calls `season_data.update(traj_data)` to merge trajectory years. When called from `run_sweep()`, the same `cached_data` dict is reused across iterations. After iteration 1, `cached_data` contains trajectory years that weren't in the original fetch.
+
+**Fix:** Shallow copy before mutating:
+```python
+if season_data is None:
+    season_data = fetch_all_season_data(...)
+else:
+    # Shallow copy to avoid mutating caller's dict
+    season_data = {**season_data}
+```
+
+**Commit**: `ba2e4c5` (included in SeasonData refactor)
+
+---
+
+#### Refactor Season Data to NamedTuple — COMMITTED
+**Impact: Eliminates highest maintenance risk in codebase**
+
+**The Problem:** Season data was a raw tuple of 10 elements unpacked by length-checking in 3+ locations. Adding a new field required updating all sites simultaneously or wrong DataFrame gets assigned to wrong variable.
+
+**Solution:** `SeasonData` NamedTuple with named fields:
+```python
+class SeasonData(NamedTuple):
+    games_df: pl.DataFrame
+    betting_df: pl.DataFrame
+    plays_df: pl.DataFrame
+    turnover_df: pl.DataFrame
+    priors: Optional[PreseasonPriors]
+    efficiency_plays_df: pl.DataFrame
+    fbs_teams: set[str]
+    st_plays_df: pl.DataFrame
+    historical_rankings: Optional[HistoricalRankings]
+    team_conferences: Optional[dict[str, str]]
+```
+
+**Benefits:**
+- Adding a field = 1 change (definition), not 4+ unpacking sites
+- No more `if len(tuple) >= 10` / `elif len == 9` conditionals
+- Named access prevents positional bugs: `sd.games_df` not `sd[0]`
+- NamedTuple is picklable (multiprocessing compatible)
+
+**Backtest verified:** MAE 12.50, ATS 52.2%, 5+ Edge 54.7% (unchanged)
+
+**Commit**: `ba2e4c5` (Refactor season data from raw tuple to SeasonData NamedTuple)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
