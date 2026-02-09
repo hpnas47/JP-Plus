@@ -72,16 +72,27 @@ class SpreadComponents:
     fcs_adjustment: float = 0.0  # Penalty when FBS plays FCS
     pace_adjustment: float = 0.0  # Compression for triple-option teams
     qb_adjustment: float = 0.0  # Adjustment when starting QB is out
+    env_score: float = 0.0  # Post-smoothing environmental stack (from aggregator)
 
     @property
     def correlated_stack(self) -> float:
-        """Sum of correlated adjustments (HFA + travel + altitude).
+        """Sum of RAW correlated adjustments (HFA + travel + altitude).
 
-        These adjustments are correlated because they all favor the home team
-        in the same scenarios. P2.11 tracks these to detect potential over-
-        penalization of away teams in extreme cases.
+        These are the pre-smoothing values for diagnostics/transparency.
+        For the actual values that hit the spread, use smoothed_correlated_stack.
         """
         return self.home_field + self.travel + self.altitude
+
+    @property
+    def smoothed_correlated_stack(self) -> float:
+        """Post-smoothing environmental stack (HFA + travel + altitude after soft cap).
+
+        This is what actually hit the spread. Use this for:
+        - _determine_confidence() decisions
+        - Extreme-stack warnings
+        - Any logic that should reflect actual spread impact
+        """
+        return self.env_score
 
 
 @dataclass
@@ -146,7 +157,8 @@ class PredictedSpread:
             "situational": self.components.situational,
             "travel": self.components.travel,
             "altitude": self.components.altitude,
-            "correlated_stack": self.components.correlated_stack,  # P2.11: HFA+travel+altitude
+            "correlated_stack": self.components.correlated_stack,  # P2.11: raw HFA+travel+altitude
+            "correlated_stack_smoothed": self.components.smoothed_correlated_stack,  # Post-cap value
             "special_teams": self.components.special_teams,
             "finishing_drives": self.components.finishing_drives,
             "fcs_adj": self.components.fcs_adjustment,
@@ -391,8 +403,8 @@ class SpreadGenerator:
         if abs_situational <= 1:
             score += 1
 
-        # Large correlated stacks reduce confidence
-        if abs(components.correlated_stack) <= 4:
+        # Large correlated stacks reduce confidence (use smoothed, not raw)
+        if abs(components.smoothed_correlated_stack) <= 4:
             score += 1
 
         if score >= 3:
@@ -494,6 +506,7 @@ class SpreadGenerator:
         components.home_field = aggregated.raw_hfa
         components.travel = aggregated.raw_travel
         components.altitude = aggregated.raw_altitude
+        components.env_score = aggregated.env_score  # Post-smoothing for confidence/warnings
         # Situational = everything in net_adjustment except HFA, travel, altitude
         # This includes: rest, consecutive_road, mental factors, and boosts
         # Plus any soft cap reduction applied to the env stack
@@ -566,8 +579,11 @@ class SpreadGenerator:
             stack = extract_stack_from_prediction(prediction)
             self.diagnostics.add_game(stack)
             if stack.is_extreme_stack:
+                # Use smoothed stack for warning (what actually hit the spread)
+                smoothed = components.smoothed_correlated_stack
+                raw = components.correlated_stack
                 logger.warning(
-                    f"Extreme adjustment stack ({stack.correlated_stack:.1f} pts): "
+                    f"Extreme adjustment stack (smoothed={smoothed:.1f}, raw={raw:.1f} pts): "
                     f"{away_team} @ {home_team} "
                     f"(HFA={components.home_field:.1f}, travel={components.travel:.1f}, "
                     f"alt={components.altitude:.1f})"
