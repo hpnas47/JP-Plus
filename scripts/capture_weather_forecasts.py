@@ -5,14 +5,24 @@ Fetches weather forecasts from tomorrow.io API for all outdoor FBS games
 scheduled in the next 7 days. Stores forecasts in SQLite for use in
 totals predictions.
 
+Environment:
+    TOMORROW_IO_API_KEY: Tomorrow.io API key (required)
+                         Get one at: https://www.tomorrow.io/
+
 RATE LIMITS (tomorrow.io free tier):
     - 25 calls/hour, 500 calls/day
     - For ~60-70 outdoor games, run in batches of 20 with --limit 20
     - Use --delay to increase wait time between calls (default: 3s)
 
 Usage:
+    # Set API key first
+    export TOMORROW_IO_API_KEY="your_key_here"
+
     # Capture forecasts for this week's games (respecting rate limits)
     python3 scripts/capture_weather_forecasts.py --limit 20
+
+    # Or pass API key directly
+    python3 scripts/capture_weather_forecasts.py --api-key your_key --limit 20
 
     # Capture for specific week
     python3 scripts/capture_weather_forecasts.py --year 2025 --week 10
@@ -26,6 +36,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -41,9 +52,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-# Tomorrow.io API key
-TOMORROW_IO_API_KEY = "kJlyTQ9lffZXbJlARF5zPwcMHymvxktU"
 
 
 def refresh_venues(cfbd_client: CFBDClient, tomorrow_client: TomorrowIOClient) -> int:
@@ -294,12 +302,22 @@ def main():
         "--delay", type=float, default=3.0,
         help="Seconds between API calls (default: 3.0, free tier safe)"
     )
+    parser.add_argument(
+        "--api-key", type=str, default=None,
+        help="Tomorrow.io API key (or set TOMORROW_IO_API_KEY env var)"
+    )
     args = parser.parse_args()
+
+    # Get API key from args or environment
+    api_key = args.api_key or os.environ.get("TOMORROW_IO_API_KEY")
+    if not api_key:
+        logger.error("API key required. Set TOMORROW_IO_API_KEY env var or use --api-key")
+        sys.exit(1)
 
     # Initialize clients
     cfbd_client = CFBDClient()
     tomorrow_client = TomorrowIOClient(
-        api_key=TOMORROW_IO_API_KEY,
+        api_key=api_key,
         rate_limit_delay=args.delay,
     )
 

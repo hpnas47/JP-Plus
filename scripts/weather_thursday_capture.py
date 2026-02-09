@@ -8,9 +8,17 @@ This script runs the full Thursday "Setup" capture workflow:
 
 Schedule this to run Thursday mornings before limits increase at books.
 
+Environment:
+    TOMORROW_IO_API_KEY: Tomorrow.io API key (required)
+                         Get one at: https://www.tomorrow.io/
+
 Usage:
-    # Manual run
+    # Manual run (with env var set)
+    export TOMORROW_IO_API_KEY="your_key_here"
     python3 scripts/weather_thursday_capture.py
+
+    # Or pass API key directly
+    python3 scripts/weather_thursday_capture.py --api-key your_key_here
 
     # With specific week (otherwise auto-detects)
     python3 scripts/weather_thursday_capture.py --week 14
@@ -19,11 +27,12 @@ Usage:
     python3 scripts/weather_thursday_capture.py --dry-run
 
 Cron example (every Thursday at 6 AM):
-    0 6 * * 4 cd /path/to/project && python3 scripts/weather_thursday_capture.py >> logs/weather_thursday.log 2>&1
+    0 6 * * 4 cd /path/to/project && TOMORROW_IO_API_KEY=xxx python3 scripts/weather_thursday_capture.py
 """
 
 import argparse
 import logging
+import os
 import sys
 import time
 from datetime import datetime
@@ -51,9 +60,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Tomorrow.io API key
-TOMORROW_IO_API_KEY = "kJlyTQ9lffZXbJlARF5zPwcMHymvxktU"
 
 # Rate limit settings
 BATCH_SIZE = 20  # Games per batch (stay under 25/hour limit)
@@ -619,7 +625,17 @@ def main():
         "--saturday", action="store_true",
         help="Saturday confirmation run (compares to Thursday forecasts)"
     )
+    parser.add_argument(
+        "--api-key", type=str, default=None,
+        help="Tomorrow.io API key (or set TOMORROW_IO_API_KEY env var)"
+    )
     args = parser.parse_args()
+
+    # Get API key from args or environment
+    api_key = args.api_key or os.environ.get("TOMORROW_IO_API_KEY")
+    if not api_key:
+        logger.error("API key required. Set TOMORROW_IO_API_KEY env var or use --api-key")
+        sys.exit(1)
 
     # Auto-detect year/week if not specified
     if args.year is None or args.week is None:
@@ -631,7 +647,7 @@ def main():
     # Initialize clients
     cfbd_client = CFBDClient()
     tomorrow_client = TomorrowIOClient(
-        api_key=TOMORROW_IO_API_KEY,
+        api_key=api_key,
         rate_limit_delay=3.0,  # 3 seconds between calls
     )
 
