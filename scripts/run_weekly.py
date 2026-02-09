@@ -23,7 +23,6 @@ sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
 from src.api.cfbd_client import CFBDClient, DataNotAvailableError
-from src.data.processors import DataProcessor
 from src.data.validators import DataValidator
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
@@ -447,14 +446,6 @@ def run_predictions(
         if current_games_df.empty:
             raise ValueError(f"No game data found for {year} through week {week-1}")
 
-        # Process data
-        logger.info("Processing game data...")
-        processor = DataProcessor()
-        processed_games = processor.process_games(
-            current_games_df,
-            apply_recency_weights=True,
-        )
-
         # Fetch historical data for HFA (use current year + historical)
         logger.info("Fetching historical data for HFA calculation...")
         historical_years = [y for y in settings.historical_years if y < year]
@@ -501,13 +492,13 @@ def run_predictions(
         logger.info("Calculating special teams ratings...")
         special_teams = SpecialTeamsModel()
         for team in team_ratings.keys():
-            special_teams.calculate_from_game_stats(team, processed_games)
+            special_teams.calculate_from_game_stats(team, current_games_df)
 
         # Finishing drives (simplified)
         logger.info("Calculating finishing drives ratings...")
         finishing = FinishingDrivesModel()
         for team in team_ratings.keys():
-            finishing.calculate_from_game_stats(team, processed_games)
+            finishing.calculate_from_game_stats(team, current_games_df)
 
         # Initialize adjusters
         situational = SituationalAdjuster()

@@ -28,9 +28,6 @@ class Settings:
     ridge_alpha: float = field(
         default_factory=lambda: float(os.getenv("RIDGE_ALPHA", "10"))
     )
-    recency_decay: float = field(
-        default_factory=lambda: float(os.getenv("RECENCY_DECAY", "0.005"))
-    )
 
     # Garbage Time Thresholds (points differential by quarter)
     garbage_time_q1: int = 28
