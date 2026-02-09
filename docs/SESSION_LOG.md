@@ -412,7 +412,7 @@ Configured SSH authentication for GitHub pushes:
 
 **Why minimal impact:** FCS teams have very few plays (only vs FBS on defense), so their ratings cluster near league average due to shrinkage. They weren't extreme outliers that would significantly skew mean/std.
 
-**Commit**: (pending)
+**Commit**: `e6dac28` (Fix FCS teams included in normalization calculation)
 
 ---
 
