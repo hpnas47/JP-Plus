@@ -1329,6 +1329,11 @@ class PreseasonPriors:
             is_new_hc = forget_factor > 0 or coach_name != ""
             coaching_adj = 0.0
 
+            # Default extremity scale (used for coaching adjustment tracking)
+            # Must be initialized before branching to avoid NameError if triple-option
+            # team has a coaching change (triple-option branch doesn't set this)
+            extremity_talent_scale = 1.0
+
             # Calculate combined rating
             if team in prior_sp and team in talent_normalized:
                 # Have both sources - apply potentially adjusted weights
