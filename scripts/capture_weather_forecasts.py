@@ -54,6 +54,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _get_default_game_time() -> datetime:
+    """Get default game time for TBD games (Saturday noon ET).
+
+    Most CFB games are Saturday. If start_date is missing, assume
+    the upcoming Saturday at noon ET (17:00 UTC) rather than an
+    arbitrary offset from now.
+
+    Returns:
+        datetime: Next Saturday at 17:00 UTC (noon ET)
+    """
+    now = datetime.now(timezone.utc)
+    # Days until Saturday (Saturday = 5 in weekday())
+    days_until_saturday = (5 - now.weekday()) % 7
+    # If today is Saturday and it's past noon, target next Saturday
+    if days_until_saturday == 0 and now.hour >= 17:
+        days_until_saturday = 7
+    # If today is Sunday, target next Saturday (6 days)
+    if now.weekday() == 6:
+        days_until_saturday = 6
+
+    saturday = now.date() + timedelta(days=days_until_saturday)
+    # Noon ET = 17:00 UTC (EST) or 16:00 UTC (EDT)
+    # Use 17:00 UTC as conservative default
+    return datetime(saturday.year, saturday.month, saturday.day, 17, 0, 0, tzinfo=timezone.utc)
+
+
 def refresh_venues(cfbd_client: CFBDClient, tomorrow_client: TomorrowIOClient) -> int:
     """Refresh venue database with coordinates from CFBD.
 
@@ -181,14 +207,16 @@ def capture_forecasts(
                     # CFBD returns UTC times with "Z" suffix
                     game_time = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
                 except ValueError:
-                    game_time = datetime.now(timezone.utc) + timedelta(days=2)
+                    game_time = _get_default_game_time()
+                    logger.debug(f"  {away_team} @ {home_team}: Invalid start_date, using Saturday default")
             else:
                 game_time = start_date
                 # Ensure timezone-aware (assume UTC if naive)
                 if game_time.tzinfo is None:
                     game_time = game_time.replace(tzinfo=timezone.utc)
         else:
-            game_time = datetime.now(timezone.utc) + timedelta(days=2)
+            game_time = _get_default_game_time()
+            logger.debug(f"  {away_team} @ {home_team}: TBD start time, using Saturday default")
 
         # Look up venue
         venue = tomorrow_client.get_venue(venue_id) if venue_id else None
