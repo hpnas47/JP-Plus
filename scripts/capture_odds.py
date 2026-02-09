@@ -27,7 +27,7 @@ import logging
 import os
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -128,7 +128,7 @@ def store_snapshot(
     """, (
         snapshot_type,
         snapshot.timestamp.isoformat(),
-        datetime.utcnow().isoformat(),
+        datetime.now(timezone.utc).isoformat(),
         snapshot.credits_used,
     ))
 
