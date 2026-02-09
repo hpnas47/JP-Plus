@@ -508,9 +508,98 @@ def print_watchlist_report(stats: dict) -> None:
     print("=" * 80 + "\n")
 
 
+def print_saturday_confirmation_report(stats: dict, thursday_forecasts: dict) -> None:
+    """Print Saturday confirmation report comparing to Thursday forecasts.
+
+    Args:
+        stats: Current capture stats with watchlist
+        thursday_forecasts: Dict mapping game_id to Thursday's WeatherForecast
+    """
+    print("\n" + "=" * 80)
+    print("🏈 SATURDAY CONFIRMATION REPORT (Final Model Input)")
+    print("=" * 80)
+    print(f"Captured: {stats['capture_time']}")
+    print(f"Week: {stats['year']} Week {stats['week']}")
+    print(f"Games: {stats['outdoor_games']} outdoor, {stats['indoor_games']} indoor")
+    print(f"Forecasts: {stats['forecasts_captured']} captured")
+    print("=" * 80)
+
+    if not stats["watchlist"]:
+        print("\n✅ No weather concerns this week. All games have normal conditions.")
+        print("=" * 80 + "\n")
+        return
+
+    print(f"\n📊 {len(stats['watchlist'])} GAMES WITH WEATHER CONCERNS:\n")
+
+    # Sort by edge (most negative first)
+    sorted_watchlist = sorted(
+        stats["watchlist"],
+        key=lambda x: x.get("edge") if x.get("edge") is not None else x.get("weather_adjustment", 0)
+    )
+
+    for entry in sorted_watchlist:
+        game_id = entry["game_id"]
+        thursday = thursday_forecasts.get(game_id)
+
+        print(f"  {entry['matchup']}")
+        print(f"    Venue: {entry['venue']}")
+
+        # Current conditions (Saturday)
+        print(f"    📍 SATURDAY (Final):")
+        print(f"       Wind: {entry['wind_speed']:.0f} mph (gust: {entry.get('wind_gust') or 'N/A'})")
+        print(f"       Temp: {entry['temperature']:.0f}°F")
+
+        # Compare to Thursday if available
+        if thursday:
+            wind_change = entry['wind_speed'] - thursday.wind_speed
+            temp_change = entry['temperature'] - thursday.temperature
+
+            print(f"    📅 THURSDAY (Previous):")
+            print(f"       Wind: {thursday.wind_speed:.0f} mph → {entry['wind_speed']:.0f} mph ({wind_change:+.0f})")
+            print(f"       Temp: {thursday.temperature:.0f}°F → {entry['temperature']:.0f}°F ({temp_change:+.0f})")
+
+            # Flag significant changes
+            if abs(wind_change) >= 5 or abs(temp_change) >= 10:
+                print(f"    ⚠️  FORECAST CHANGED SIGNIFICANTLY")
+        else:
+            print(f"    📅 No Thursday forecast to compare")
+
+        # Show JP+ prediction and edge
+        jp_total = entry.get('jp_total')
+        jp_weather = entry.get('jp_weather_adjusted')
+        vegas_total = entry.get('vegas_total')
+        edge = entry.get('edge')
+
+        if jp_total is not None:
+            print(f"    📊 JP+ Total: {jp_total:.1f} → Weather-Adjusted: {jp_weather:.1f}")
+        if vegas_total is not None:
+            print(f"    🎰 Vegas Total: {vegas_total:.1f}")
+
+        if edge is not None:
+            if edge < -3:
+                signal = "🔥 STRONG UNDER — BET NOW"
+            elif edge < 0:
+                signal = "📉 LEAN UNDER"
+            elif edge > 3:
+                signal = "⚠️ JP+ HIGHER (skip)"
+            else:
+                signal = "➖ NEUTRAL (skip)"
+            print(f"    💰 Edge: {edge:+.1f} pts ({signal})")
+
+        print(f"    🌧️ Weather Adjustment: {entry['weather_adjustment']:+.1f} pts")
+        print(f"    ✅ Confidence: {entry['confidence']:.0%} (FINAL - {entry['hours_until_game']}h until game)")
+        print()
+
+    print("-" * 80)
+    print("🎯 SATURDAY CONFIRMATION COMPLETE")
+    print("   Games with 🔥 STRONG UNDER are your highest-conviction bets.")
+    print("   Forecasts are now 6-12h out — this is final model input.")
+    print("=" * 80 + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Thursday weather forecast capture for totals edge"
+        description="Weather forecast capture for totals betting edge"
     )
     parser.add_argument(
         "--year", type=int, default=None,
@@ -523,6 +612,10 @@ def main():
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Show games but don't fetch forecasts"
+    )
+    parser.add_argument(
+        "--saturday", action="store_true",
+        help="Saturday confirmation run (compares to Thursday forecasts)"
     )
     args = parser.parse_args()
 
@@ -541,7 +634,21 @@ def main():
     )
 
     # Run capture
-    logger.info(f"Starting Thursday weather capture for {args.year} Week {args.week}")
+    mode = "Saturday confirmation" if args.saturday else "Thursday"
+    logger.info(f"Starting {mode} weather capture for {args.year} Week {args.week}")
+
+    # If Saturday mode, load Thursday forecasts first for comparison
+    thursday_forecasts = {}
+    if args.saturday and not args.dry_run:
+        logger.info("Loading Thursday forecasts for comparison...")
+        # Get all games to find their IDs
+        games = cfbd_client.get_games(year=args.year, week=args.week, season_type="regular")
+        for game in games:
+            # Load Thursday forecast (max_age_hours=96 to catch 4-day old forecasts)
+            forecast = tomorrow_client.get_saved_forecast(game.id, max_age_hours=96)
+            if forecast:
+                thursday_forecasts[game.id] = forecast
+        logger.info(f"  Loaded {len(thursday_forecasts)} Thursday forecasts")
 
     stats = capture_with_watchlist(
         cfbd_client,
@@ -551,8 +658,11 @@ def main():
         dry_run=args.dry_run,
     )
 
-    # Print report
-    print_watchlist_report(stats)
+    # Print appropriate report
+    if args.saturday:
+        print_saturday_confirmation_report(stats, thursday_forecasts)
+    else:
+        print_watchlist_report(stats)
 
     # Return exit code based on success
     if stats["forecasts_failed"] > stats["forecasts_captured"]:
