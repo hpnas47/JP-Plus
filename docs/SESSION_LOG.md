@@ -129,6 +129,44 @@ Updated:
 
 ---
 
+#### TotalsModel reset() + spread_generator.py Cleanup — COMMITTED
+**Impact: Model reuse support + minor code quality improvements**
+
+1. **TotalsModel.reset()**: Added method to clear model state for reuse across seasons:
+   - Clears team universe lock, ratings, trained state
+   - Preserves configuration (ridge_alpha, decay_factor, use_year_intercepts)
+
+2. **spread_generator.py cleanup**:
+   - Extract `WIN_PROB_K = 0.15` constant for spread-to-probability conversion
+   - Document `sort_by_spread` parameter in `predict_week()`
+   - Fix `get_high_stack_games()` return type hint
+   - Name discarded tuple values with `_` prefix
+
+**Commit**: `9d4c3a2` (Add TotalsModel.reset() method + spread_generator cleanup)
+
+---
+
+#### TotalsModel Cleanup: __repr__, Reliability, Types — COMMITTED
+**Impact: Better debugging, reliability filtering, type consistency**
+
+1. **__repr__ for dataclasses**: Added to `TotalsRating` and `TotalsPrediction` for debugging:
+   ```python
+   TotalsRating(Georgia: off=29.3, def=22.1, games=12)
+   TotalsPrediction(Alabama @ Georgia: total=54.2, adj=53.7)
+   ```
+
+2. **get_ratings_df() enhancements**:
+   - Added `reliability` column (0-1 based on games_played: 1 game=0.0, 8+ games=1.0)
+   - Added `min_games` filter parameter for early-season filtering
+
+3. **float64 types**: Removed float32 casts that Ridge converts internally anyway
+
+4. **DataFrame pattern**: Documented Polars→pandas conversion pattern in comments
+
+**Commit**: `8d47199` (TotalsModel cleanup: __repr__, reliability column, float64 types)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
