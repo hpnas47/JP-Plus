@@ -120,8 +120,14 @@ class AggregatedAdjustments:
     env_smoothing_factor: float = 1.0  # env_score / raw_env_stack (for pro-rata allocation)
     situational_score: float = 0.0  # Pure situational: smoothed rest/consec + mental + boosts
 
-    # Pre-cap raw total (for debugging)
-    raw_total: float = 0.0
+    # Diagnostic totals showing smoothing progression:
+    # 1. raw_sum_all: Linear sum of ALL raw values (zero smoothing applied)
+    # 2. pre_global_cap_total: After env soft cap + mental smoothing (only pre-global-cap)
+    # 3. net_adjustment: Final value after global cap
+    # Use (raw_sum_all - pre_global_cap_total) to see how much smoothing reduced the stack.
+    raw_sum_all: float = 0.0  # True linear sum: raw_env_stack + raw_mental + raw_boosts
+    raw_mental_sum: float = 0.0  # Unsmoothed mental penalty sum (for raw_sum_all calc)
+    pre_global_cap_total: float = 0.0  # env_score + mental_bucket + boosts (post-smoothing, pre-cap)
     env_was_capped: bool = False  # True if soft cap was applied to env stack
     was_capped: bool = False  # True if global cap was applied
 
@@ -139,7 +145,9 @@ class AggregatedAdjustments:
             "raw_travel": self.raw_travel,
             "raw_altitude": self.raw_altitude,
             "env_was_capped": self.env_was_capped,
-            "raw_total": self.raw_total,
+            "raw_sum_all": self.raw_sum_all,
+            "raw_mental_sum": self.raw_mental_sum,
+            "pre_global_cap_total": self.pre_global_cap_total,
             "was_capped": self.was_capped,
         }
 
@@ -371,6 +379,11 @@ class AdjustmentAggregator:
         # Net mental: away penalties favor home, home penalties hurt home
         result.mental_bucket = away_mental_smoothed - home_mental_smoothed
 
+        # Track raw (unsmoothed) mental sum for diagnostic comparison
+        away_mental_raw = sum(v for _, v in away_mental)
+        home_mental_raw = sum(v for _, v in home_mental)
+        result.raw_mental_sum = away_mental_raw - home_mental_raw
+
         # =====================================================================
         # STEP 5: Boosts Bucket (Linear Sum, No Dampening)
         # Components: rivalry_boost only (rest is now in env stack)
@@ -402,24 +415,37 @@ class AdjustmentAggregator:
 
         # =====================================================================
         # STEP 6: Final Calculation
-        # total = env_score + mental + boosts
+        # Compute diagnostic totals showing smoothing progression:
+        # - raw_sum_all: True linear sum (zero smoothing)
+        # - pre_global_cap_total: After env soft cap + mental smoothing
+        # - net_adjustment: After global cap
         # =====================================================================
-        raw_total = (
-            result.env_score
-            + result.mental_bucket
+
+        # raw_sum_all: What if we just added everything linearly?
+        # Uses raw_env_stack (not env_score) and raw_mental_sum (not mental_bucket)
+        result.raw_sum_all = (
+            result.raw_env_stack
+            + result.raw_mental_sum
+            + result.boosts_bucket  # Boosts have no smoothing
+        )
+
+        # pre_global_cap_total: Post-smoothing, pre-global-cap
+        pre_global_cap_total = (
+            result.env_score  # Post-env-soft-cap
+            + result.mental_bucket  # Post-mental-smoothing
             + result.boosts_bucket
         )
-        result.raw_total = raw_total
+        result.pre_global_cap_total = pre_global_cap_total
 
         # Apply global cap (±7.0)
-        if abs(raw_total) > self.global_cap:
-            result.net_adjustment = max(-self.global_cap, min(self.global_cap, raw_total))
+        if abs(pre_global_cap_total) > self.global_cap:
+            result.net_adjustment = max(-self.global_cap, min(self.global_cap, pre_global_cap_total))
             result.was_capped = True
             logger.debug(
-                f"Global cap applied: {raw_total:.2f} -> {result.net_adjustment:.2f}"
+                f"Global cap applied: {pre_global_cap_total:.2f} -> {result.net_adjustment:.2f}"
             )
         else:
-            result.net_adjustment = raw_total
+            result.net_adjustment = pre_global_cap_total
 
         return result
 
