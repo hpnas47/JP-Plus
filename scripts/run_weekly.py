@@ -423,6 +423,16 @@ def run_predictions(
         logger.info("Initializing API client...")
         client = CFBDClient()
 
+        # P0: Fail fast for invalid weeks (prevents infinite wait loop)
+        # CFB season: weeks 0-15 regular, 16-17 postseason (bowls + CFP)
+        MAX_CFB_WEEK = 18  # Week 17 is national championship, week 18+ doesn't exist
+        if week > MAX_CFB_WEEK:
+            raise ValueError(
+                f"Week {week} exceeds maximum CFB week ({MAX_CFB_WEEK}). "
+                f"CFB season ends at week 17 (national championship). "
+                f"Did you mean a different week?"
+            )
+
         # Wait for data if requested
         if wait_for_data:
             logger.info(f"Checking data availability for {year} week {week}...")

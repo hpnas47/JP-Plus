@@ -439,10 +439,30 @@ class CFBDClient:
 
         Returns:
             True if data became available, False if timed out
+
+        Raises:
+            DataNotAvailableError: If week has no scheduled games (invalid week)
         """
         settings = get_settings()
         check_interval = check_interval or settings.data_check_interval
         max_wait_seconds = max_wait_hours * 3600
+
+        # P0: Fail fast if week has no games at all (prevents infinite polling)
+        # This catches requests for weeks beyond the season (e.g., week 19+)
+        try:
+            games = self.get_games(year, week)
+            if not games:
+                logger.error(
+                    f"No games scheduled for {year} week {week}. "
+                    "This week may not exist (CFB season ends at week 17)."
+                )
+                raise DataNotAvailableError(
+                    f"No games found for {year} week {week}. "
+                    "The CFB season typically ends at week 17 (national championship)."
+                )
+        except ApiException as e:
+            logger.error(f"API error checking {year} week {week}: {e}")
+            raise DataNotAvailableError(f"Cannot fetch games for {year} week {week}: {e}")
 
         start_time = time.time()
 

@@ -476,6 +476,35 @@ Opening lines captured:
 
 ---
 
+#### Max Week Safeguard for run_weekly.py — COMMITTED
+**Impact: Prevents infinite wait loop when requesting non-existent weeks**
+
+**The Bug:** Requesting week 20 for 2025 caused the script to poll for 200+ minutes waiting for data that will never exist (CFB season ends at week 17).
+
+**Fix (two layers):**
+1. **run_weekly.py**: Fail fast if `week > 18` with clear error message
+2. **cfbd_client.wait_for_data()**: Check if week has any scheduled games before polling; if no games, raise `DataNotAvailableError` immediately
+
+**Before:**
+```
+Data not ready for 2025 week 19. Waited 200.0 min. Checking again in 5.0 min...
+(continues forever until max_wait_hours)
+```
+
+**After:**
+```
+ValueError: Week 20 exceeds maximum CFB week (18). CFB season ends at week 17 (national championship).
+```
+
+Or if games exist but the week is invalid:
+```
+DataNotAvailableError: No games found for 2025 week 19. The CFB season typically ends at week 17.
+```
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
