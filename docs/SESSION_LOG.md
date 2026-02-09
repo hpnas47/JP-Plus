@@ -447,6 +447,35 @@ The auto-detection heuristic can mislabel weeks at month boundaries...
 
 ---
 
+#### Null Spread Resilience for Odds Capture — COMMITTED
+**Impact: Prevents batch abort when API returns lines with null spreads**
+
+**The Bug:** `odds_lines` table defines `spread_home REAL NOT NULL`, but the API can return lines with `spread_home = None` (futures, props, etc.). One null spread would throw `sqlite3.IntegrityError` and abort the entire batch, losing all lines for that week's snapshot.
+
+**Fix (two-part):**
+1. **Filter null spreads before insert**: Skip lines where `spread_home` or `spread_away` is None, with warning log
+2. **Per-line try/except**: Wrap each INSERT in exception handler so one bad line doesn't abort the batch
+
+**New return dict fields:**
+- `lines`: Actual lines stored (excludes skipped/failed)
+- `lines_from_api`: Total lines received from API
+- `null_spread_skipped`: Lines skipped due to null spreads
+- `insert_errors`: Lines that failed to insert
+
+**Output now shows:**
+```
+Opening lines captured:
+  Season: 2026 Week 10
+  Games: 45
+  Lines stored: 312
+  ⚠ Skipped (null spread): 3
+  Credits remaining: 487
+```
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure

@@ -257,47 +257,75 @@ def capture_odds(
     # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve row identity
     games_seen = set()
     spread_anomalies = 0
+    null_spread_skipped = 0
+    insert_errors = 0
+
     for line in snapshot.lines:
+        # P0: Filter out lines with null spreads (table requires NOT NULL)
+        # API occasionally returns lines without spreads (futures, props, etc.)
+        if line.spread_home is None or line.spread_away is None:
+            null_spread_skipped += 1
+            logger.debug(
+                f"Skipping line with null spread: {line.away_team} @ {line.home_team} "
+                f"({line.sportsbook}): home={line.spread_home}, away={line.spread_away}"
+            )
+            continue
+
         games_seen.add(line.game_id)
 
         # P1.3: Spread consistency check (home + away should be near-zero)
-        if (line.spread_home is not None and line.spread_away is not None
-                and abs(line.spread_home + line.spread_away) > 0.5):
+        if abs(line.spread_home + line.spread_away) > 0.5:
             spread_anomalies += 1
             logger.warning(
                 f"Spread anomaly: {line.home_team} vs {line.away_team} "
                 f"({line.sportsbook}): home={line.spread_home}, away={line.spread_away}, "
                 f"sum={line.spread_home + line.spread_away:.1f}"
             )
-        cursor.execute("""
-            INSERT INTO odds_lines
-            (snapshot_id, game_id, sportsbook, home_team, away_team,
-             spread_home, spread_away, price_home, price_away,
-             commence_time, last_update)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(snapshot_id, game_id, sportsbook) DO UPDATE SET
-                spread_home = excluded.spread_home,
-                spread_away = excluded.spread_away,
-                price_home = excluded.price_home,
-                price_away = excluded.price_away,
-                last_update = excluded.last_update
-        """, (
-            snapshot_id,
-            line.game_id,
-            line.sportsbook,
-            line.home_team,
-            line.away_team,
-            line.spread_home,
-            line.spread_away,
-            line.price_home,
-            line.price_away,
-            line.commence_time.isoformat() if line.commence_time else None,
-            line.last_update.isoformat() if line.last_update else None,
-        ))
+
+        # P0: Wrap INSERT in try/except so one bad line doesn't abort the batch
+        try:
+            cursor.execute("""
+                INSERT INTO odds_lines
+                (snapshot_id, game_id, sportsbook, home_team, away_team,
+                 spread_home, spread_away, price_home, price_away,
+                 commence_time, last_update)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapshot_id, game_id, sportsbook) DO UPDATE SET
+                    spread_home = excluded.spread_home,
+                    spread_away = excluded.spread_away,
+                    price_home = excluded.price_home,
+                    price_away = excluded.price_away,
+                    last_update = excluded.last_update
+            """, (
+                snapshot_id,
+                line.game_id,
+                line.sportsbook,
+                line.home_team,
+                line.away_team,
+                line.spread_home,
+                line.spread_away,
+                line.price_home,
+                line.price_away,
+                line.commence_time.isoformat() if line.commence_time else None,
+                line.last_update.isoformat() if line.last_update else None,
+            ))
+        except sqlite3.IntegrityError as e:
+            insert_errors += 1
+            logger.error(
+                f"Failed to insert line: {line.away_team} @ {line.home_team} "
+                f"({line.sportsbook}): {e}"
+            )
 
     conn.commit()
 
-    logger.info(f"Stored {len(snapshot.lines)} lines for {len(games_seen)} games")
+    # Log filtering/error summary
+    if null_spread_skipped > 0:
+        logger.warning(f"P0: Skipped {null_spread_skipped} lines with null spreads")
+    if insert_errors > 0:
+        logger.error(f"P0: {insert_errors} lines failed to insert (see errors above)")
+
+    lines_stored = len(snapshot.lines) - null_spread_skipped - insert_errors
+    logger.info(f"Stored {lines_stored} lines for {len(games_seen)} games")
     if spread_anomalies > 0:
         logger.warning(f"P1.3: {spread_anomalies} spread anomalies detected (home+away != 0)")
     logger.info(f"Credits remaining: {snapshot.credits_remaining}")
@@ -307,7 +335,10 @@ def capture_odds(
         'year': year,
         'week': week,
         'games': len(games_seen),
-        'lines': len(snapshot.lines),
+        'lines': lines_stored,
+        'lines_from_api': len(snapshot.lines),
+        'null_spread_skipped': null_spread_skipped,
+        'insert_errors': insert_errors,
         'credits_remaining': snapshot.credits_remaining,
     }
 
@@ -406,7 +437,11 @@ def main():
         print(f"\n{snapshot_type.title()} lines captured:")
         print(f"  Season: {result['year']} Week {result['week']}")
         print(f"  Games: {result['games']}")
-        print(f"  Lines: {result['lines']}")
+        print(f"  Lines stored: {result['lines']}")
+        if result.get('null_spread_skipped', 0) > 0:
+            print(f"  ⚠ Skipped (null spread): {result['null_spread_skipped']}")
+        if result.get('insert_errors', 0) > 0:
+            print(f"  ⚠ Insert errors: {result['insert_errors']}")
         print(f"  Credits remaining: {result['credits_remaining']}")
 
 
