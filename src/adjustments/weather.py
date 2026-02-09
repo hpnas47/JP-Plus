@@ -6,7 +6,7 @@ Weather significantly impacts scoring, particularly:
 - Cold: Slows game pace, affects ball handling
 - Precipitation: Impacts ball security, passing, and kicking
 
-Data source: CFBD API get_weather endpoint
+Data source: Tomorrow.io forecast API (see src/api/tomorrow_io.py)
 """
 
 import logging
@@ -278,35 +278,6 @@ class WeatherAdjuster:
             is_indoor=False,
             conditions=conditions,
         )
-
-    def calculate_adjustment_from_api(
-        self,
-        weather_data,
-    ) -> WeatherAdjustment:
-        """Calculate adjustment directly from CFBD API weather object.
-
-        Args:
-            weather_data: GameWeather object from CFBD API
-
-        Returns:
-            WeatherAdjustment with breakdown
-        """
-        conditions = WeatherConditions(
-            game_id=weather_data.id,
-            home_team=weather_data.home_team,
-            away_team=weather_data.away_team,
-            venue=weather_data.venue,
-            game_indoors=weather_data.game_indoors,
-            temperature=weather_data.temperature,
-            wind_speed=weather_data.wind_speed,
-            wind_direction=weather_data.wind_direction,
-            precipitation=weather_data.precipitation,
-            snowfall=weather_data.snowfall,
-            humidity=weather_data.humidity,
-            weather_condition=weather_data.weather_condition,
-        )
-
-        return self.calculate_adjustment(conditions)
 
     def get_weather_summary(self, conditions: WeatherConditions) -> str:
         """Get human-readable weather summary.

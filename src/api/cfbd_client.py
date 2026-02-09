@@ -519,59 +519,6 @@ class CFBDClient:
 
         return self._call_with_retry(self.stats_api.get_game_havoc_stats, **kwargs)
 
-    def get_weather(
-        self,
-        year: int,
-        week: Optional[int] = None,
-        team: Optional[str] = None,
-        conference: Optional[str] = None,
-        season_type: str = "regular",
-        game_id: Optional[int] = None,
-    ) -> list:
-        """Get weather data for games.
-
-        Weather data is essential for totals prediction. Key factors:
-        - Wind speed: 15+ mph significantly affects passing game
-        - Temperature: Cold weather (<40°F) reduces scoring
-        - Precipitation: Rain affects ball security and passing
-        - Indoor games: No weather adjustment needed
-
-        Args:
-            year: Season year
-            week: Week number (optional)
-            team: Filter by team (optional)
-            conference: Filter by conference (optional)
-            season_type: 'regular' or 'postseason'
-            game_id: Specific game ID (optional)
-
-        Returns:
-            List of GameWeather objects with:
-            - id, season, week, season_type, start_time
-            - home_team, away_team, venue, venue_id
-            - game_indoors: Boolean for dome games
-            - temperature: Fahrenheit
-            - wind_speed: MPH
-            - wind_direction: Degrees (0-360)
-            - precipitation: Inches
-            - snowfall: Inches
-            - humidity: Percentage (0-100)
-            - dew_point: Fahrenheit
-            - pressure: Millibars
-            - weather_condition: Text (Clear, Cloudy, Rain, etc.)
-            - weather_condition_code: Numeric code
-        """
-        kwargs = {"year": year, "season_type": season_type}
-        if week is not None:
-            kwargs["week"] = week
-        if team is not None:
-            kwargs["team"] = team
-        if conference is not None:
-            kwargs["conference"] = conference
-        if game_id is not None:
-            kwargs["game_id"] = game_id
-
-        return self._call_with_retry(self.games_api.get_weather, **kwargs)
-
     def get_sp_ratings(self, year: int) -> list:
         """Get SP+ ratings for a given year.
 

@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.api.cfbd_client import CFBDClient
 from src.models.totals_model import TotalsModel
-from src.adjustments.weather import WeatherAdjuster
 from scripts.backtest import fetch_season_data
 
 logging.basicConfig(
@@ -49,7 +48,6 @@ def backtest_totals_season(
     start_week: int = 4,
     ridge_alpha: float = 10.0,
     decay_factor: float = 1.0,
-    use_weather: bool = False,
 ) -> list:
     """Backtest totals for a single season.
 
@@ -59,12 +57,11 @@ def backtest_totals_season(
         start_week: First week to predict (need training data from earlier weeks)
         ridge_alpha: Ridge regression regularization strength
         decay_factor: Within-season recency decay (1.0 = no decay)
-        use_weather: Whether to apply weather adjustments
 
     Returns:
         List of prediction dicts
     """
-    logger.info(f"Backtesting {year} (decay={decay_factor}, weather={use_weather})...")
+    logger.info(f"Backtesting {year} (decay={decay_factor})...")
 
     # Fetch data
     games_df, betting_df = fetch_season_data(client, year)
@@ -105,18 +102,6 @@ def backtest_totals_season(
         games['vegas_total_close'] = np.nan
         games['vegas_total_open'] = np.nan
 
-    # Fetch weather data if needed
-    weather_by_game = {}
-    weather_adjuster = None
-    if use_weather:
-        weather_adjuster = WeatherAdjuster()
-        try:
-            weather_data = client.get_weather(year)
-            weather_by_game = {w.id: w for w in weather_data}
-            logger.info(f"  Loaded weather for {len(weather_by_game)} games")
-        except Exception as e:
-            logger.warning(f"  Failed to load weather: {e}")
-
     max_week = int(games['week'].max())
     predictions = []
 
@@ -142,18 +127,9 @@ def backtest_totals_season(
         for g in week_games.itertuples():
             game_id = g.id
 
-            # Get weather adjustment if available
-            weather_adj = 0.0
-            weather_info = None
-            if use_weather and game_id in weather_by_game:
-                weather_info = weather_by_game[game_id]
-                adj = weather_adjuster.calculate_adjustment_from_api(weather_info)
-                weather_adj = adj.total_adjustment
-
             pred = model.predict_total(
                 g.home_team,
                 g.away_team,
-                weather_adjustment=weather_adj,
                 year=year,
             )
 
@@ -171,7 +147,6 @@ def backtest_totals_season(
                     'away_team': g.away_team,
                     'predicted_total': pred.predicted_total,
                     'adjusted_total': pred.adjusted_total,
-                    'weather_adjustment': weather_adj,
                     'home_expected': pred.home_expected,
                     'away_expected': pred.away_expected,
                     'actual_total': actual_total,
@@ -250,8 +225,6 @@ def main():
                         help='Ridge alpha (default: 10.0)')
     parser.add_argument('--decay', type=float, default=1.0,
                         help='Within-season recency decay factor (default: 1.0 = no decay)')
-    parser.add_argument('--weather', action='store_true',
-                        help='Apply weather adjustments')
     args = parser.parse_args()
 
     client = CFBDClient()
@@ -264,7 +237,6 @@ def main():
             start_week=args.start_week,
             ridge_alpha=args.alpha,
             decay_factor=args.decay,
-            use_weather=args.weather,
         )
         all_predictions.extend(preds)
 
@@ -282,7 +254,6 @@ def main():
     print(f"Start Week: {args.start_week}")
     print(f"Ridge Alpha: {args.alpha}")
     print(f"Decay Factor: {args.decay}")
-    print(f"Weather: {'Enabled' if args.weather else 'Disabled'}")
 
     # Overall metrics
     print(f"\nTotal predictions: {len(preds_df)}")
