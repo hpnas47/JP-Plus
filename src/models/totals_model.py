@@ -188,15 +188,27 @@ class TotalsModel:
         games_per_team = {t: int(all_counts.get(t, 0)) for t in self._team_to_idx}
 
         # Get years for year intercepts (handles scoring environment shift)
-        # Only used when use_year_intercepts=True (for multi-year training)
-        if self.use_year_intercepts and 'year' in games.columns:
+        # Auto-detect: if multiple years present, FORCE year intercepts to avoid era-averaging bug
+        if 'year' in games.columns:
             game_years = games['year'].values
             years = sorted(set(game_years))
-            self._year_to_idx = {y: i for i, y in enumerate(years)}
-            n_years = len(years)
+
+            # Auto-enable year intercepts for multi-year training (fixes "Year Leakage" bug)
+            # Without this, Ridge learns a single intercept averaging 2022 (~27 PPG) with 2024 (~26 PPG)
+            if len(years) > 1 and not self.use_year_intercepts:
+                logger.info(f"Auto-enabling year intercepts for multi-year training ({years})")
+                self.use_year_intercepts = True
+
+            if self.use_year_intercepts:
+                self._year_to_idx = {y: i for i, y in enumerate(years)}
+                n_years = len(years)
+            else:
+                years = []
+                n_years = 0
         else:
             years = []
             n_years = 0
+            game_years = None
 
         # Build sparse matrix: each game = 2 rows
         # Columns: [0..n_teams-1] = offense, [n_teams..2*n_teams-1] = defense, [2*n_teams] = HFA
