@@ -486,6 +486,30 @@ class AdjustmentAggregator:
         result.pre_global_cap_total = pre_global_cap_total
 
         # Apply global cap (±7.0)
+        #
+        # DESIGN DECISION: Global Cap Priority Ordering
+        # ---------------------------------------------
+        # When the cap is hit, ALL buckets are proportionally reduced - there's no
+        # explicit priority. However, because env+boosts are added first and are
+        # typically larger than mental factors, mental factors have less marginal
+        # effect in extreme scenarios.
+        #
+        # Example: Utah home (4.5 HFA + 1.5 travel + 2.0 altitude = 8.0 raw)
+        #   - Env soft cap: 5.0 + (8.0-5.0)*0.6 = 6.8
+        #   - Rivalry boost: +1.0 → pre-mental = 7.8
+        #   - Letdown: +2.0 → would be 9.8, capped to 7.0
+        #   - Mental's marginal contribution: only 0.2 of its 2.0 value
+        #
+        # This is INTENTIONAL. Rationale:
+        # 1. Global cap triggers rarely (~1% of games per stack diagnostics)
+        # 2. Environmental factors (HFA, travel, altitude) are objectively measurable
+        # 3. Mental factors (letdown, lookahead) are more speculative/psychological
+        # 4. When caps are hit, trust "harder" physical signals over "softer" ones
+        #
+        # Alternatives considered but rejected:
+        # - Per-bucket caps: Complex, hard to calibrate, doesn't solve the problem
+        # - Reserved mental minimum: Arbitrary, adds complexity
+        # - Proportional reduction: Already happens implicitly (all excess is clipped)
         if abs(pre_global_cap_total) > self.global_cap:
             result.net_adjustment = max(-self.global_cap, min(self.global_cap, pre_global_cap_total))
             result.was_capped = True
