@@ -3,6 +3,21 @@
 Provides weather forecasts for CFB game venues using the Tomorrow.io API.
 Used for operational totals predictions where we need forecasts BEFORE game time.
 
+FORECAST DISCIPLINE (Lookahead Bias Prevention):
+    The betting edge in weather comes from TIMING — capturing forecasts Thursday
+    before the market adjusts lines. Using later, more accurate forecasts would
+    be lookahead bias (using information you wouldn't have at decision time).
+
+    Rules:
+    1. BETTING DECISIONS: Use get_betting_forecast() — returns FIRST capture
+    2. POSITION MANAGEMENT: Use get_latest_forecast() — for confirmation only
+    3. BACKTESTS: Should NOT use weather (CFBD actuals = perfect hindsight)
+       - Backtest showed: weather improves MAE by 0.04 but ATS by 0%
+       - Market already prices weather; we gain nothing from hindsight
+
+    The database stores multiple forecasts per game (Thursday + Saturday).
+    Always be explicit about which forecast you're using and why.
+
 API Documentation: https://docs.tomorrow.io/reference/weather-forecast
 """
 
@@ -438,12 +453,76 @@ class TomorrowIOClient:
                 ),
             )
 
-    def get_saved_forecast(
+    def _row_to_forecast(self, row: sqlite3.Row) -> WeatherForecast:
+        """Convert database row to WeatherForecast object."""
+        return WeatherForecast(
+            venue_id=row["venue_id"],
+            venue_name=row["venue_name"],
+            latitude=row["latitude"],
+            longitude=row["longitude"],
+            forecast_time=datetime.fromisoformat(row["forecast_time"]),
+            game_time=datetime.fromisoformat(row["game_time"]),
+            hours_until_game=row["hours_until_game"],
+            temperature=row["temperature"],
+            wind_speed=row["wind_speed"],
+            wind_gust=row["wind_gust"],
+            wind_direction=row["wind_direction"],
+            precipitation_probability=row["precipitation_probability"],
+            rain_intensity=row["rain_intensity"],
+            snow_intensity=row["snow_intensity"],
+            humidity=row["humidity"],
+            cloud_cover=row["cloud_cover"],
+            weather_code=row["weather_code"],
+            is_indoor=bool(row["is_indoor"]),
+            confidence_factor=row["confidence_factor"],
+        )
+
+    def get_betting_forecast(
+        self,
+        game_id: int,
+    ) -> Optional[WeatherForecast]:
+        """Get FIRST captured forecast for a game — use for betting decisions.
+
+        IMPORTANT: This returns the earliest forecast, which represents the
+        information available when the betting edge was captured (Thursday).
+        Using later forecasts would be lookahead bias.
+
+        For position management or confirmation, use get_latest_forecast().
+
+        Args:
+            game_id: CFBD game ID
+
+        Returns:
+            WeatherForecast from first capture, or None if not found
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT * FROM forecasts
+                WHERE game_id = ?
+                ORDER BY forecast_time ASC
+                LIMIT 1
+                """,
+                (game_id,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            return self._row_to_forecast(row)
+
+    def get_latest_forecast(
         self,
         game_id: int,
         max_age_hours: int = 24,
     ) -> Optional[WeatherForecast]:
-        """Get most recent saved forecast for a game.
+        """Get most recent forecast for a game — use for confirmation only.
+
+        WARNING: Do NOT use this for betting decisions or backtests.
+        Later forecasts are more accurate but represent information you
+        wouldn't have had at bet decision time. Use get_betting_forecast()
+        for actual betting.
 
         Args:
             game_id: CFBD game ID
@@ -473,27 +552,47 @@ class TomorrowIOClient:
             if age_hours > max_age_hours:
                 return None
 
-            return WeatherForecast(
-                venue_id=row["venue_id"],
-                venue_name=row["venue_name"],
-                latitude=row["latitude"],
-                longitude=row["longitude"],
-                forecast_time=forecast_time,
-                game_time=datetime.fromisoformat(row["game_time"]),
-                hours_until_game=row["hours_until_game"],
-                temperature=row["temperature"],
-                wind_speed=row["wind_speed"],
-                wind_gust=row["wind_gust"],
-                wind_direction=row["wind_direction"],
-                precipitation_probability=row["precipitation_probability"],
-                rain_intensity=row["rain_intensity"],
-                snow_intensity=row["snow_intensity"],
-                humidity=row["humidity"],
-                cloud_cover=row["cloud_cover"],
-                weather_code=row["weather_code"],
-                is_indoor=bool(row["is_indoor"]),
-                confidence_factor=row["confidence_factor"],
-            )
+            return self._row_to_forecast(row)
+
+    def get_saved_forecast(
+        self,
+        game_id: int,
+        max_age_hours: int = 24,
+    ) -> Optional[WeatherForecast]:
+        """Alias for get_latest_forecast() — prefer explicit method names.
+
+        DEPRECATED: Use get_betting_forecast() for betting decisions
+        or get_latest_forecast() for confirmation/position management.
+        """
+        return self.get_latest_forecast(game_id, max_age_hours)
+
+    def get_all_forecasts(
+        self,
+        game_id: int,
+    ) -> list[WeatherForecast]:
+        """Get all captured forecasts for a game, ordered by capture time.
+
+        Use this for forecast comparison (Thursday vs Saturday) or debugging.
+        Returns forecasts in chronological order (oldest first).
+
+        Args:
+            game_id: CFBD game ID
+
+        Returns:
+            List of WeatherForecast objects, oldest first
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT * FROM forecasts
+                WHERE game_id = ?
+                ORDER BY forecast_time ASC
+                """,
+                (game_id,),
+            ).fetchall()
+
+            return [self._row_to_forecast(row) for row in rows]
 
     def save_venue(self, venue: VenueLocation) -> None:
         """Save venue location to database.
