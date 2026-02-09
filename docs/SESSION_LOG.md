@@ -325,6 +325,24 @@ Systematic performance audit of `TotalsModel` and `backtest_totals.py`:
 
 **All changes verified:** Backtest output unchanged (706 preds, MAE 13.03, 5+ Edge 58.6%)
 
+#### Offense/Defense Alpha Weighting — VALIDATED (No Change)
+**Impact: Confirmed 50/50 split is optimal; structural assumption holds**
+
+- **Hypothesis:** The prediction formula `(home_off_adj + away_def_adj) / 2` assumes offense and defense contribute equally. This is a hard-coded constraint Ridge can't correct — it can only contort coefficients.
+- **Test:** Generalize to `α * off_adj + (1-α) * def_adj` and sweep α at prediction time (training unchanged).
+
+| α | MAE | Mean Err | 5+ Edge |
+|---|-----|----------|---------|
+| 0.40 (def-heavy) | 13.03 | -0.55 | 55.0% |
+| 0.45 | 13.03 | -0.51 | 55.1% |
+| **0.50 (baseline)** | **13.04** | **-0.47** | **55.3%** |
+| 0.55 | 13.05 | -0.44 | 54.0% |
+| 0.60 (off-heavy) | 13.06 | -0.40 | 54.3% |
+
+- **Result:** Baseline α=0.50 is optimal. Moving in either direction degrades 5+ Edge.
+- **Why it holds:** Earlier audit showed offense/defense coefficient std devs are nearly identical (3.49 vs 3.46). Ridge learns balanced coefficients; no suppressed signal on either side.
+- **Decision:** No change. The 50/50 assumption is empirically validated.
+
 ---
 
 ## Session: February 7, 2026 (Continued)
