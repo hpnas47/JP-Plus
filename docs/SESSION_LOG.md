@@ -531,6 +531,28 @@ Based on sharp betting research (wind is king of unders):
 
 **Effective wind = (wind_speed + wind_gust) / 2** — gusts matter for passing and kicking.
 
+**Strategic Refinements (Sharp Betting Research):**
+
+1. **"Passing Team" Multiplier** — Wind adjustments scaled by combined pass rate:
+   - Pass-heavy matchups (>55% combined pass rate): 1.25x wind penalty
+   - Run-heavy matchups (<45% combined pass rate): 0.5x wind penalty
+   - Example: Army vs Navy in 20mph wind = -3.0 pts (they don't care)
+   - Example: Ole Miss vs Air Raid opponent in 20mph wind = -7.5 pts
+   - Pass rates calculated from play-by-play data (weeks 1 to current_week - 1)
+
+2. **"Snow Overreaction Fade"** — Public loves betting "Snow Unders" but:
+   - Snow without wind often goes OVER (defenders slip, receivers know their routes)
+   - Snow penalty only applies if effective wind >= 12 mph
+   - Low-wind snow games = no penalty (sharps bet OVER)
+   - Heavy wind + snow = -3.0 pts (wind makes snow swirl, disrupts passing)
+
+Watchlist now shows pass rate context:
+```
+🌧️ Weather Adjustment: -7.5 pts
+   Wind: -7.5, Temp: +0.0, Precip: +0.0
+   📋 Pass Rate: 58% (Pass-heavy matchup — wind hurts more)
+```
+
 **Removed legacy CFBD weather code:**
 - `cfbd_client.get_weather()` — no longer used (158 lines removed)
 - Weather API was for look-back actuals, not forecasts
