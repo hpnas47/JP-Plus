@@ -501,7 +501,7 @@ Or if games exist but the week is invalid:
 DataNotAvailableError: No games found for 2025 week 19. The CFB season typically ends at week 17.
 ```
 
-**Commit**: (pending)
+**Commit**: `4f867f8` (Add max week safeguard to prevent infinite wait loop)
 
 ---
 
