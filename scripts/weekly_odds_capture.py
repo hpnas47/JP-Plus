@@ -281,8 +281,10 @@ def capture_odds(
     # If any insert fails, the entire batch is rolled back (no partial writes)
     cursor = conn.cursor()
 
-    # Pre-filter lines with null spreads before starting transaction
-    valid_lines = []
+    # Pre-filter lines and build insert tuples before starting transaction
+    # This enables executemany() for batch insert (~480 rows in one call vs 480 round-trips)
+    line_tuples = []
+    games_seen = set()
     null_spread_skipped = 0
     spread_anomalies = 0
 
@@ -305,7 +307,21 @@ def capture_odds(
                 f"sum={line.spread_home + line.spread_away:.1f}"
             )
 
-        valid_lines.append(line)
+        games_seen.add(line.game_id)
+        # Build tuple for executemany (snapshot_id placeholder filled after insert)
+        line_tuples.append((
+            None,  # snapshot_id - filled in after snapshot insert
+            line.game_id,
+            line.sportsbook,
+            line.home_team,
+            line.away_team,
+            line.spread_home,
+            line.spread_away,
+            line.price_home,
+            line.price_away,
+            line.commence_time.isoformat() if line.commence_time else None,
+            line.last_update.isoformat() if line.last_update else None,
+        ))
 
     if null_spread_skipped > 0:
         logger.warning(f"P0: Filtered out {null_spread_skipped} lines with null spreads")
@@ -341,39 +357,29 @@ def capture_odds(
         )
         snapshot_id = cursor.fetchone()[0]
 
-        # Store all valid lines
-        games_seen = set()
-        for line in valid_lines:
-            games_seen.add(line.game_id)
-            cursor.execute("""
-                INSERT INTO odds_lines
-                (snapshot_id, game_id, sportsbook, home_team, away_team,
-                 spread_home, spread_away, price_home, price_away,
-                 commence_time, last_update)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(snapshot_id, game_id, sportsbook) DO UPDATE SET
-                    spread_home = excluded.spread_home,
-                    spread_away = excluded.spread_away,
-                    price_home = excluded.price_home,
-                    price_away = excluded.price_away,
-                    last_update = excluded.last_update
-            """, (
-                snapshot_id,
-                line.game_id,
-                line.sportsbook,
-                line.home_team,
-                line.away_team,
-                line.spread_home,
-                line.spread_away,
-                line.price_home,
-                line.price_away,
-                line.commence_time.isoformat() if line.commence_time else None,
-                line.last_update.isoformat() if line.last_update else None,
-            ))
+        # Fill in snapshot_id for all tuples (index 0 was placeholder None)
+        line_tuples_with_id = [
+            (snapshot_id,) + t[1:] for t in line_tuples
+        ]
+
+        # Batch insert all lines with executemany (single transaction, ~480 rows)
+        cursor.executemany("""
+            INSERT INTO odds_lines
+            (snapshot_id, game_id, sportsbook, home_team, away_team,
+             spread_home, spread_away, price_home, price_away,
+             commence_time, last_update)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_id, game_id, sportsbook) DO UPDATE SET
+                spread_home = excluded.spread_home,
+                spread_away = excluded.spread_away,
+                price_home = excluded.price_home,
+                price_away = excluded.price_away,
+                last_update = excluded.last_update
+        """, line_tuples_with_id)
 
         # All inserts succeeded - commit transaction
         conn.commit()
-        logger.info(f"Transaction committed: {len(valid_lines)} lines for {len(games_seen)} games")
+        logger.info(f"Transaction committed: {len(line_tuples)} lines for {len(games_seen)} games")
 
     except Exception as e:
         # Any error - rollback entire transaction
@@ -391,7 +397,7 @@ def capture_odds(
         'year': year,
         'week': week,
         'games': len(games_seen),
-        'lines': len(valid_lines),
+        'lines': len(line_tuples),
         'lines_from_api': len(snapshot.lines),
         'null_spread_skipped': null_spread_skipped,
         'credits_remaining': snapshot.credits_remaining,
