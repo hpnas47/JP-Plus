@@ -807,22 +807,25 @@ class PreseasonPriors:
             .fillna('OTHER')
         )
 
-        # Calculate OUTGOING value (what team loses - no level discount, full value)
-        # This is the "raw" value of the player leaving
+        # Calculate OUTGOING value (what team loses - WITH level discount for symmetry)
+        # The player's value is evaluated in the same transfer context as incoming.
+        # This ensures G5→P4 transfers are roughly zero-sum (minus continuity tax)
+        # rather than creating a systematic downward bias across the system.
         transfers_df['outgoing_value'] = transfers_df.apply(
             lambda row: self._calculate_player_value(
                 row.get('stars'),
                 row.get('rating'),
                 row['pos_group'],
-                origin=None,  # No level discount for outgoing
-                destination=None,
-                team_conferences=None,
+                origin=row.get('origin'),
+                destination=row.get('destination'),
+                team_conferences=team_conferences,
             ),
             axis=1
         )
 
         # Calculate INCOMING value (what team gains - WITH level-up discount)
-        # G5→P4 transfers get discounted based on physicality/athleticism
+        # G5→P4 transfers get discounted based on physicality/athleticism.
+        # Same discount applied to outgoing value above for symmetry.
         transfers_df['incoming_value'] = transfers_df.apply(
             lambda row: self._calculate_player_value(
                 row.get('stars'),
@@ -842,11 +845,14 @@ class PreseasonPriors:
 
         # Calculate outgoing value per team (players who left)
         # Apply CONTINUITY_TAX: losing an incumbent hurts even if "replaced"
+        # With symmetric level-up discounts, net impact is now:
+        #   Same-level: origin loses value×1.11, dest gains value×1.0, net = -0.11 (continuity only)
+        #   G5→P4: origin loses value×0.75×1.11=0.83, dest gains 0.75, net = -0.08 (continuity only)
         outgoing_raw = transfers_df.groupby('origin')['outgoing_value'].sum()
         outgoing = outgoing_raw / self.CONTINUITY_TAX  # Amplify loss (divide by 0.90 = ~11% boost)
 
         # Calculate incoming value per team (players who arrived)
-        # Level-up discounts already applied in incoming_value
+        # Level-up discounts already applied symmetrically in both outgoing and incoming
         incoming_df = transfers_df[transfers_df['destination'].notna()]
         incoming = incoming_df.groupby('destination')['incoming_value'].sum()
 
