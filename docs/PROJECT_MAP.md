@@ -90,6 +90,7 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 | `run_weekly.py` | Weekly prediction pipeline. Fetches current data, runs EFM, generates spreads. |
 | `weekly_odds_capture.py` | Captures live odds snapshots from OddsAPI to SQLite. |
 | `capture_odds.py` | Odds capture scheduling / orchestration. |
+| `link_odds_to_cfbd.py` | Links Odds API game IDs to CFBD game IDs via team name + date matching. |
 | `compare_ratings.py` | Compare JP+ ratings across weeks or seasons. |
 | `benchmark.py` | Performance benchmarking for model computation. |
 | `calibrate_situational.py` | Calibration sweep for situational adjustment weights. |

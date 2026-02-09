@@ -43,11 +43,14 @@ class BettingLine:
 def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
     """Get betting lines from The Odds API database.
 
+    Uses cfbd_game_id as the dictionary key when available (for proper merging
+    with CFBD data). Falls back to the Odds API game_id for unlinked records.
+
     Args:
         year: Season year
 
     Returns:
-        Dict mapping game_id to BettingLine
+        Dict mapping game_id (preferring cfbd_game_id) to BettingLine
     """
     if not ODDS_API_DB.exists():
         logger.debug("Odds API database not found")
@@ -57,6 +60,7 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
     conn.row_factory = sqlite3.Row
 
     lines = {}
+    linked_count = 0
 
     try:
         # Build provider priority CASE for ordering
@@ -66,8 +70,10 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
         priority_case += f"ELSE {len(ODDS_API_PROVIDERS)} END"
 
         # Get opening lines for this year, ordered by provider priority
+        # Include cfbd_game_id for proper keying
         opening_cursor = conn.execute(f"""
-            SELECT l.game_id, l.home_team, l.away_team, l.spread_home, l.sportsbook
+            SELECT l.game_id, l.cfbd_game_id, l.home_team, l.away_team,
+                   l.spread_home, l.sportsbook
             FROM odds_lines l
             JOIN odds_snapshots s ON l.snapshot_id = s.id
             WHERE s.snapshot_type LIKE ?
@@ -75,11 +81,17 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
         """, (f"opening_{year}%",))
 
         for row in opening_cursor:
-            game_id = row['game_id']
+            # Use cfbd_game_id if linked, otherwise fall back to odds API game_id
+            if row['cfbd_game_id']:
+                key = str(row['cfbd_game_id'])
+                linked_count += 1
+            else:
+                key = row['game_id']
+
             # First match per game wins (highest priority provider)
-            if game_id not in lines:
-                lines[game_id] = BettingLine(
-                    game_id=game_id,
+            if key not in lines:
+                lines[key] = BettingLine(
+                    game_id=key,
                     home_team=row['home_team'],
                     away_team=row['away_team'],
                     spread_open=row['spread_home'],
@@ -90,7 +102,8 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
 
         # Get closing lines for this year, ordered by provider priority
         closing_cursor = conn.execute(f"""
-            SELECT l.game_id, l.home_team, l.away_team, l.spread_home, l.sportsbook
+            SELECT l.game_id, l.cfbd_game_id, l.home_team, l.away_team,
+                   l.spread_home, l.sportsbook
             FROM odds_lines l
             JOIN odds_snapshots s ON l.snapshot_id = s.id
             WHERE s.snapshot_type LIKE ?
@@ -98,12 +111,17 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
         """, (f"closing_{year}%",))
 
         for row in closing_cursor:
-            game_id = row['game_id']
-            if game_id in lines:
-                lines[game_id].spread_close = row['spread_home']
+            # Use cfbd_game_id if linked, otherwise fall back to odds API game_id
+            if row['cfbd_game_id']:
+                key = str(row['cfbd_game_id'])
             else:
-                lines[game_id] = BettingLine(
-                    game_id=game_id,
+                key = row['game_id']
+
+            if key in lines:
+                lines[key].spread_close = row['spread_home']
+            else:
+                lines[key] = BettingLine(
+                    game_id=key,
                     home_team=row['home_team'],
                     away_team=row['away_team'],
                     spread_open=None,
@@ -112,7 +130,10 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
                     sportsbook=row['sportsbook'],
                 )
 
-        logger.info(f"Loaded {len(lines)} lines from Odds API for {year}")
+        logger.info(
+            f"Loaded {len(lines)} lines from Odds API for {year} "
+            f"({linked_count} linked to CFBD)"
+        )
 
     except Exception as e:
         logger.warning(f"Error loading Odds API lines: {e}")

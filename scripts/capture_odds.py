@@ -79,6 +79,7 @@ def init_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
             price_away INTEGER,
             commence_time TEXT,
             last_update TEXT,
+            cfbd_game_id INTEGER,
             FOREIGN KEY (snapshot_id) REFERENCES odds_snapshots(id),
             UNIQUE(snapshot_id, game_id, sportsbook)
         )
@@ -87,6 +88,9 @@ def init_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
     # Create indexes for fast lookups
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_lines_game_id ON odds_lines(game_id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lines_cfbd_id ON odds_lines(cfbd_game_id)
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_lines_teams ON odds_lines(home_team, away_team)
