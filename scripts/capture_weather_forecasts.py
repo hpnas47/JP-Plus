@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.api.cfbd_client import CFBDClient
-from src.api.tomorrow_io import TomorrowIOClient, VenueLocation
+from src.api.tomorrow_io import TomorrowIOClient, VenueLocation, is_dome_venue
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,14 +68,17 @@ def refresh_venues(cfbd_client: CFBDClient, tomorrow_client: TomorrowIOClient) -
         if lat is None or lon is None:
             continue
 
+        venue_name = v.name or "Unknown"
+        cfbd_dome = getattr(v, "dome", False) or False
+
         venue = VenueLocation(
             venue_id=v.id,
-            name=v.name or "Unknown",
+            name=venue_name,
             city=v.city or "",
             state=v.state or "",
             latitude=lat,
             longitude=lon,
-            dome=getattr(v, "dome", False) or False,
+            dome=is_dome_venue(venue_name, cfbd_dome),  # Use fallback list for known domes
             elevation=getattr(v, "elevation", None),
             timezone=getattr(v, "timezone", None),
         )

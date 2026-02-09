@@ -23,6 +23,13 @@ Where:
     - off_adj = team's offensive adjustment (+ = scores more than avg)
     - def_adj = team's defensive adjustment (+ = allows more than avg, i.e. worse defense)
     - hfa_coef = learned home field advantage (typically +3-4 pts for home team)
+
+Performance Note:
+    Incremental matrix caching was evaluated (Feb 2026) to avoid rebuilding the
+    sparse matrix for games already processed in walk-forward iterations. However,
+    profiling showed Ridge.fit() dominates runtime (0.5ms vs 0.08ms for matrix ops),
+    and cache overhead (vstack, concatenation) actually made training SLOWER.
+    The simple rebuild-each-time approach is preferred for clarity.
 """
 
 import logging

@@ -33,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.api.cfbd_client import CFBDClient
-from src.api.tomorrow_io import TomorrowIOClient, VenueLocation
+from src.api.tomorrow_io import TomorrowIOClient, VenueLocation, is_dome_venue
 from src.adjustments.weather import WeatherAdjuster, WeatherConditions
 from src.models.totals_model import TotalsModel
 from scripts.backtest import fetch_season_data
@@ -294,7 +294,9 @@ def capture_with_watchlist(
             stats["venue_not_found"] += 1
             continue
 
-        if venue.dome:
+        # Check if dome using both database flag and fallback list
+        # (database may have stale data for some venues)
+        if is_dome_venue(venue.name, venue.dome):
             stats["indoor_games"] += 1
             continue
 

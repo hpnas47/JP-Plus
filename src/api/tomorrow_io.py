@@ -66,6 +66,57 @@ class VenueLocation:
     timezone: Optional[str] = None
 
 
+# Known domes fallback list - CFBD dome field is sometimes inaccurate or missing
+# This list provides a safety net for known indoor stadiums
+# Venue names are partial matches (case-insensitive) to handle naming variations
+KNOWN_DOMES = {
+    # FBS Team Home Stadiums
+    "carrier dome",  # Syracuse (now JMA Wireless Dome)
+    "jma wireless dome",  # Syracuse (new name)
+    "alamodome",  # UTSA
+    "ford field",  # Detroit (MAC Championship, Quick Lane Bowl)
+    "u.s. bank stadium",  # Minnesota Vikings (bowl games)
+    "lucas oil stadium",  # Indianapolis (Big Ten Championship)
+    "caesars superdome",  # New Orleans (Sugar Bowl, Tulane sometimes)
+    "mercedes-benz superdome",  # New Orleans (old name)
+    "louisiana superdome",  # New Orleans (older name)
+
+    # Major Bowl Game Venues (retractable roofs typically closed for CFB)
+    "at&t stadium",  # Arlington TX (Cotton Bowl, various games)
+    "mercedes-benz stadium",  # Atlanta (SEC Championship, Peach Bowl, CFP)
+    "nrg stadium",  # Houston (Texas Bowl)
+    "state farm stadium",  # Glendale AZ (Fiesta Bowl, CFP)
+    "sofi stadium",  # LA (Pac-12 Championship, various bowls)
+    "allegiant stadium",  # Las Vegas (Vegas Bowl, Pac-12 Championship)
+
+    # Other indoor venues that occasionally host CFB
+    "tropicana field",  # St. Petersburg (various games)
+    "metrodome",  # Minneapolis (demolished, but for historical data)
+}
+
+
+def is_dome_venue(venue_name: str, cfbd_dome_flag: bool) -> bool:
+    """Check if a venue is a dome using CFBD flag + fallback list.
+
+    Args:
+        venue_name: Name of the venue
+        cfbd_dome_flag: Dome flag from CFBD API (may be inaccurate)
+
+    Returns:
+        True if venue is known to be a dome/indoor stadium
+    """
+    if cfbd_dome_flag:
+        return True
+
+    # Check fallback list (case-insensitive partial match)
+    venue_lower = venue_name.lower()
+    for known_dome in KNOWN_DOMES:
+        if known_dome in venue_lower:
+            return True
+
+    return False
+
+
 class TomorrowIOClient:
     """Client for Tomorrow.io Weather Forecast API.
 
