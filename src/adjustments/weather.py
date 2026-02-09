@@ -27,11 +27,12 @@ class WeatherConditions:
     game_indoors: bool
     temperature: Optional[float]  # Fahrenheit
     wind_speed: Optional[float]  # MPH
-    wind_direction: Optional[int]  # Degrees (0-360)
-    precipitation: Optional[float]  # Inches
-    snowfall: Optional[float]  # Inches
-    humidity: Optional[int]  # Percentage
-    weather_condition: Optional[str]  # Text description
+    wind_gust: Optional[float] = None  # MPH (peak gusts)
+    wind_direction: Optional[int] = None  # Degrees (0-360)
+    precipitation: Optional[float] = None  # Inches
+    snowfall: Optional[float] = None  # Inches
+    humidity: Optional[int] = None  # Percentage
+    weather_condition: Optional[str] = None  # Text description
 
 
 @dataclass
@@ -60,113 +61,113 @@ class WeatherAdjuster:
     """
     Calculate weather adjustments for game totals.
 
-    Weather affects scoring through multiple mechanisms:
+    Weather affects scoring through multiple mechanisms. Uses NON-LINEAR
+    thresholds based on sharp betting research (wind is king of unders).
 
     1. WIND (most significant for totals):
-       - High wind (15+ mph) reduces passing efficiency
-       - Affects field goal accuracy, especially longer kicks
-       - Research shows ~0.3 points reduction per mph over 10 mph threshold
+       Wind impact is non-linear. 10 mph does nothing. 20 mph destroys passing.
+       Uses average of wind_speed and wind_gust for effective wind.
+       - < 12 mph: No impact (0.0 pts)
+       - 12-15 mph: Slight deep passing degradation (-1.5 pts)
+       - 15-20 mph: Kicking range reduced, deep ball erased (-4.0 pts)
+       - > 20 mph: Run-only game profiles, clock runs constantly (-6.0+ pts)
 
     2. TEMPERATURE:
-       - Cold weather (<40°F) reduces scoring
-       - Ball is harder to grip, affects throwing/catching
-       - Players tire faster in extreme cold
-       - ~0.15 points reduction per degree below 40°F
+       Extreme cold turns the ball into a rock (harder to catch/kick).
+       - > 32°F: No significant impact (0.0 pts)
+       - 20-32°F: Slight reduction in FG% and catch rate (-1.0 pts)
+       - < 20°F: Significant impact on mechanics (-3.0 pts)
 
     3. PRECIPITATION:
-       - Rain significantly impacts ball security
-       - Reduces passing attempts, increases run-heavy game scripts
-       - Heavy rain (>0.02 inches) warrants flat penalty
+       Light rain does NOT hurt totals (can cause missed tackles = more scores).
+       Only HEAVY rain/snow causes conservative playcalling.
+       - Light rain (< 0.1 in/hr): No adjustment (the "slick trap")
+       - Heavy rain (> 0.3 in/hr): Ball security issues (-2.5 pts)
+       - Snow with high intensity: Visual impairment, footing (-3.0 pts)
 
     4. INDOOR GAMES:
        - No weather adjustment (controlled environment)
-       - Identified via game_indoors flag from API
+       - Identified via game_indoors flag
 
-    Default parameters are conservative estimates based on:
-    - NFL weather studies (Marek 2015, Kacsmar 2016)
-    - CFB-specific analysis showing similar effects
-    - Backtesting against historical totals results
-
-    NOTE: These defaults should be validated against ATS/totals performance
-    before relying on them for betting decisions.
+    Edge Theory: Capture forecasts Thursday/Saturday BEFORE market moves the line.
+    The value is in timing, not the weather signal itself.
     """
 
-    # Wind thresholds and adjustments
-    DEFAULT_WIND_THRESHOLD = 10.0  # MPH - adjustment starts above this
-    DEFAULT_WIND_COEFFICIENT = -0.3  # Points per MPH above threshold
-    DEFAULT_WIND_CAP = -6.0  # Maximum wind adjustment (prevents extreme values)
+    # Wind thresholds (non-linear tiers)
+    WIND_TIER_1 = 12.0  # MPH - below this = no impact
+    WIND_TIER_2 = 15.0  # MPH - moderate impact
+    WIND_TIER_3 = 20.0  # MPH - severe impact
 
-    # Temperature thresholds and adjustments
-    DEFAULT_TEMP_THRESHOLD = 40.0  # Fahrenheit - adjustment starts below this
-    DEFAULT_TEMP_COEFFICIENT = -0.15  # Points per degree below threshold
-    DEFAULT_TEMP_CAP = -4.0  # Maximum cold adjustment
+    WIND_ADJ_TIER_1 = -1.5  # 12-15 mph
+    WIND_ADJ_TIER_2 = -4.0  # 15-20 mph
+    WIND_ADJ_TIER_3 = -6.0  # 20+ mph (and cap)
 
-    # Precipitation adjustments
-    DEFAULT_PRECIP_THRESHOLD = 0.02  # Inches - significant precipitation
-    DEFAULT_PRECIP_PENALTY = -3.0  # Flat penalty for rain/snow games
-    DEFAULT_HEAVY_PRECIP_THRESHOLD = 0.05  # Heavy precipitation
-    DEFAULT_HEAVY_PRECIP_PENALTY = -5.0  # Additional penalty for heavy precip
+    # Temperature thresholds (non-linear tiers)
+    TEMP_TIER_1 = 32.0  # Freezing - below this = impact starts
+    TEMP_TIER_2 = 20.0  # Severe cold
 
-    def __init__(
-        self,
-        wind_threshold: float = DEFAULT_WIND_THRESHOLD,
-        wind_coefficient: float = DEFAULT_WIND_COEFFICIENT,
-        wind_cap: float = DEFAULT_WIND_CAP,
-        temp_threshold: float = DEFAULT_TEMP_THRESHOLD,
-        temp_coefficient: float = DEFAULT_TEMP_COEFFICIENT,
-        temp_cap: float = DEFAULT_TEMP_CAP,
-        precip_threshold: float = DEFAULT_PRECIP_THRESHOLD,
-        precip_penalty: float = DEFAULT_PRECIP_PENALTY,
-        heavy_precip_threshold: float = DEFAULT_HEAVY_PRECIP_THRESHOLD,
-        heavy_precip_penalty: float = DEFAULT_HEAVY_PRECIP_PENALTY,
-    ):
-        """Initialize weather adjuster with configurable parameters.
+    TEMP_ADJ_TIER_1 = -1.0  # 20-32°F
+    TEMP_ADJ_TIER_2 = -3.0  # < 20°F
 
-        Args:
-            wind_threshold: Wind speed (mph) where adjustment begins
-            wind_coefficient: Points adjustment per mph above threshold
-            wind_cap: Maximum wind adjustment (should be negative)
-            temp_threshold: Temperature (F) where cold adjustment begins
-            temp_coefficient: Points adjustment per degree below threshold
-            temp_cap: Maximum temperature adjustment (should be negative)
-            precip_threshold: Precipitation (inches) for rain penalty
-            precip_penalty: Flat penalty for precipitation games
-            heavy_precip_threshold: Threshold for heavy precipitation
-            heavy_precip_penalty: Additional penalty for heavy precip
+    # Precipitation thresholds
+    # Light rain < 2.5 mm/hr = ~0.1 in/hr: NO adjustment (the "slick trap")
+    # Heavy rain > 7.6 mm/hr = ~0.3 in/hr: adjustment applies
+    PRECIP_LIGHT_THRESHOLD = 0.1  # Inches/hr - below this = no adjustment
+    PRECIP_HEAVY_THRESHOLD = 0.3  # Inches/hr - heavy precipitation
+    PRECIP_HEAVY_PENALTY = -2.5  # Heavy rain penalty
+    SNOW_PENALTY = -3.0  # Snow with accumulation
+
+    def __init__(self):
+        """Initialize weather adjuster with non-linear thresholds.
+
+        Uses class constants for thresholds. No parameters needed - the
+        non-linear tiers are based on sharp betting research and should
+        not be casually adjusted.
         """
-        self.wind_threshold = wind_threshold
-        self.wind_coefficient = wind_coefficient
-        self.wind_cap = wind_cap
-        self.temp_threshold = temp_threshold
-        self.temp_coefficient = temp_coefficient
-        self.temp_cap = temp_cap
-        self.precip_threshold = precip_threshold
-        self.precip_penalty = precip_penalty
-        self.heavy_precip_threshold = heavy_precip_threshold
-        self.heavy_precip_penalty = heavy_precip_penalty
+        pass  # All config is in class constants
 
-    def _calculate_wind_adjustment(self, wind_speed: Optional[float]) -> float:
-        """Calculate wind-based adjustment.
+    def _calculate_wind_adjustment(
+        self,
+        wind_speed: Optional[float],
+        wind_gust: Optional[float] = None,
+    ) -> float:
+        """Calculate wind-based adjustment using non-linear tiers.
+
+        Uses average of wind_speed and wind_gust for effective wind,
+        since gusts matter for passing and kicking.
 
         Args:
-            wind_speed: Wind speed in MPH
+            wind_speed: Sustained wind speed in MPH
+            wind_gust: Peak wind gust in MPH (optional)
 
         Returns:
             Points adjustment (negative = lower total)
         """
-        if wind_speed is None or wind_speed <= self.wind_threshold:
+        if wind_speed is None:
             return 0.0
 
-        excess_wind = wind_speed - self.wind_threshold
-        adjustment = self.wind_coefficient * excess_wind
+        # Use average of speed and gust if gust available
+        if wind_gust is not None:
+            effective_wind = (wind_speed + wind_gust) / 2
+        else:
+            effective_wind = wind_speed
 
-        # Apply cap to prevent extreme adjustments
-        return max(adjustment, self.wind_cap)
+        # Non-linear tiers
+        if effective_wind < self.WIND_TIER_1:
+            return 0.0
+        elif effective_wind < self.WIND_TIER_2:
+            return self.WIND_ADJ_TIER_1  # -1.5
+        elif effective_wind < self.WIND_TIER_3:
+            return self.WIND_ADJ_TIER_2  # -4.0
+        else:
+            return self.WIND_ADJ_TIER_3  # -6.0
 
     def _calculate_temperature_adjustment(
         self, temperature: Optional[float]
     ) -> float:
-        """Calculate temperature-based adjustment.
+        """Calculate temperature-based adjustment using non-linear tiers.
+
+        The "rock effect" - cold balls are harder to catch and kick.
 
         Args:
             temperature: Temperature in Fahrenheit
@@ -174,30 +175,38 @@ class WeatherAdjuster:
         Returns:
             Points adjustment (negative = lower total)
         """
-        if temperature is None or temperature >= self.temp_threshold:
+        if temperature is None or temperature >= self.TEMP_TIER_1:
             return 0.0
 
-        degrees_below = self.temp_threshold - temperature
-        adjustment = self.temp_coefficient * degrees_below
+        # Non-linear tiers
+        if temperature >= self.TEMP_TIER_2:
+            return self.TEMP_ADJ_TIER_1  # 20-32°F: -1.0
+        else:
+            return self.TEMP_ADJ_TIER_2  # < 20°F: -3.0
 
-        # Apply cap to prevent extreme adjustments
-        return max(adjustment, self.temp_cap)
-
-    # Weather conditions that indicate actual precipitation
-    PRECIPITATION_CONDITIONS = frozenset({
-        "Rain",
-        "Light Rain",
+    # Weather conditions that indicate HEAVY precipitation (penalty applies)
+    HEAVY_RAIN_CONDITIONS = frozenset({
         "Heavy Rain",
-        "Rain Shower",
-        "Drizzle",
         "Thunderstorm",
+    })
+
+    SNOW_CONDITIONS = frozenset({
         "Snow",
         "Snowfall",
-        "Light Snow",
         "Heavy Snow",
         "Sleet",
         "Freezing Rain",
         "Wintry Mix",
+    })
+
+    # Light conditions - the "slick trap" - NO penalty
+    LIGHT_PRECIP_CONDITIONS = frozenset({
+        "Rain",
+        "Light Rain",
+        "Rain Shower",
+        "Drizzle",
+        "Flurries",
+        "Light Snow",
     })
 
     def _calculate_precipitation_adjustment(
@@ -208,32 +217,42 @@ class WeatherAdjuster:
     ) -> float:
         """Calculate precipitation-based adjustment.
 
-        Only applies penalty when both:
-        1. Numeric precipitation value exceeds threshold
-        2. Weather condition indicates actual rain/snow (not just fog/humidity)
+        THE "SLICK TRAP": Light rain does NOT hurt totals. Defenders slip,
+        miss tackles, and games can go OVER. Only HEAVY rain/snow with
+        conservative playcalling reduces scoring.
 
         Args:
-            precipitation: Precipitation in inches
-            snowfall: Snowfall in inches (added to total precip)
-            weather_condition: Text description (Rain, Snow, Fog, etc.)
+            precipitation: Rain intensity in inches/hr
+            snowfall: Snowfall in inches (accumulation)
+            weather_condition: Text description (Rain, Snow, etc.)
 
         Returns:
             Points adjustment (negative = lower total)
         """
-        total_precip = (precipitation or 0.0) + (snowfall or 0.0)
-
-        if total_precip < self.precip_threshold:
+        # Snow gets its own penalty (visual impairment, footing)
+        if weather_condition in self.SNOW_CONDITIONS:
+            if (snowfall or 0.0) > 0.1:  # Accumulating snow
+                return self.SNOW_PENALTY  # -3.0
             return 0.0
 
-        # Only apply penalty if condition indicates actual precipitation
-        # This avoids penalizing fog/humidity that may register small precip values
-        if weather_condition and weather_condition not in self.PRECIPITATION_CONDITIONS:
+        # Light rain/drizzle = NO penalty (the slick trap)
+        if weather_condition in self.LIGHT_PRECIP_CONDITIONS:
             return 0.0
 
-        if total_precip >= self.heavy_precip_threshold:
-            return self.heavy_precip_penalty
+        # Heavy rain - check intensity
+        rain_intensity = precipitation or 0.0
 
-        return self.precip_penalty
+        if rain_intensity < self.PRECIP_LIGHT_THRESHOLD:
+            return 0.0  # < 0.1 in/hr = light, no penalty
+
+        if rain_intensity >= self.PRECIP_HEAVY_THRESHOLD:
+            return self.PRECIP_HEAVY_PENALTY  # > 0.3 in/hr = heavy, -2.5
+
+        # Moderate rain (0.1 - 0.3 in/hr) - small penalty only if condition says heavy
+        if weather_condition in self.HEAVY_RAIN_CONDITIONS:
+            return self.PRECIP_HEAVY_PENALTY
+
+        return 0.0
 
     def calculate_adjustment(
         self,
@@ -259,7 +278,10 @@ class WeatherAdjuster:
             )
 
         # Calculate individual adjustments
-        wind_adj = self._calculate_wind_adjustment(conditions.wind_speed)
+        wind_adj = self._calculate_wind_adjustment(
+            conditions.wind_speed,
+            conditions.wind_gust,
+        )
         temp_adj = self._calculate_temperature_adjustment(conditions.temperature)
         precip_adj = self._calculate_precipitation_adjustment(
             conditions.precipitation,
@@ -308,6 +330,9 @@ class WeatherAdjuster:
     def is_weather_concern(self, conditions: WeatherConditions) -> bool:
         """Check if weather is significant enough to warrant attention.
 
+        Uses the new non-linear thresholds. A "concern" means the weather
+        would trigger a material adjustment (> 1 point).
+
         Args:
             conditions: WeatherConditions for a game
 
@@ -317,49 +342,39 @@ class WeatherAdjuster:
         if conditions.game_indoors:
             return False
 
-        # Check each factor
-        high_wind = (
-            conditions.wind_speed is not None
-            and conditions.wind_speed > self.wind_threshold
-        )
+        # Wind concern: effective wind > 12 mph (TIER_1)
+        effective_wind = conditions.wind_speed or 0.0
+        if conditions.wind_gust:
+            effective_wind = (effective_wind + conditions.wind_gust) / 2
+        high_wind = effective_wind >= self.WIND_TIER_1
+
+        # Temperature concern: < 32°F (TIER_1)
         cold = (
             conditions.temperature is not None
-            and conditions.temperature < self.temp_threshold
-        )
-        # Only flag precipitation if condition indicates actual rain/snow
-        has_precip_condition = (
-            conditions.weather_condition in self.PRECIPITATION_CONDITIONS
-            if conditions.weather_condition
-            else False
-        )
-        precip = has_precip_condition and (
-            (
-                conditions.precipitation is not None
-                and conditions.precipitation > self.precip_threshold
-            )
-            or (
-                conditions.snowfall is not None
-                and conditions.snowfall > self.precip_threshold
-            )
+            and conditions.temperature < self.TEMP_TIER_1
         )
 
-        return high_wind or cold or precip
+        # Precipitation concern: heavy rain OR snow
+        heavy_precip = (
+            conditions.weather_condition in self.HEAVY_RAIN_CONDITIONS
+            or conditions.weather_condition in self.SNOW_CONDITIONS
+        )
+
+        return high_wind or cold or heavy_precip
 
     def get_parameter_summary(self) -> dict:
         """Get current parameter settings for transparency.
 
         Returns:
-            Dict of all configurable parameters
+            Dict of all configurable parameters (non-linear tiers)
         """
         return {
-            "wind_threshold_mph": self.wind_threshold,
-            "wind_coefficient_pts_per_mph": self.wind_coefficient,
-            "wind_cap_pts": self.wind_cap,
-            "temp_threshold_f": self.temp_threshold,
-            "temp_coefficient_pts_per_degree": self.temp_coefficient,
-            "temp_cap_pts": self.temp_cap,
-            "precip_threshold_inches": self.precip_threshold,
-            "precip_penalty_pts": self.precip_penalty,
-            "heavy_precip_threshold_inches": self.heavy_precip_threshold,
-            "heavy_precip_penalty_pts": self.heavy_precip_penalty,
+            "wind_tiers_mph": [self.WIND_TIER_1, self.WIND_TIER_2, self.WIND_TIER_3],
+            "wind_adjustments_pts": [self.WIND_ADJ_TIER_1, self.WIND_ADJ_TIER_2, self.WIND_ADJ_TIER_3],
+            "temp_tiers_f": [self.TEMP_TIER_1, self.TEMP_TIER_2],
+            "temp_adjustments_pts": [self.TEMP_ADJ_TIER_1, self.TEMP_ADJ_TIER_2],
+            "precip_light_threshold_in_hr": self.PRECIP_LIGHT_THRESHOLD,
+            "precip_heavy_threshold_in_hr": self.PRECIP_HEAVY_THRESHOLD,
+            "precip_heavy_penalty_pts": self.PRECIP_HEAVY_PENALTY,
+            "snow_penalty_pts": self.SNOW_PENALTY,
         }

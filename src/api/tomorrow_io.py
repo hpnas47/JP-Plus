@@ -505,10 +505,10 @@ class TomorrowIOClient:
     def is_weather_concern(self, forecast: WeatherForecast) -> bool:
         """Check if forecast indicates weather that may impact totals.
 
-        Uses the attention filter thresholds:
-        - Wind > 15 mph
+        Uses non-linear thresholds matching WeatherAdjuster:
+        - Effective wind (avg of speed + gust) >= 12 mph
         - Temperature < 32°F
-        - Precipitation probability > 60%
+        - Heavy precipitation (> 60% probability with high intensity)
 
         Args:
             forecast: WeatherForecast to check
@@ -519,10 +519,11 @@ class TomorrowIOClient:
         if forecast.is_indoor:
             return False
 
-        high_wind = (
-            forecast.wind_speed is not None
-            and forecast.wind_speed > 15
-        )
+        # Wind: use average of speed and gust, threshold at 12 mph
+        effective_wind = forecast.wind_speed or 0.0
+        if forecast.wind_gust:
+            effective_wind = (effective_wind + forecast.wind_gust) / 2
+        high_wind = effective_wind >= 12.0
 
         freezing = (
             forecast.temperature is not None
@@ -567,6 +568,7 @@ class TomorrowIOClient:
             game_indoors=forecast.is_indoor,
             temperature=forecast.temperature,
             wind_speed=forecast.wind_speed,
+            wind_gust=forecast.wind_gust,
             wind_direction=forecast.wind_direction,
             precipitation=rain_inches,
             snowfall=snow_inches,
