@@ -22,6 +22,7 @@ from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
 from src.adjustments.aggregator import AdjustmentAggregator, TravelBreakdown
 from src.adjustments.diagnostics import (
+    AdjustmentStack,
     AdjustmentStackDiagnostics,
     extract_stack_from_prediction,
 )
@@ -202,6 +203,11 @@ class SpreadGenerator:
     DEFAULT_FCS_PENALTY_ELITE = 18.0  # Elite FCS (playoff regulars, consistent vs FBS)
     DEFAULT_FCS_PENALTY_STANDARD = 32.0  # Standard FCS teams
 
+    # Logistic curve steepness for spread-to-probability conversion
+    # k=0.15 means each point of spread ≈ 3% change in win probability
+    # Calibrated to historical FBS game outcomes
+    WIN_PROB_K = 0.15
+
     def __init__(
         self,
         ratings: Optional[dict[str, float]] = None,
@@ -365,7 +371,8 @@ class SpreadGenerator:
     def _spread_to_probability(self, spread: float) -> float:
         """Convert spread to home win probability.
 
-        Uses empirical relationship between spread and win probability.
+        Uses logistic function calibrated to historical FBS outcomes.
+        WIN_PROB_K controls curve steepness (0.15 ≈ 3% per point).
 
         Args:
             spread: Point spread (positive = home favored)
@@ -373,10 +380,7 @@ class SpreadGenerator:
         Returns:
             Home team win probability (0-1)
         """
-        # Logistic approximation: each point of spread ~ 3% win probability
-        # Calibrated to historical data
-        k = 0.15
-        prob = 1 / (1 + math.exp(-k * spread))
+        prob = 1 / (1 + math.exp(-self.WIN_PROB_K * spread))
         return prob
 
     def _determine_confidence(
@@ -466,9 +470,9 @@ class SpreadGenerator:
         else:
             raw_hfa = 0.0
 
-        # Travel and altitude (raw)
-        raw_travel, _ = self.travel.get_total_travel_adjustment(home_team, away_team)
-        raw_altitude, _ = self.altitude.get_detailed_adjustment(home_team, away_team)
+        # Travel and altitude (raw values only; breakdown dicts discarded)
+        raw_travel, _travel_breakdown = self.travel.get_total_travel_adjustment(home_team, away_team)
+        raw_altitude, _altitude_breakdown = self.altitude.get_detailed_adjustment(home_team, away_team)
 
         travel_breakdown = TravelBreakdown(
             travel_penalty=raw_travel,
@@ -642,12 +646,16 @@ class SpreadGenerator:
         return predictions
 
     def predictions_to_dataframe(
-        self, predictions: list[PredictedSpread]
+        self,
+        predictions: list[PredictedSpread],
+        sort_by_spread: bool = True,
     ) -> pd.DataFrame:
         """Convert predictions to DataFrame.
 
         Args:
             predictions: List of predictions
+            sort_by_spread: If True (default), sort by absolute spread descending
+                           (biggest mismatches first). Set False to preserve input order.
 
         Returns:
             DataFrame with all prediction data
@@ -655,10 +663,11 @@ class SpreadGenerator:
         data = [p.to_dict() for p in predictions]
         df = pd.DataFrame(data)
 
-        # Sort by absolute spread (biggest mismatches first)
-        df = df.reindex(
-            df["spread"].abs().sort_values(ascending=False).index
-        ).reset_index(drop=True)
+        if sort_by_spread:
+            # Sort by absolute spread (biggest mismatches first)
+            df = df.reindex(
+                df["spread"].abs().sort_values(ascending=False).index
+            ).reset_index(drop=True)
 
         return df
 
@@ -690,7 +699,7 @@ class SpreadGenerator:
             return
         self.diagnostics.log_error_analysis(predictions_df, results_df)
 
-    def get_high_stack_games(self) -> list:
+    def get_high_stack_games(self) -> list[AdjustmentStack]:
         """Get games with high correlated stacks (>5 pts)."""
         if self.diagnostics is None:
             return []

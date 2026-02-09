@@ -125,6 +125,27 @@ class TotalsModel:
         self._n_teams = len(teams)
         self._team_universe_set = True
 
+    def reset(self) -> None:
+        """Reset model state for reuse with a new season/team universe.
+
+        Clears the team universe lock, ratings, and trained state while
+        preserving configuration (ridge_alpha, decay_factor, use_year_intercepts).
+
+        Use this when:
+        - Starting a new season with different FBS members (conference realignment)
+        - Switching between single-season and multi-season training
+        - Clearing state for a fresh training run
+        """
+        self.team_ratings = {}
+        self.baseline = 26.0
+        self.year_baselines = {}
+        self.hfa_coef = 0.0
+        self._team_to_idx = {}
+        self._n_teams = 0
+        self._team_universe_set = False
+        self._year_to_idx = {}
+        self._trained = False
+
     def train(
         self,
         games_df: pd.DataFrame | pl.DataFrame,
