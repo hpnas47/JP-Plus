@@ -691,13 +691,19 @@ class SpecialTeamsModel:
             # Each component is a marginal point contribution vs average
             overall = fg_rating + punt_rating + kick_rating
 
+            # is_complete only if team has data in ALL three component dicts
+            # (not just defaulting to 0.0 for missing components)
+            has_all_components = (
+                team in fg_ratings and team in punt_ratings and team in kickoff_ratings
+            )
+
             self.team_ratings[team] = SpecialTeamsRating(
                 team=team,
                 field_goal_rating=fg_rating,
                 punt_rating=punt_rating,
                 kickoff_rating=kick_rating,
                 overall_rating=overall,
-                is_complete=True,  # P2.3: All 3 components populated
+                is_complete=has_all_components,
             )
 
         # P3.9: Debug level for per-week logging
