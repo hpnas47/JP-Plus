@@ -534,7 +534,7 @@ with closing(init_database()) as conn:
 - On success: `COMMIT` (all lines saved)
 - On any error: `ROLLBACK` (no partial writes) + re-raise
 
-**Commit**: (pending)
+**Commit**: `53e72a9` (Add transaction safety and connection cleanup to odds capture)
 
 ---
 
