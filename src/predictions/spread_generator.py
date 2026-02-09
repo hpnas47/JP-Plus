@@ -257,8 +257,23 @@ class SpreadGenerator:
         Returns:
             Expected point margin (home - away) on neutral field
         """
-        home_rating = self.ratings.get(home_team, 0.0)
-        away_rating = self.ratings.get(away_team, 0.0)
+        home_rating = self.ratings.get(home_team)
+        away_rating = self.ratings.get(away_team)
+
+        # Warn on missing ratings - likely a misspelling or data issue
+        if home_rating is None:
+            logger.warning(
+                f"Team '{home_team}' not found in ratings (defaulting to 0.0). "
+                "Check for misspelling or missing data."
+            )
+            home_rating = 0.0
+        if away_rating is None:
+            logger.warning(
+                f"Team '{away_team}' not found in ratings (defaulting to 0.0). "
+                "Check for misspelling or missing data."
+            )
+            away_rating = 0.0
+
         return home_rating - away_rating
 
     def _get_pace_adjustment(
@@ -302,6 +317,9 @@ class SpreadGenerator:
         the FBS team. Elite FCS teams (playoff regulars, consistent vs FBS)
         get a smaller penalty than standard FCS teams.
 
+        SAFEGUARD: If a team is in self.ratings but NOT in fbs_teams, it's likely
+        a misspelled FBS team, not an FCS team. Don't apply FCS penalty in this case.
+
         Args:
             home_team: Home team name
             away_team: Away team name
@@ -314,6 +332,25 @@ class SpreadGenerator:
 
         home_is_fbs = home_team in self.fbs_teams
         away_is_fbs = away_team in self.fbs_teams
+
+        # Safeguard: Check if team is in ratings but not in fbs_teams
+        # This catches misspelled FBS teams that would otherwise get FCS penalty
+        home_in_ratings = home_team in self.ratings
+        away_in_ratings = away_team in self.ratings
+
+        if not home_is_fbs and home_in_ratings:
+            logger.warning(
+                f"Team '{home_team}' is in ratings but NOT in fbs_teams. "
+                "Possible data inconsistency — skipping FCS penalty."
+            )
+            home_is_fbs = True  # Treat as FBS to avoid penalty
+
+        if not away_is_fbs and away_in_ratings:
+            logger.warning(
+                f"Team '{away_team}' is in ratings but NOT in fbs_teams. "
+                "Possible data inconsistency — skipping FCS penalty."
+            )
+            away_is_fbs = True  # Treat as FBS to avoid penalty
 
         if home_is_fbs and not away_is_fbs:
             # Home is FBS, away is FCS - add penalty to home's favor
