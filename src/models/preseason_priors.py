@@ -73,9 +73,7 @@ COACH_PEDIGREE = {
     # Below average tier: Concerning prior HC record
     "Jedd Fisch": 0.95,         # Below .500 at Arizona before Washington
     "Jeff Lebby": 0.90,         # Limited/poor HC record
-
-    # Default: 0 means first-time HC - will be EXCLUDED from adjustment
-    "default": 0,
+    # Note: First-time HCs go in FIRST_TIME_HCS, not here with pedigree 0
 }
 
 # First-time HCs - explicitly excluded from coaching change adjustment
@@ -160,20 +158,26 @@ def get_triple_option_boost(team: str) -> float:
     return 0.0
 
 
-def get_coach_pedigree(coach_name: str) -> float:
+def get_coach_pedigree(coach_name: str) -> Optional[float]:
     """Get pedigree multiplier for a coach.
 
     Args:
         coach_name: Coach's name
 
     Returns:
-        Pedigree multiplier (0.90 - 1.30), or 0 if first-time HC (excluded)
+        Pedigree multiplier (0.90 - 1.30), 0 if first-time HC (explicitly excluded),
+        or None if coach is unlisted (data entry error)
     """
-    # First-time HCs are explicitly excluded
+    # First-time HCs are explicitly excluded (return 0 sentinel)
     if coach_name in FIRST_TIME_HCS:
         return 0
 
-    return COACH_PEDIGREE.get(coach_name, COACH_PEDIGREE["default"])
+    # Check if coach has explicit pedigree entry
+    if coach_name in COACH_PEDIGREE:
+        return COACH_PEDIGREE[coach_name]
+
+    # Unlisted coach - return None to signal data entry error
+    return None
 
 
 def is_new_coach(team: str, year: int) -> tuple[bool, Optional[str]]:
@@ -1092,11 +1096,19 @@ class PreseasonPriors:
                 return self.prior_year_weight, self.talent_weight, 0.0, coach_name
         else:
             # Underperformer with new coach - apply forget factor
-            # Get coach pedigree first - if 0, coach is first-time HC and excluded
+            # Get coach pedigree: None=unlisted (error), 0=first-time HC (excluded), >0=valid
             pedigree = get_coach_pedigree(coach_name) if coach_name else 0
 
+            if pedigree is None:
+                # Unlisted coach - data entry error, warn and skip adjustment
+                logger.warning(
+                    f"{team}: Coach '{coach_name}' in COACHING_CHANGES but not in "
+                    f"COACH_PEDIGREE or FIRST_TIME_HCS - add to one of these dicts"
+                )
+                return self.prior_year_weight, self.talent_weight, 0.0, coach_name
+
             if pedigree == 0:
-                # First-time HC - no prior record to base adjustment on
+                # First-time HC - explicitly excluded, no prior record to base adjustment on
                 logger.debug(f"{team}: First-time HC {coach_name}, no adjustment")
                 return self.prior_year_weight, self.talent_weight, 0.0, coach_name
 
