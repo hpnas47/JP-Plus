@@ -55,6 +55,12 @@ class TotalsRating:
     def_adjustment: float  # Defensive adjustment from baseline (+ = worse D)
     games_played: int
 
+    def __repr__(self) -> str:
+        return (
+            f"TotalsRating({self.team}: off={self.adj_off_ppg:.1f}, "
+            f"def={self.adj_def_ppg:.1f}, games={self.games_played})"
+        )
+
 
 @dataclass
 class TotalsPrediction:
@@ -72,6 +78,12 @@ class TotalsPrediction:
     def adjusted_total(self) -> float:
         """Total after all adjustments."""
         return self.predicted_total + self.weather_adjustment
+
+    def __repr__(self) -> str:
+        return (
+            f"TotalsPrediction({self.away_team} @ {self.home_team}: "
+            f"total={self.predicted_total:.1f}, adj={self.adjusted_total:.1f})"
+        )
 
 
 class TotalsModel:
@@ -161,7 +173,7 @@ class TotalsModel:
             max_week: Only use games from weeks <= max_week (for walk-forward).
                       If None, uses all games.
         """
-        # Convert to pandas if needed
+        # Convert to pandas if needed (Polars for ingest, pandas for sklearn is the project pattern)
         if isinstance(games_df, pl.DataFrame):
             games = games_df.to_pandas()
         else:
@@ -262,7 +274,7 @@ class TotalsModel:
             n_entries = 7 * n_games
             row_indices = np.empty(n_entries, dtype=np.int32)
             col_indices = np.empty(n_entries, dtype=np.int32)
-            data = np.ones(n_entries, dtype=np.float32)  # float32 for perf
+            data = np.ones(n_entries, dtype=np.float64)
 
             # Row 2i (home): offense + defense + HFA + year
             row_indices[0::7] = 2 * game_range
@@ -286,7 +298,7 @@ class TotalsModel:
             n_entries = 5 * n_games
             row_indices = np.empty(n_entries, dtype=np.int32)
             col_indices = np.empty(n_entries, dtype=np.int32)
-            data = np.ones(n_entries, dtype=np.float32)  # float32 for perf
+            data = np.ones(n_entries, dtype=np.float64)
 
             # Row 2i (home): offense + defense + HFA
             row_indices[0::5] = 2 * game_range
@@ -305,7 +317,7 @@ class TotalsModel:
         X = coo_matrix((data, (row_indices, col_indices)), shape=(n_rows, n_cols)).tocsr()
 
         # Build y vector: [home_pts_0, away_pts_0, home_pts_1, away_pts_1, ...]
-        y = np.empty(n_rows, dtype=np.float32)  # float32 for perf
+        y = np.empty(n_rows, dtype=np.float64)
         y[0::2] = home_pts
         y[1::2] = away_pts
 
@@ -315,13 +327,13 @@ class TotalsModel:
             sample_weights = None  # Ridge uses uniform weights when None
         else:
             # Build weeks vector for recency weighting
-            weeks = np.empty(n_rows, dtype=np.float32)  # float32 for perf
+            weeks = np.empty(n_rows, dtype=np.float64)
             weeks[0::2] = game_weeks
             weeks[1::2] = game_weeks
             # pred_week = max_week + 1 (we predict the week after training data)
             pred_week = (max_week or int(weeks.max())) + 1
             weeks_ago = pred_week - weeks
-            sample_weights = (self.decay_factor ** weeks_ago).astype(np.float32)  # float32 for perf
+            sample_weights = self.decay_factor ** weeks_ago
 
         # Fit Ridge regression with sample weights
         # fit_intercept: True unless using year intercepts (which serve as baselines)
@@ -438,13 +450,31 @@ class TotalsModel:
             weather_adjustment=weather_adjustment,
         )
 
-    def get_ratings_df(self) -> pd.DataFrame:
-        """Get ratings as a sorted DataFrame."""
+    def get_ratings_df(self, min_games: int = 0) -> pd.DataFrame:
+        """Get ratings as a sorted DataFrame.
+
+        Args:
+            min_games: Minimum games played to include (0 = all teams with any games).
+                       Use 3-4 to filter out teams with unreliable early-season ratings.
+
+        Returns:
+            DataFrame with columns: team, adj_off_ppg, adj_def_ppg, off_adjustment,
+            def_adjustment, games_played, reliability.
+
+            Reliability is a 0-1 score based on games_played:
+            - 0.0: 1 game (very unreliable)
+            - 0.5: 4 games (moderate)
+            - 1.0: 8+ games (fully reliable)
+        """
         if not self.team_ratings:
             return pd.DataFrame()
 
         rows = []
         for team, r in self.team_ratings.items():
+            if r.games_played < min_games:
+                continue
+            # Reliability: linear ramp from 0 (1 game) to 1.0 (8+ games)
+            reliability = min(1.0, max(0.0, (r.games_played - 1) / 7))
             rows.append({
                 'team': team,
                 'adj_off_ppg': r.adj_off_ppg,
@@ -452,6 +482,7 @@ class TotalsModel:
                 'off_adjustment': r.off_adjustment,
                 'def_adjustment': r.def_adjustment,
                 'games_played': r.games_played,
+                'reliability': round(reliability, 2),
             })
 
         df = pd.DataFrame(rows)
@@ -479,7 +510,7 @@ def walk_forward_totals_backtest(
     Returns:
         Dict with predictions, errors, and summary metrics
     """
-    # Convert to pandas
+    # Convert to pandas if needed (Polars for ingest, pandas for sklearn is the project pattern)
     if isinstance(games_df, pl.DataFrame):
         games = games_df.to_pandas()
     else:
