@@ -225,6 +225,7 @@ def capture_with_watchlist(
     year: int,
     week: int,
     dry_run: bool = False,
+    limit: int = 0,
 ) -> dict:
     """Capture forecasts and build watchlist of weather-impacted games.
 
@@ -234,6 +235,7 @@ def capture_with_watchlist(
         year: Season year
         week: Week number
         dry_run: If True, show games but don't fetch forecasts
+        limit: Max forecasts to fetch (0 = no limit, recommended: 20 per hour)
 
     Returns:
         Dict with capture stats and watchlist
@@ -310,6 +312,8 @@ def capture_with_watchlist(
         outdoor_games.append((game, venue))
 
     logger.info(f"Outdoor games to capture: {len(outdoor_games)}")
+    if limit > 0:
+        logger.info(f"Rate limit: capturing max {limit} forecasts (use --limit 0 for all)")
 
     if dry_run:
         for game, venue in outdoor_games:
@@ -318,6 +322,12 @@ def capture_with_watchlist(
 
     # Capture forecasts (respecting rate limits)
     for i, (game, venue) in enumerate(outdoor_games):
+        # Check limit before each API call
+        if limit > 0 and stats["forecasts_captured"] >= limit:
+            remaining = len(outdoor_games) - i
+            logger.info(f"Reached limit of {limit} forecasts. {remaining} games remaining.")
+            logger.info("Run again in 1 hour to capture remaining games.")
+            break
         # Parse game time
         start_date = getattr(game, "start_date", None)
         if start_date:
@@ -627,6 +637,14 @@ def main():
         help="Saturday confirmation run (compares to Thursday forecasts)"
     )
     parser.add_argument(
+        "--limit", type=int, default=20,
+        help="Max forecasts to fetch per run (default: 20, free tier safe). Use 0 for no limit."
+    )
+    parser.add_argument(
+        "--delay", type=float, default=3.0,
+        help="Seconds between API calls (default: 3.0)"
+    )
+    parser.add_argument(
         "--api-key", type=str, default=None,
         help="Tomorrow.io API key (or set TOMORROW_IO_API_KEY env var)"
     )
@@ -649,7 +667,7 @@ def main():
     cfbd_client = CFBDClient()
     tomorrow_client = TomorrowIOClient(
         api_key=api_key,
-        rate_limit_delay=3.0,  # 3 seconds between calls
+        rate_limit_delay=args.delay,
     )
 
     # Run capture
@@ -675,6 +693,7 @@ def main():
         args.year,
         args.week,
         dry_run=args.dry_run,
+        limit=args.limit,
     )
 
     # Print appropriate report
