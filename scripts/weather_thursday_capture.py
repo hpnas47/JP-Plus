@@ -35,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.api.cfbd_client import CFBDClient
 from src.api.tomorrow_io import TomorrowIOClient, VenueLocation
 from src.adjustments.weather import WeatherAdjuster, WeatherConditions
+from src.models.totals_model import TotalsModel
+from scripts.backtest import fetch_season_data
 
 # Configure logging
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -85,6 +87,61 @@ def get_current_cfb_week() -> tuple[int, int]:
     return year, week
 
 
+def train_totals_model(
+    cfbd_client: CFBDClient,
+    year: int,
+    week: int,
+) -> TotalsModel:
+    """Train TotalsModel on data up to current week.
+
+    Args:
+        cfbd_client: CFBD API client
+        year: Season year
+        week: Current week (train on weeks < week)
+
+    Returns:
+        Trained TotalsModel
+    """
+    logger.info(f"Training JP+ TotalsModel on {year} weeks 1-{week-1}...")
+
+    # Fetch season data
+    games_df, _ = fetch_season_data(cfbd_client, year)
+    games = games_df.to_pandas()
+
+    # Get FBS teams
+    fbs_teams = cfbd_client.get_fbs_teams(year=year)
+    fbs_set = {t.school for t in fbs_teams if t.school}
+
+    # Filter to FBS vs FBS with scores
+    games = games[
+        games['home_team'].isin(fbs_set) &
+        games['away_team'].isin(fbs_set) &
+        games['home_points'].notna() &
+        games['away_points'].notna()
+    ].copy()
+
+    # Add year column
+    games['year'] = year
+
+    # Train on weeks < current week (walk-forward)
+    train_games = games[games['week'] < week]
+
+    if len(train_games) < 20:
+        logger.warning(f"Only {len(train_games)} training games available")
+
+    # Create and train model
+    model = TotalsModel(ridge_alpha=10.0, decay_factor=1.0)
+    model.set_team_universe(fbs_set)
+    model.train(train_games, fbs_set, max_week=week - 1)
+
+    if model._trained:
+        logger.info(f"  Trained on {len(train_games)} games, baseline={model.baseline:.1f}")
+    else:
+        logger.warning("  Model training failed")
+
+    return model
+
+
 def capture_with_watchlist(
     cfbd_client: CFBDClient,
     tomorrow_client: TomorrowIOClient,
@@ -121,6 +178,14 @@ def capture_with_watchlist(
         logger.info(f"Found {len(betting_lines)} games with over/under totals")
     except Exception as e:
         logger.warning(f"Could not fetch betting lines: {e}")
+
+    # Train JP+ TotalsModel on data up to this week
+    totals_model = None
+    if week > 1 and not dry_run:
+        try:
+            totals_model = train_totals_model(cfbd_client, year, week)
+        except Exception as e:
+            logger.warning(f"Could not train TotalsModel: {e}")
 
     # Also check postseason if week > 15
     if week > 15:
@@ -209,15 +274,32 @@ def capture_with_watchlist(
                 conditions = tomorrow_client.forecast_to_weather_conditions(forecast, game.id)
                 adjustment = weather_adjuster.calculate_adjustment(conditions)
 
-                # Get Vegas total for this game
+                # Get JP+ predicted total and Vegas total
+                jp_total = None
+                jp_weather_adjusted = None
                 vegas_total = betting_lines.get(game.id)
-                adjusted_total = None
-                if vegas_total is not None:
-                    adjusted_total = vegas_total + adjustment.total_adjustment
+                edge = None
+
+                if totals_model and totals_model._trained:
+                    pred = totals_model.predict_total(
+                        game.home_team,
+                        game.away_team,
+                        year=year,
+                    )
+                    if pred:
+                        jp_total = pred.predicted_total
+                        jp_weather_adjusted = jp_total + adjustment.total_adjustment
+
+                        # Edge: JP+ weather-adjusted vs Vegas
+                        # Negative edge = JP+ says UNDER (we want this for weather games)
+                        if vegas_total is not None:
+                            edge = jp_weather_adjusted - vegas_total
 
                 watchlist_entry = {
                     "game_id": game.id,
                     "matchup": f"{game.away_team} @ {game.home_team}",
+                    "home_team": game.home_team,
+                    "away_team": game.away_team,
                     "venue": venue.name,
                     "game_time": game_time.isoformat(),
                     "temperature": forecast.temperature,
@@ -229,9 +311,11 @@ def capture_with_watchlist(
                     ),
                     "precip_prob": forecast.precipitation_probability,
                     "weather_code": forecast.weather_code,
+                    "jp_total": jp_total,
+                    "jp_weather_adjusted": jp_weather_adjusted,
                     "vegas_total": vegas_total,
-                    "adjusted_total": adjusted_total,
-                    "total_adjustment": adjustment.total_adjustment,
+                    "edge": edge,
+                    "weather_adjustment": adjustment.total_adjustment,
                     "wind_adjustment": adjustment.wind_adjustment,
                     "temp_adjustment": adjustment.temperature_adjustment,
                     "precip_adjustment": adjustment.precipitation_adjustment,
@@ -240,11 +324,12 @@ def capture_with_watchlist(
                 }
                 stats["watchlist"].append(watchlist_entry)
 
+                edge_str = f"Edge: {edge:+.1f}" if edge is not None else "Edge: N/A"
                 logger.info(
                     f"  🚨 WATCHLIST: {game.away_team} @ {game.home_team} | "
                     f"Wind: {forecast.wind_speed:.0f}/{forecast.wind_gust or 0:.0f} mph, "
                     f"Temp: {forecast.temperature:.0f}°F | "
-                    f"Adjustment: {adjustment.total_adjustment:+.1f} pts"
+                    f"Weather: {adjustment.total_adjustment:+.1f} pts | {edge_str}"
                 )
             else:
                 logger.info(
@@ -274,10 +359,11 @@ def print_watchlist_report(stats: dict) -> None:
     else:
         print(f"\n🚨 {len(stats['watchlist'])} GAMES WITH WEATHER CONCERNS:\n")
 
-        # Sort by total adjustment (most negative first)
+        # Sort by edge (most negative = strongest UNDER signal first)
+        # If edge is None, use weather adjustment as fallback
         sorted_watchlist = sorted(
             stats["watchlist"],
-            key=lambda x: x["total_adjustment"]
+            key=lambda x: x.get("edge") if x.get("edge") is not None else x.get("weather_adjustment", 0)
         )
 
         for entry in sorted_watchlist:
@@ -286,17 +372,35 @@ def print_watchlist_report(stats: dict) -> None:
             print(f"    Wind: {entry['wind_speed']:.0f} mph (gust: {entry.get('wind_gust') or 'N/A'})")
             print(f"    Temp: {entry['temperature']:.0f}°F")
 
-            # Show Vegas total and weather-adjusted total
+            # Show JP+ prediction and weather adjustment
+            jp_total = entry.get('jp_total')
+            jp_weather = entry.get('jp_weather_adjusted')
             vegas_total = entry.get('vegas_total')
-            adjusted_total = entry.get('adjusted_total')
-            if vegas_total is not None and adjusted_total is not None:
-                print(f"    📊 Vegas Total: {vegas_total:.1f} → Weather-Adjusted: {adjusted_total:.1f}")
-            elif vegas_total is not None:
-                print(f"    📊 Vegas Total: {vegas_total:.1f}")
-            else:
-                print(f"    📊 Vegas Total: N/A")
+            edge = entry.get('edge')
 
-            print(f"    📉 UNDER ADJUSTMENT: {entry['total_adjustment']:+.1f} pts")
+            if jp_total is not None:
+                print(f"    📊 JP+ Total: {jp_total:.1f} → Weather-Adjusted: {jp_weather:.1f}")
+            else:
+                print(f"    📊 JP+ Total: N/A (insufficient training data)")
+
+            if vegas_total is not None:
+                print(f"    🎰 Vegas Total: {vegas_total:.1f}")
+            else:
+                print(f"    🎰 Vegas Total: N/A")
+
+            # Show the edge (JP+ weather-adjusted vs Vegas)
+            if edge is not None:
+                if edge < -3:
+                    signal = "🔥 STRONG UNDER"
+                elif edge < 0:
+                    signal = "📉 LEAN UNDER"
+                elif edge > 3:
+                    signal = "⚠️ JP+ HIGHER THAN VEGAS"
+                else:
+                    signal = "➖ NEUTRAL"
+                print(f"    💰 Edge: {edge:+.1f} pts ({signal})")
+
+            print(f"    🌧️ Weather Adjustment: {entry['weather_adjustment']:+.1f} pts")
             print(f"       Wind: {entry['wind_adjustment']:+.1f}, Temp: {entry['temp_adjustment']:+.1f}, Precip: {entry['precip_adjustment']:+.1f}")
             print(f"    Confidence: {entry['confidence']:.0%} ({entry['hours_until_game']}h until game)")
             print()
