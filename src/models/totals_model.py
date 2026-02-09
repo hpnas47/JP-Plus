@@ -88,6 +88,13 @@ class TotalsModel:
     """
 
     def __init__(self, ridge_alpha: float = 10.0, decay_factor: float = 1.0, use_year_intercepts: bool = False):
+        # Validate decay_factor: must be in (0, 1.0]
+        # Values > 1.0 would UPWEIGHT old games (opposite of intended recency bias)
+        if not (0 < decay_factor <= 1.0):
+            raise ValueError(
+                f"decay_factor must be in (0, 1.0], got {decay_factor}. "
+                f"Values > 1.0 upweight old games instead of recent ones."
+            )
         self.ridge_alpha = ridge_alpha
         self.decay_factor = decay_factor  # Within-season recency weight (1.0 = no decay)
         self.use_year_intercepts = use_year_intercepts  # Per-year baselines for multi-year training
@@ -173,15 +180,16 @@ class TotalsModel:
         # Row 1: home_team scores home_points against away_team defense
         # Row 2: away_team scores away_points against home_team defense
 
-        # Map team names to indices
-        home_idx = games['home_team'].map(self._team_to_idx)
-        away_idx = games['away_team'].map(self._team_to_idx)
-
         # Filter out games where either team is not in index (shouldn't happen after FBS filter)
-        valid_mask = home_idx.notna() & away_idx.notna()
+        valid_mask = (
+            games['home_team'].isin(self._team_to_idx) &
+            games['away_team'].isin(self._team_to_idx)
+        )
         games = games[valid_mask].reset_index(drop=True)
-        home_idx = home_idx[valid_mask].astype(int).values
-        away_idx = away_idx[valid_mask].astype(int).values
+
+        # Map team names to indices AFTER filter/reset for robust alignment
+        home_idx = games['home_team'].map(self._team_to_idx).astype(int).values
+        away_idx = games['away_team'].map(self._team_to_idx).astype(int).values
 
         n_games = len(games)
         home_pts = games['home_points'].values
@@ -280,16 +288,19 @@ class TotalsModel:
         y[0::2] = home_pts
         y[1::2] = away_pts
 
-        # Build weeks vector for recency weighting
-        weeks = np.empty(n_rows, dtype=np.float32)  # float32 for perf
-        weeks[0::2] = game_weeks
-        weeks[1::2] = game_weeks
-
         # Compute sample weights for recency (decay_factor^weeks_ago)
-        # pred_week = max_week + 1 (we predict the week after training data)
-        pred_week = (max_week or int(weeks.max())) + 1
-        weeks_ago = pred_week - weeks
-        sample_weights = (self.decay_factor ** weeks_ago).astype(np.float32)  # float32 for perf
+        # Short-circuit when decay_factor == 1.0 (no decay = uniform weights)
+        if self.decay_factor == 1.0:
+            sample_weights = None  # Ridge uses uniform weights when None
+        else:
+            # Build weeks vector for recency weighting
+            weeks = np.empty(n_rows, dtype=np.float32)  # float32 for perf
+            weeks[0::2] = game_weeks
+            weeks[1::2] = game_weeks
+            # pred_week = max_week + 1 (we predict the week after training data)
+            pred_week = (max_week or int(weeks.max())) + 1
+            weeks_ago = pred_week - weeks
+            sample_weights = (self.decay_factor ** weeks_ago).astype(np.float32)  # float32 for perf
 
         # Fit Ridge regression with sample weights
         # fit_intercept: True unless using year intercepts (which serve as baselines)
@@ -374,13 +385,27 @@ class TotalsModel:
         else:
             baseline = self.baseline  # Most recent year's baseline
 
-        # SP+-style formula with learned HFA:
-        # Each team's expected points = (their offense adj + opposing defense adj) / 2 + baseline
-        # Home team gets additional HFA boost (typically +3-4 pts)
+        # Opponent-adjustment formula with 0.5x shrinkage on adjustments:
+        # The /2 is intentional shrinkage that improves ATS despite hurting MAE.
+        # Without /2: MAE 12.90 (better) but 5+ Edge 53.3% (worse)
+        # With /2:    MAE 13.09 (worse) but 5+ Edge 54.5% (better)
+        # Since 5+ Edge is the binding constraint, we keep the shrinkage.
         home_expected = baseline + (home.off_adjustment + away.def_adjustment) / 2 + self.hfa_coef
         away_expected = baseline + (away.off_adjustment + home.def_adjustment) / 2
 
-        predicted_total = home_expected + away_expected
+        # Sanity bounds for degenerate cases (early season, bad data)
+        # Per-team floor: no team scores negative points
+        # Total floor: 21 (lowest FBS totals are ~23)
+        # Total ceiling: 105 (highest FBS totals are ~100)
+        TEAM_FLOOR = 0.0
+        TOTAL_FLOOR = 21.0
+        TOTAL_CEILING = 105.0
+
+        home_expected = max(TEAM_FLOOR, home_expected)
+        away_expected = max(TEAM_FLOOR, away_expected)
+
+        predicted_total = home_expected + away_expected + weather_adjustment
+        predicted_total = max(TOTAL_FLOOR, min(TOTAL_CEILING, predicted_total))
 
         return TotalsPrediction(
             home_team=home_team,
@@ -418,7 +443,7 @@ def walk_forward_totals_backtest(
     games_df: pd.DataFrame | pl.DataFrame,
     fbs_teams: set[str],
     start_week: int = 4,
-    ridge_alpha: float = 5.0,
+    ridge_alpha: float = 10.0,  # Matches TotalsModel default; 10.0 optimal for 5+ Edge
 ) -> dict:
     """Run walk-forward backtest for totals model.
 
@@ -451,9 +476,13 @@ def walk_forward_totals_backtest(
 
     predictions = []
 
+    # Create model once and lock team universe for consistent column layout
+    # This avoids redundant set_team_universe() calls inside train()
+    model = TotalsModel(ridge_alpha=ridge_alpha)
+    model.set_team_universe(fbs_teams)
+
     for pred_week in range(start_week, max_week + 1):
-        # Train on weeks < pred_week
-        model = TotalsModel(ridge_alpha=ridge_alpha)
+        # Retrain on weeks < pred_week (model state is properly reset in train())
         model.train(games, fbs_teams, max_week=pred_week - 1)
 
         if not model._trained:
@@ -463,10 +492,13 @@ def walk_forward_totals_backtest(
         week_games = games[games['week'] == pred_week]
 
         for g in week_games.itertuples():
-            pred = model.predict_total(g.home_team, g.away_team)
+            # Pass year for correct year-specific baseline (P0.1: multi-year backtest fix)
+            game_year = getattr(g, 'year', None)
+            pred = model.predict_total(g.home_team, g.away_team, year=game_year)
             if pred:
                 actual_total = g.home_points + g.away_points
                 predictions.append({
+                    'year': game_year,
                     'week': pred_week,
                     'home_team': g.home_team,
                     'away_team': g.away_team,
