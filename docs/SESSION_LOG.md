@@ -416,6 +416,37 @@ Configured SSH authentication for GitHub pushes:
 
 ---
 
+#### Require Explicit --year/--week for Odds Capture — COMMITTED
+**Impact: Prevents week mislabeling that corrupts opening-vs-closing analysis**
+
+**The Bug:** `get_current_week()` uses a naive month/day formula that can be off by 1-2 weeks. Critically, if opening lines are captured Oct 31 (→ week 9) and closing lines Nov 2 (→ week 10), they get stored under different week labels for the SAME CFB week. This corrupts all downstream opening-vs-closing analysis.
+
+**Fix:**
+1. Made `--year` and `--week` REQUIRED for `--opening`/`--closing` operations
+2. Added deprecation warning to `get_current_week()` heuristic
+3. `--preview` still allows optional week args (display only, no stored data)
+4. Clear error message with usage example if args missing
+
+**Before:**
+```bash
+python scripts/weekly_odds_capture.py --opening  # Silently uses heuristic
+```
+
+**After:**
+```bash
+python scripts/weekly_odds_capture.py --opening --year 2026 --week 10  # Required
+```
+
+**Error if missing:**
+```
+error: --year and --week are REQUIRED for --opening/--closing.
+The auto-detection heuristic can mislabel weeks at month boundaries...
+```
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure

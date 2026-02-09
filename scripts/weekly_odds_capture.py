@@ -5,22 +5,28 @@ This script is designed to be run twice per week during CFB season:
 1. Sunday morning - Capture opening lines (lines post by 8-10 AM ET)
 2. Saturday morning - Capture closing lines (before games start)
 
+IMPORTANT: --year and --week are REQUIRED for --opening/--closing to prevent
+week mislabeling that corrupts opening-vs-closing analysis. The naive date-based
+heuristic can assign Oct 31 → week 9 but Nov 2 → week 10 for the SAME CFB week.
+
 Usage:
     # Capture opening lines (run Sunday ~8 AM ET)
-    python scripts/weekly_odds_capture.py --opening
+    python scripts/weekly_odds_capture.py --opening --year 2026 --week 10
 
     # Capture closing lines (run Saturday ~9 AM ET)
-    python scripts/weekly_odds_capture.py --closing
+    python scripts/weekly_odds_capture.py --closing --year 2026 --week 10
 
-    # Check what's available without capturing
+    # Check what's available without capturing (week args optional)
     python scripts/weekly_odds_capture.py --preview
 
-Schedule with cron (example):
+Schedule with cron (example for 2026 Week 10):
     # Opening lines: Sunday 8 AM ET (1 PM UTC)
-    0 13 * * 0 cd /path/to/project && python scripts/weekly_odds_capture.py --opening
+    0 13 * * 0 cd /path/to/project && python scripts/weekly_odds_capture.py --opening --year 2026 --week 10
 
     # Closing lines: Saturday 9 AM ET (2 PM UTC)
-    0 14 * * 6 cd /path/to/project && python scripts/weekly_odds_capture.py --closing
+    0 14 * * 6 cd /path/to/project && python scripts/weekly_odds_capture.py --closing --year 2026 --week 10
+
+    NOTE: Update --week each week, or use a wrapper script that computes the week.
 
 Environment:
     ODDS_API_KEY: Your Odds API key (required)
@@ -49,11 +55,27 @@ DB_PATH = project_root / "data" / "odds_api_lines.db"
 
 
 def get_current_week() -> tuple[int, int]:
-    """Estimate current CFB week based on date.
+    """DEPRECATED: Estimate current CFB week based on date.
+
+    WARNING: This heuristic can be off by 1-2 weeks, especially at month
+    boundaries. If opening lines are captured Oct 31 (→ week 9) and closing
+    lines Nov 2 (→ week 10), they get stored under different week labels for
+    the SAME CFB week. This corrupts opening-vs-closing analysis.
+
+    Use explicit --year and --week arguments instead. This function is only
+    kept for --preview mode where week labeling doesn't affect stored data.
 
     Returns:
         Tuple of (year, week_number)
     """
+    import warnings
+    warnings.warn(
+        "get_current_week() uses a naive heuristic that can mislabel weeks. "
+        "Use --year and --week arguments for reliable labeling.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     now = datetime.now()
     year = now.year
 
@@ -160,8 +182,8 @@ def capture_odds(
     client: OddsAPIClient,
     conn: sqlite3.Connection,
     snapshot_type: str,
-    year: int | None = None,
-    week: int | None = None,
+    year: int,
+    week: int,
 ) -> dict:
     """Capture current odds and store them.
 
@@ -169,20 +191,20 @@ def capture_odds(
         client: Odds API client
         conn: Database connection
         snapshot_type: 'opening' or 'closing'
-        year: Explicit season year (preferred over heuristic)
-        week: Explicit week number (preferred over heuristic)
+        year: Season year (REQUIRED - no auto-detection)
+        week: Week number (REQUIRED - no auto-detection)
 
     Returns:
         Summary dict
+
+    Raises:
+        ValueError: If year or week is None
     """
-    # P0.1: Prefer explicit year/week, fall back to heuristic with warning
-    if year is not None and week is not None:
-        logger.info(f"Using explicit year={year}, week={week}")
-    else:
-        year, week = get_current_week()
-        logger.warning(
-            f"P0.1: Using heuristic week estimation (year={year}, week={week}). "
-            "For reliable labeling, use --year and --week arguments."
+    # P0: Explicit year/week REQUIRED - heuristic removed to prevent week mislabeling
+    if year is None or week is None:
+        raise ValueError(
+            "year and week are required. The auto-detection heuristic has been removed "
+            "because it can mislabel weeks at month boundaries, corrupting opening-vs-closing analysis."
         )
 
     logger.info(f"Capturing {snapshot_type} lines for {year} week {week}...")
@@ -332,23 +354,39 @@ def preview_odds(client: OddsAPIClient, year: int | None = None, week: int | Non
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Weekly odds capture")
+    parser = argparse.ArgumentParser(
+        description="Weekly odds capture",
+        epilog="IMPORTANT: --year and --week are REQUIRED for --opening/--closing to prevent "
+               "week mislabeling that corrupts opening-vs-closing analysis."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--opening", action="store_true",
                       help="Capture opening lines (run Sunday)")
     group.add_argument("--closing", action="store_true",
                       help="Capture closing lines (run Saturday)")
     group.add_argument("--preview", action="store_true",
-                      help="Preview available odds")
+                      help="Preview available odds (week args optional)")
     parser.add_argument("--api-key", type=str,
                        help="Odds API key (or set ODDS_API_KEY)")
-    # P0.1: Explicit year/week for reliable labeling
+    # P0: Explicit year/week REQUIRED for capture to prevent week mislabeling
     parser.add_argument("--year", type=int, default=None,
-                       help="Season year (recommended over auto-detection)")
+                       help="Season year (REQUIRED for --opening/--closing)")
     parser.add_argument("--week", type=int, default=None,
-                       help="Week number (recommended over auto-detection)")
+                       help="Week number (REQUIRED for --opening/--closing)")
 
     args = parser.parse_args()
+
+    # P0: Require --year and --week for capture operations to prevent week mislabeling
+    # The naive get_current_week() heuristic can assign Oct 31 → week 9 but Nov 2 → week 10,
+    # corrupting opening-vs-closing analysis for the same CFB week.
+    if (args.opening or args.closing) and (args.year is None or args.week is None):
+        parser.error(
+            "--year and --week are REQUIRED for --opening/--closing.\n"
+            "The auto-detection heuristic can mislabel weeks at month boundaries,\n"
+            "causing opening and closing lines for the same CFB week to be stored\n"
+            "under different week labels. This corrupts opening-vs-closing analysis.\n\n"
+            "Example: python scripts/weekly_odds_capture.py --opening --year 2026 --week 10"
+        )
 
     api_key = args.api_key or os.environ.get("ODDS_API_KEY")
     if not api_key:
