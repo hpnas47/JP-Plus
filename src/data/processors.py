@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from config.settings import get_settings
@@ -83,19 +84,24 @@ class GarbageTimeFilter:
         if plays_df.empty:
             return plays_df
 
-        # Calculate score differential
-        plays_df = plays_df.copy()
-        plays_df["score_diff"] = abs(
-            plays_df["home_score"] - plays_df["away_score"]
+        # Vectorized garbage time detection (10-50x faster than .apply)
+        period = plays_df["period"].values
+        score_diff = np.abs(
+            plays_df["home_score"].values - plays_df["away_score"].values
         )
 
-        # Apply garbage time filter
-        mask = ~plays_df.apply(
-            lambda row: self.is_garbage_time(row["period"], row["score_diff"]),
-            axis=1,
+        # Map quarters to thresholds (OT periods > 4 get Q4 threshold, then excluded)
+        thresholds = np.select(
+            [period == 1, period == 2, period == 3, period >= 4],
+            [self.thresholds.q1, self.thresholds.q2, self.thresholds.q3, self.thresholds.q4],
+            default=self.thresholds.q4,
         )
 
-        filtered = plays_df[mask].drop(columns=["score_diff"])
+        # Garbage time: score_diff >= threshold AND not overtime
+        is_garbage = (score_diff >= thresholds) & (period <= 4)
+
+        # Keep non-garbage plays
+        filtered = plays_df[~is_garbage]
         removed_count = len(plays_df) - len(filtered)
 
         if removed_count > 0:
