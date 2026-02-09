@@ -10,6 +10,26 @@
 
 ---
 
+#### Symmetric Soft Cap Analysis — DOCUMENTED
+**Impact: Confirms negative cap threshold is effectively dead code**
+
+Analyzed whether env soft cap should be asymmetric for positive vs negative stacks.
+
+**Empirical analysis (2023-2025, 1,824 games):**
+| Threshold | Games | Percentage |
+|-----------|-------|------------|
+| Positive (>5.0) | 238 | 13.0% |
+| Negative (<-5.0) | **0** | **0.00%** |
+| Most negative observed | -1.50 pts | — |
+
+**Why negatives are so rare:** HFA, travel, and altitude are always positive. Only rest can be negative, and even worst-case (neutral + short week + opponent bye) reaches only ~-3.0 pts.
+
+**Recommendation:** Keep symmetric treatment. The negative cap is effectively dead code — adding asymmetric logic would add complexity for zero practical benefit.
+
+**Commit**: `358ddef` (Document symmetric soft cap design decision with empirical analysis)
+
+---
+
 #### Global Cap Priority Ordering — DOCUMENTED
 **Impact: Explains why mental factors may have reduced effect in extreme scenarios**
 
