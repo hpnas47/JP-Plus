@@ -298,6 +298,99 @@ Updated:
 
 ---
 
+#### Unused Import Fix — COMMITTED
+**Impact: Resolves Pylance diagnostic on aggregator.py line 55**
+
+Removed unused `field` import from `dataclasses` in aggregator.py. The `field()` function was imported but never used — `TravelBreakdown` and `AggregatedAdjustments` use simple default values that don't require field factories.
+
+**Commit**: `1d3cfb3` (Remove unused 'field' import from aggregator.py)
+
+---
+
+#### Odds API ↔ CFBD Game ID Bridge — COMMITTED
+**Impact: Enables 2026 production with captured Odds API lines**
+
+**The Problem (ID Island):** Odds API uses alphanumeric game IDs (`cf82a9b3...`) while CFBD uses integers (`401628456`). The existing merge logic in `betting_lines.py` silently failed because IDs never matched.
+
+**Solution:**
+1. Added `cfbd_game_id INTEGER` column to `odds_lines` table
+2. Created `scripts/link_odds_to_cfbd.py` — matches by normalized team names + date
+3. Updated `get_odds_api_lines()` to use `cfbd_game_id` as key when available
+4. Updated PROJECT_MAP.md in both repos
+
+**Usage for 2026:**
+```bash
+python scripts/capture_odds.py --capture-current
+python scripts/link_odds_to_cfbd.py --year 2026
+python scripts/run_weekly.py --year 2026 --week 1
+```
+
+**Commit**: `26ac101` (Add cfbd_game_id column to bridge Odds API and CFBD game IDs)
+
+---
+
+#### Deprecated datetime.utcnow() Fix — COMMITTED
+**Impact: Python 3.12+ compatibility**
+
+Replaced `datetime.utcnow()` with `datetime.now(timezone.utc)` in `capture_odds.py`. The former is deprecated in Python 3.12+.
+
+**Commit**: `3fc301e` (Fix deprecated datetime.utcnow() in capture_odds.py)
+
+---
+
+#### Opening Line Capture Time Fix — COMMITTED
+**Impact: Correct timing for Sunday odds capture**
+
+Opening lines are posted by 8-10 AM ET on Sunday, not 6 PM as previously documented.
+
+| Before | After |
+|--------|-------|
+| 6 PM ET (11 PM UTC) | **8 AM ET (1 PM UTC)** |
+
+Updated:
+- `capture_odds.py`: Query date calculation
+- `weekly_odds_capture.py`: Docstrings and cron examples
+
+**Commit**: `fee2fc9` (Fix opening line capture time: 6 PM ET -> 8 AM ET)
+
+---
+
+#### Atomic Write Pattern for SeasonDataCache — COMMITTED
+**Impact: Prevents corrupted cache from interrupted writes (Ctrl+C, network failure)**
+
+**The Vulnerability:** If `save_season()` was interrupted after writing 3/5 files, or mid-write of a file, the cache could be left in a corrupted state that `has_cached_season()` incorrectly treated as valid.
+
+**Solution — Write-to-Temp-then-Move pattern:**
+1. Write all files to `.tmp/` subdirectory first
+2. Move files to final location on success
+3. Write `.complete` marker file LAST (atomic commit)
+4. `has_cached_season()` requires `.complete` marker to return True
+5. Orphaned `.tmp/` directories cleaned on init
+6. Added `migrate_legacy_cache()` to validate and mark existing caches
+
+**Failure scenarios now handled:**
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| Ctrl+C during write | Partial cache marked complete | `.tmp/` cleaned, no marker |
+| Network failure mid-download | Corrupted files cached | No marker, re-downloads |
+| Corrupted parquet file | Silent load failure | Marker removed, re-downloads |
+
+**Commit**: `06a93a7` (Add atomic write pattern to SeasonDataCache for cache integrity)
+
+---
+
+#### SSH Authentication Setup
+**Impact: Fixes GitHub push hanging with HTTPS**
+
+Configured SSH authentication for GitHub pushes:
+1. Generated Ed25519 SSH key (`~/.ssh/id_ed25519`)
+2. Added to GitHub account (hpnas47)
+3. Switched both repos to SSH remote URLs
+4. Created `~/.ssh/config` for explicit key specification
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
