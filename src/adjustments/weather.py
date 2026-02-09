@@ -37,27 +37,42 @@ class WeatherConditions:
 
 @dataclass
 class WeatherAdjustment:
-    """Weather adjustment breakdown for totals."""
+    """Weather adjustment breakdown for totals.
 
-    total_adjustment: float  # Combined adjustment to predicted total
-    wind_adjustment: float
-    temperature_adjustment: float
-    precipitation_adjustment: float
+    The adjustment is SCALED by confidence_factor:
+        total_adjustment = raw_adjustment * confidence_factor
+
+    This means a 72h forecast (0.65 confidence) with -6.0 raw adjustment
+    becomes -3.9 dampened adjustment. As forecast confidence improves
+    (closer to game time), the full adjustment is applied.
+
+    HIGH_VARIANCE flag: If confidence < 0.75 AND raw_adjustment > 3.0,
+    the game is flagged as high variance. RULE: Never bet OVER on these
+    games, even if the edge looks huge — the weather is uncertain but
+    potentially severe.
+    """
+
+    total_adjustment: float  # Dampened adjustment (raw * confidence)
+    raw_adjustment: float  # Pre-dampened adjustment (for display)
+    wind_adjustment: float  # Raw wind component
+    temperature_adjustment: float  # Raw temp component
+    precipitation_adjustment: float  # Raw precip component
     is_indoor: bool
     conditions: Optional[WeatherConditions] = None
     confidence_factor: float = 1.0  # Forecast confidence (0.0-1.0)
-    low_confidence: bool = False  # True if below min_confidence threshold
+    high_variance: bool = False  # True if uncertain severe weather — NO OVERS
 
     def to_dict(self) -> dict:
         """Convert to dictionary for logging/display."""
         return {
             "total_adjustment": self.total_adjustment,
+            "raw_adjustment": self.raw_adjustment,
             "wind_adj": self.wind_adjustment,
             "temp_adj": self.temperature_adjustment,
             "precip_adj": self.precipitation_adjustment,
             "is_indoor": self.is_indoor,
             "confidence": self.confidence_factor,
-            "low_confidence": self.low_confidence,
+            "high_variance": self.high_variance,
         }
 
 
@@ -301,23 +316,32 @@ class WeatherAdjuster:
 
         return 0.0
 
-    # Minimum confidence threshold for acting on forecasts
-    # Below this, we don't trust the forecast enough to bet on it
-    # 0.75 = ~48h out, 0.85 = ~24h out, 0.90 = ~12h out
-    MIN_CONFIDENCE_THRESHOLD = 0.75  # Don't act on forecasts >48h out
+    # Confidence thresholds
+    # 0.75 = ~48h out (NAM/HRRR mesoscale models reliable)
+    # 0.85 = ~24h out
+    # 0.90 = ~12h out (maximum confidence, fire limit bets)
+    HIGH_VARIANCE_CONFIDENCE = 0.75  # Below this + severe weather = HIGH_VARIANCE flag
+    HIGH_VARIANCE_RAW_THRESHOLD = 3.0  # Raw adjustment that triggers HIGH_VARIANCE
 
     def calculate_adjustment(
         self,
         conditions: WeatherConditions,
         combined_pass_rate: Optional[float] = None,
         confidence_factor: float = 1.0,
-        min_confidence: Optional[float] = None,
     ) -> WeatherAdjustment:
         """Calculate total weather adjustment for a game.
 
-        CONFIDENCE GATING: Forecasts degrade beyond ~48-72 hours. If the
-        confidence_factor is below min_confidence, returns a zero adjustment
-        with low_confidence=True. This prevents acting on unreliable forecasts.
+        CONFIDENCE SCALING: Adjustment is scaled by confidence_factor.
+            dampened_adjustment = raw_adjustment * confidence_factor
+
+        This means:
+        - 72h forecast (0.65): -6.0 raw → -3.9 dampened (scouting value)
+        - 48h forecast (0.75): -6.0 raw → -4.5 dampened (green light)
+        - 12h forecast (0.90): -6.0 raw → -5.4 dampened (max limit)
+
+        HIGH_VARIANCE FLAG: If confidence < 0.75 AND abs(raw) > 3.0,
+        the game is flagged high_variance=True. RULE: Never bet OVER
+        on these games — weather is uncertain but potentially severe.
 
         Args:
             conditions: WeatherConditions dataclass with game weather
@@ -325,38 +349,15 @@ class WeatherAdjuster:
                                Pass-heavy matchups (>55%) get bigger wind penalty
                                Run-heavy matchups (<45%) get smaller wind penalty
             confidence_factor: Forecast confidence (0.0-1.0), from hours_until_game
-            min_confidence: Minimum confidence to act on forecast
-                           Default: MIN_CONFIDENCE_THRESHOLD (0.75)
-                           Set to 0.0 to always apply adjustment
 
         Returns:
-            WeatherAdjustment with breakdown of all adjustments
-            If low_confidence=True, the adjustment is zeroed out
+            WeatherAdjustment with raw and dampened adjustments
         """
-        if min_confidence is None:
-            min_confidence = self.MIN_CONFIDENCE_THRESHOLD
-
-        # Check confidence threshold - if too low, don't act
-        if confidence_factor < min_confidence:
-            logger.debug(
-                f"Low confidence forecast ({confidence_factor:.2f} < {min_confidence:.2f}) - "
-                f"zeroing adjustment for {conditions.home_team} vs {conditions.away_team}"
-            )
-            return WeatherAdjustment(
-                total_adjustment=0.0,
-                wind_adjustment=0.0,
-                temperature_adjustment=0.0,
-                precipitation_adjustment=0.0,
-                is_indoor=conditions.game_indoors,
-                conditions=conditions,
-                confidence_factor=confidence_factor,
-                low_confidence=True,
-            )
-
         # Indoor games get no adjustment
         if conditions.game_indoors:
             return WeatherAdjustment(
                 total_adjustment=0.0,
+                raw_adjustment=0.0,
                 wind_adjustment=0.0,
                 temperature_adjustment=0.0,
                 precipitation_adjustment=0.0,
@@ -371,7 +372,7 @@ class WeatherAdjuster:
             conditions.wind_gust,
         )
 
-        # Calculate individual adjustments
+        # Calculate individual RAW adjustments
         wind_adj = self._calculate_wind_adjustment(
             conditions.wind_speed,
             conditions.wind_gust,
@@ -385,17 +386,36 @@ class WeatherAdjuster:
             effective_wind=effective_wind,
         )
 
-        # Combine adjustments (they stack)
-        total_adj = wind_adj + temp_adj + precip_adj
+        # Combine RAW adjustments (they stack)
+        raw_adj = wind_adj + temp_adj + precip_adj
+
+        # Scale by confidence (the "dampening")
+        dampened_adj = raw_adj * confidence_factor
+
+        # HIGH_VARIANCE flag: uncertain severe weather — NO OVERS
+        # If forecast is low confidence BUT predicting severe weather,
+        # flag it so we don't bet OVER (weather might be worse than model shows)
+        high_variance = (
+            confidence_factor < self.HIGH_VARIANCE_CONFIDENCE and
+            abs(raw_adj) > self.HIGH_VARIANCE_RAW_THRESHOLD
+        )
+
+        if high_variance:
+            logger.info(
+                f"HIGH_VARIANCE: {conditions.home_team} vs {conditions.away_team} - "
+                f"raw={raw_adj:.1f}, conf={confidence_factor:.2f} — NO OVERS"
+            )
 
         return WeatherAdjustment(
-            total_adjustment=total_adj,
+            total_adjustment=dampened_adj,
+            raw_adjustment=raw_adj,
             wind_adjustment=wind_adj,
             temperature_adjustment=temp_adj,
             precipitation_adjustment=precip_adj,
             is_indoor=False,
             conditions=conditions,
             confidence_factor=confidence_factor,
+            high_variance=high_variance,
         )
 
     def get_weather_summary(self, conditions: WeatherConditions) -> str:
