@@ -363,6 +363,7 @@ def capture_with_watchlist(
                 adjustment = weather_adjuster.calculate_adjustment(
                     conditions,
                     combined_pass_rate=combined_pass_rate,
+                    confidence_factor=forecast.confidence_factor,
                 )
 
                 # Get JP+ predicted total and Vegas total
