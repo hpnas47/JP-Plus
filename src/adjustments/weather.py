@@ -45,6 +45,8 @@ class WeatherAdjustment:
     precipitation_adjustment: float
     is_indoor: bool
     conditions: Optional[WeatherConditions] = None
+    confidence_factor: float = 1.0  # Forecast confidence (0.0-1.0)
+    low_confidence: bool = False  # True if below min_confidence threshold
 
     def to_dict(self) -> dict:
         """Convert to dictionary for logging/display."""
@@ -54,6 +56,8 @@ class WeatherAdjustment:
             "temp_adj": self.temperature_adjustment,
             "precip_adj": self.precipitation_adjustment,
             "is_indoor": self.is_indoor,
+            "confidence": self.confidence_factor,
+            "low_confidence": self.low_confidence,
         }
 
 
@@ -297,22 +301,58 @@ class WeatherAdjuster:
 
         return 0.0
 
+    # Minimum confidence threshold for acting on forecasts
+    # Below this, we don't trust the forecast enough to bet on it
+    # 0.75 = ~48h out, 0.85 = ~24h out, 0.90 = ~12h out
+    MIN_CONFIDENCE_THRESHOLD = 0.75  # Don't act on forecasts >48h out
+
     def calculate_adjustment(
         self,
         conditions: WeatherConditions,
         combined_pass_rate: Optional[float] = None,
+        confidence_factor: float = 1.0,
+        min_confidence: Optional[float] = None,
     ) -> WeatherAdjustment:
         """Calculate total weather adjustment for a game.
+
+        CONFIDENCE GATING: Forecasts degrade beyond ~48-72 hours. If the
+        confidence_factor is below min_confidence, returns a zero adjustment
+        with low_confidence=True. This prevents acting on unreliable forecasts.
 
         Args:
             conditions: WeatherConditions dataclass with game weather
             combined_pass_rate: (home_pass_rate + away_pass_rate) / 2, range 0-1
                                Pass-heavy matchups (>55%) get bigger wind penalty
                                Run-heavy matchups (<45%) get smaller wind penalty
+            confidence_factor: Forecast confidence (0.0-1.0), from hours_until_game
+            min_confidence: Minimum confidence to act on forecast
+                           Default: MIN_CONFIDENCE_THRESHOLD (0.75)
+                           Set to 0.0 to always apply adjustment
 
         Returns:
             WeatherAdjustment with breakdown of all adjustments
+            If low_confidence=True, the adjustment is zeroed out
         """
+        if min_confidence is None:
+            min_confidence = self.MIN_CONFIDENCE_THRESHOLD
+
+        # Check confidence threshold - if too low, don't act
+        if confidence_factor < min_confidence:
+            logger.debug(
+                f"Low confidence forecast ({confidence_factor:.2f} < {min_confidence:.2f}) - "
+                f"zeroing adjustment for {conditions.home_team} vs {conditions.away_team}"
+            )
+            return WeatherAdjustment(
+                total_adjustment=0.0,
+                wind_adjustment=0.0,
+                temperature_adjustment=0.0,
+                precipitation_adjustment=0.0,
+                is_indoor=conditions.game_indoors,
+                conditions=conditions,
+                confidence_factor=confidence_factor,
+                low_confidence=True,
+            )
+
         # Indoor games get no adjustment
         if conditions.game_indoors:
             return WeatherAdjustment(
@@ -322,6 +362,7 @@ class WeatherAdjuster:
                 precipitation_adjustment=0.0,
                 is_indoor=True,
                 conditions=conditions,
+                confidence_factor=confidence_factor,
             )
 
         # Get effective wind (needed for snow+wind check)
@@ -354,6 +395,7 @@ class WeatherAdjuster:
             precipitation_adjustment=precip_adj,
             is_indoor=False,
             conditions=conditions,
+            confidence_factor=confidence_factor,
         )
 
     def get_weather_summary(self, conditions: WeatherConditions) -> str:
