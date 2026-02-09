@@ -20,6 +20,7 @@ Key features:
   gains/losses.
 """
 
+import heapq
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
@@ -778,14 +779,23 @@ class PreseasonPriors:
             logger.warning(f"No transfer portal data for {year}")
             return {}
 
-        # Fetch FBS teams for filtering
-        fbs_teams = self.fetch_fbs_teams(year) if fbs_only else set()
-        if fbs_only and not fbs_teams:
-            logger.warning(f"Could not fetch FBS teams for {year}, using all teams")
-            fbs_only = False
-
-        # Fetch conference data for level-up discount logic
-        team_conferences = self._fetch_team_conferences(year)
+        # Fetch FBS teams and conferences in ONE API call (avoids redundant get_fbs_teams)
+        # Always fetch for conference data (needed for level-up discount logic)
+        fbs_teams: set[str] = set()
+        team_conferences: dict[str, str] = {}
+        try:
+            teams = self.client.get_fbs_teams(year=year)
+            for t in teams:
+                if t.school:
+                    fbs_teams.add(t.school)
+                    if t.conference:
+                        team_conferences[t.school] = t.conference
+            logger.debug(f"Fetched {len(fbs_teams)} FBS teams for {year}")
+        except Exception as e:
+            logger.warning(f"Could not fetch FBS teams for {year}: {e}")
+            if fbs_only:
+                logger.warning("Cannot filter to FBS-only, using all teams")
+                fbs_only = False
 
         # Filter to FBS-relevant transfers (origin OR destination is FBS)
         if fbs_only:
@@ -1229,8 +1239,9 @@ class PreseasonPriors:
         # Higher talent score = better recruiting = should rank near top
         elite_programs = ["Alabama", "Georgia", "Ohio State", "Texas", "LSU"]
         if talent:
-            talent_sorted = sorted(talent.items(), key=lambda x: -x[1])
-            top_20_teams = {t for t, _ in talent_sorted[:20]}
+            # O(n) top-k extraction instead of O(n log n) full sort
+            top_20 = heapq.nlargest(20, talent.items(), key=lambda x: x[1])
+            top_20_teams = {t for t, _ in top_20}
             elite_in_top20 = [t for t in elite_programs if t in top_20_teams]
             elite_present = [t for t in elite_programs if t in talent]
 
