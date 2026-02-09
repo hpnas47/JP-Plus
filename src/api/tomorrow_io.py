@@ -25,7 +25,7 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -319,9 +319,16 @@ class TomorrowIOClient:
                 logger.warning(f"No forecast found for game time {game_time}")
                 return None
 
-            # Calculate hours until game
-            forecast_time = datetime.now()
-            hours_until = int((game_time - forecast_time).total_seconds() / 3600)
+            # Calculate hours until game (use UTC for consistency)
+            # game_time should be UTC-aware; if naive, assume UTC
+            now_utc = datetime.now(timezone.utc)
+            if game_time.tzinfo is None:
+                # Naive datetime - assume it represents UTC
+                game_time_utc = game_time.replace(tzinfo=timezone.utc)
+            else:
+                game_time_utc = game_time
+            forecast_time = now_utc.replace(tzinfo=None)  # Store as naive for DB compatibility
+            hours_until = int((game_time_utc - now_utc).total_seconds() / 3600)
 
             # Calculate confidence factor based on forecast horizon
             # Shorter horizons = higher confidence
@@ -389,15 +396,20 @@ class TomorrowIOClient:
         best_match = None
         min_diff = float("inf")
 
+        # Normalize target_time to UTC for comparison
+        if target_time.tzinfo is None:
+            # Naive datetime - assume UTC
+            target_utc = target_time.replace(tzinfo=timezone.utc)
+        else:
+            target_utc = target_time
+
         for forecast in hourly:
             time_str = forecast.get("time", "")
             try:
-                # Parse ISO format: 2024-01-15T14:00:00Z
+                # Parse ISO format: 2024-01-15T14:00:00Z (Tomorrow.io returns UTC)
                 forecast_time = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                # Convert to naive datetime for comparison
-                forecast_time = forecast_time.replace(tzinfo=None)
 
-                diff = abs((forecast_time - target_time).total_seconds())
+                diff = abs((forecast_time - target_utc).total_seconds())
                 if diff < min_diff:
                     min_diff = diff
                     best_match = forecast
@@ -546,9 +558,11 @@ class TomorrowIOClient:
             if not row:
                 return None
 
-            # Check if forecast is stale
+            # Check if forecast is stale (stored times are UTC)
             forecast_time = datetime.fromisoformat(row["forecast_time"])
-            age_hours = (datetime.now() - forecast_time).total_seconds() / 3600
+            if forecast_time.tzinfo is None:
+                forecast_time = forecast_time.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - forecast_time).total_seconds() / 3600
             if age_hours > max_age_hours:
                 return None
 

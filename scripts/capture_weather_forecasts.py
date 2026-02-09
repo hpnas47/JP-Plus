@@ -38,7 +38,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -173,21 +173,22 @@ def capture_forecasts(
         venue_name = getattr(game, "venue", "Unknown")
         game_id = game.id
 
-        # Parse game time
+        # Parse game time (keep as UTC timezone-aware)
         start_date = getattr(game, "start_date", None)
         if start_date:
             if isinstance(start_date, str):
                 try:
+                    # CFBD returns UTC times with "Z" suffix
                     game_time = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-                    game_time = game_time.replace(tzinfo=None)
                 except ValueError:
-                    game_time = datetime.now() + timedelta(days=2)
+                    game_time = datetime.now(timezone.utc) + timedelta(days=2)
             else:
                 game_time = start_date
-                if hasattr(game_time, "tzinfo") and game_time.tzinfo:
-                    game_time = game_time.replace(tzinfo=None)
+                # Ensure timezone-aware (assume UTC if naive)
+                if game_time.tzinfo is None:
+                    game_time = game_time.replace(tzinfo=timezone.utc)
         else:
-            game_time = datetime.now() + timedelta(days=2)
+            game_time = datetime.now(timezone.utc) + timedelta(days=2)
 
         # Look up venue
         venue = tomorrow_client.get_venue(venue_id) if venue_id else None
