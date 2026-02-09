@@ -6,7 +6,39 @@
 
 ## Session: February 9, 2026
 
-### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening
+### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening
+
+---
+
+#### Performance Hardening and Dead Code Removal — COMMITTED
+**Impact: Cleaner codebase, faster execution, no metric changes**
+
+Major cleanup and optimization pass across backtest and EFM:
+
+**Backtest (scripts/backtest.py):**
+- Removed FinishingDrivesModel (shelved after 4 backtest rejections, 70-80% overlap with EFM)
+- Hoisted TravelAdjuster, AltitudeAdjuster, SituationalAdjuster outside week loop (stateless, safe to reuse)
+- Added shallow copy to prevent sweep cache pollution
+
+**EFM (src/models/efficiency_foundation_model.py):**
+| Optimization | Speedup | Technique |
+|-------------|---------|-----------|
+| Empty yards per-team analysis | 7.6x | Vectorized groupby |
+| _apply_efficiency_fraud_tax() | 7.2x | Vectorized merge |
+| Team index lookup | 1.5x | pd.Categorical |
+| _calculate_raw_metrics() | 1.7x | Groupby→dict in one pass |
+| TeamEFMRating mutations | N/A | dataclasses.replace() (immutability) |
+
+- Removed stale `_GT_THRESHOLDS` module-level cache (sweep pollution risk)
+- Replaced 5 mutable assignment sites with `dataclasses.replace()`
+
+**Multiprocessing overhead investigation:**
+- Measured 51 MB pickle per season (204 MB for 4 years)
+- Despite overhead, parallel is 2.8x faster (21s vs 59s) — keep parallel
+
+**Backtest verified:** MAE 12.50, Core ATS 52.2%, 5+ Edge 54.7% (unchanged)
+
+**Commit**: `58f72a6` (Performance hardening and dead code removal)
 
 ---
 
