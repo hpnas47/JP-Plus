@@ -459,6 +459,82 @@ Systematic performance audit of `TotalsModel` and `backtest_totals.py`:
   3. **Prior contamination:** Using 2024 baseline for early 2025 games introduces stale information. Walk-forward already handles temporal validity — adding another layer hurts.
 - **Decision:** No change. Current per-season learned baseline is optimal.
 
+#### Thursday Weather Capture Automation — OPERATIONAL
+**Impact: Automated Thursday morning weather capture with betting watchlist**
+
+- **Purpose:** The edge in weather betting is TIMING — capture forecasts Thursday morning BEFORE market moves the line. By the time books adjust totals on Friday/Saturday, the value is gone.
+
+**Thursday Workflow (`scripts/weather_thursday_capture.py`):**
+- Auto-detects current CFB year/week
+- Fetches all games for the week, identifies outdoor venues
+- Captures forecasts for outdoor games (respecting 25/hour rate limit)
+- Generates watchlist of games with weather concerns (wind >12 mph effective, temp <32°F, heavy precip)
+- Calculates weather adjustment using non-linear thresholds (see below)
+- **NEW:** Includes Vegas total and weather-adjusted total for each watchlist game
+
+**Watchlist output format:**
+```
+🏈 THURSDAY WEATHER WATCHLIST
+================================================================================
+🚨 3 GAMES WITH WEATHER CONCERNS:
+
+  Iowa @ Nebraska
+    Venue: Memorial Stadium (Lincoln, NE)
+    Wind: 22 mph (gust: 28)
+    Temp: 28°F
+    📊 JP+ Total: 52.1 → Weather-Adjusted: 45.1
+    🎰 Vegas Total: 48.5
+    💰 Edge: -3.4 pts (LEAN UNDER)
+    🌧️ Weather Adjustment: -7.0 pts
+       Wind: -6.0, Temp: -1.0, Precip: +0.0
+    Confidence: 75% (72h until game)
+
+💡 ACTION: Consider betting UNDER on games with negative edge BEFORE market adjusts.
+```
+
+**Edge interpretation:**
+- `Edge < -3 pts` = STRONG UNDER signal
+- `Edge < 0 pts` = LEAN UNDER signal
+- `Edge > 3 pts` = JP+ higher than Vegas (rare in weather games)
+
+**JP+ TotalsModel integration:**
+- Trains walk-forward on all games from weeks 1 to (current_week - 1)
+- Uses Ridge alpha=10.0, no within-season decay
+- Weather adjustment applied to JP+ prediction (not Vegas)
+
+**Cron automation (`scripts/setup_weather_cron.sh`):**
+- `./scripts/setup_weather_cron.sh install` — Installs Thursday 6 AM cron job
+- `./scripts/setup_weather_cron.sh status` — Check installation
+- Logs to `logs/weather_thursday.log`
+
+**Non-linear weather thresholds (`src/adjustments/weather.py`):**
+Based on sharp betting research (wind is king of unders):
+
+| Wind (effective) | Adjustment | Rationale |
+|------------------|------------|-----------|
+| <12 mph | 0.0 pts | No impact |
+| 12-15 mph | -1.5 pts | Deep passing degraded |
+| 15-20 mph | -4.0 pts | Kicking range reduced |
+| >20 mph | -6.0 pts | Run-only game profiles |
+
+| Temperature | Adjustment | Rationale |
+|-------------|------------|-----------|
+| >32°F | 0.0 pts | No impact |
+| 20-32°F | -1.0 pts | "Rock effect" on ball |
+| <20°F | -3.0 pts | Severe mechanics impact |
+
+| Precipitation | Adjustment | Rationale |
+|---------------|------------|-----------|
+| Light rain (<0.1 in/hr) | 0.0 pts | **The "slick trap"** — defenders slip, more scoring |
+| Heavy rain (>0.3 in/hr) | -2.5 pts | Ball security issues |
+| Snow with accumulation | -3.0 pts | Visual impairment, footing |
+
+**Effective wind = (wind_speed + wind_gust) / 2** — gusts matter for passing and kicking.
+
+**Removed legacy CFBD weather code:**
+- `cfbd_client.get_weather()` — no longer used (158 lines removed)
+- Weather API was for look-back actuals, not forecasts
+
 ---
 
 ## Session: February 7, 2026 (Continued)
