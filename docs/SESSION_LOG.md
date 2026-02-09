@@ -391,6 +391,31 @@ Configured SSH authentication for GitHub pushes:
 
 ---
 
+#### FCS Teams in Normalization Fix — COMMITTED
+**Impact: Architecturally correct normalization (minimal practical impact)**
+
+**The Bug:** `_normalize_ratings()` was passed `all_teams` (from `_canonical_teams`), which includes FCS teams that appear in play data (when FBS teams play FCS opponents). The comment at line 1900 claimed "all_teams from CFBD API is FBS teams only" — this was **false**.
+
+**Fix:**
+1. Added `fbs_teams: Optional[set[str]] = None` parameter to `calculate_ratings()`
+2. If provided, normalization uses only FBS teams (excludes FCS outliers)
+3. Falls back to `all_teams` if not provided (legacy behavior for compatibility)
+4. Updated `backtest.py` and `run_weekly.py` to pass `fbs_teams`
+
+**Backtest validation (2022-2025 Core):**
+
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| MAE | 12.50 | 12.50 | 0 |
+| ATS (Close) | 52.2% | 52.20% | 0 |
+| 5+ Edge | 54.7% | 54.7% | 0 |
+
+**Why minimal impact:** FCS teams have very few plays (only vs FBS on defense), so their ratings cluster near league average due to shrinkage. They weren't extreme outliers that would significantly skew mean/std.
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure

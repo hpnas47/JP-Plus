@@ -1600,6 +1600,7 @@ class EfficiencyFoundationModel:
         season: int | None = None,
         team_conferences: Optional[dict[str, str]] = None,
         hfa_lookup: Optional[dict[str, float]] = None,
+        fbs_teams: Optional[set[str]] = None,
     ) -> dict[str, TeamEFMRating]:
         """Calculate efficiency-based ratings for all teams.
 
@@ -1668,6 +1669,10 @@ class EfficiencyFoundationModel:
                     of ridge regression results.
             team_conferences: Optional dict mapping team name to conference name.
                             If provided, applies 1.5x weight to non-conference games.
+            hfa_lookup: Optional dict of team name to HFA values for efficiency fraud tax.
+            fbs_teams: Optional set of FBS team names for normalization. If provided,
+                       normalization uses only FBS teams (excludes FCS outliers). If None,
+                       falls back to all teams in play data (legacy behavior).
 
         Returns:
             Dict mapping team name to TeamEFMRating
@@ -1897,8 +1902,10 @@ class EfficiencyFoundationModel:
 
         # Normalize ratings to target standard deviation
         # This ensures Team A rating - Team B rating = expected spread
-        # Note: all_teams from CFBD API is FBS teams only
-        self._normalize_ratings(all_teams)
+        # P0: Use fbs_teams if provided (excludes FCS outliers from mean/std),
+        # otherwise fall back to all_teams from play data (includes FCS - legacy behavior)
+        normalization_teams = fbs_teams if fbs_teams is not None else set(all_teams)
+        self._normalize_ratings(normalization_teams)
 
         return self.team_ratings
 

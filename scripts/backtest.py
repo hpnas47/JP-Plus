@@ -700,6 +700,7 @@ def walk_forward_predict(
             max_week=pred_week - 1, season=year,
             team_conferences=team_conferences,
             hfa_lookup=hfa_lookup,
+            fbs_teams=fbs_teams,  # P0: Exclude FCS teams from normalization
         )
 
         # Get ratings directly from EFM (full precision, already normalized to std=12)
