@@ -29,6 +29,24 @@ Analyzed whether short-week rest should have an interaction effect with travel (
 
 ---
 
+#### Diagnostic Field Rename: raw_total → pre_global_cap_total — COMMITTED
+**Impact: Accurate naming for adjustment smoothing progression**
+
+The old `raw_total` field was misleadingly named - it was actually post-env-soft-cap and post-mental-smoothing, only pre-global-cap.
+
+**New diagnostic progression:**
+1. `raw_sum_all`: True linear sum of ALL raw values (zero smoothing)
+2. `pre_global_cap_total`: After env soft cap + mental smoothing
+3. `net_adjustment`: Final value after global cap
+
+Added `raw_mental_sum` to track unsmoothed mental penalties.
+
+**Diagnostic usage:** `raw_sum_all - pre_global_cap_total` shows exactly how much smoothing reduced extreme stacks.
+
+**Commit**: `e168f90` (Rename raw_total → pre_global_cap_total, add raw_sum_all for diagnostics)
+
+---
+
 #### Sign Convention Documentation and Validation — COMMITTED
 **Impact: Prevents silent wrong results if upstream adjusters change sign conventions**
 
