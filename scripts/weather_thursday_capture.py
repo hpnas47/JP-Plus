@@ -675,17 +675,19 @@ def main():
     logger.info(f"Starting {mode} weather capture for {args.year} Week {args.week}")
 
     # If Saturday mode, load Thursday forecasts first for comparison
+    # Use EARLIEST forecast (not latest) to get the original Thursday morning capture
+    # This prevents Thursday afternoon re-runs from overwriting the comparison baseline
     thursday_forecasts = {}
     if args.saturday and not args.dry_run:
         logger.info("Loading Thursday forecasts for comparison...")
-        # Get all games to find their IDs
         games = cfbd_client.get_games(year=args.year, week=args.week, season_type="regular")
         for game in games:
-            # Load Thursday forecast (max_age_hours=96 to catch 4-day old forecasts)
-            forecast = tomorrow_client.get_saved_forecast(game.id, max_age_hours=96)
-            if forecast:
-                thursday_forecasts[game.id] = forecast
-        logger.info(f"  Loaded {len(thursday_forecasts)} Thursday forecasts")
+            # Get all forecasts and take the earliest (Thursday morning)
+            all_forecasts = tomorrow_client.get_all_forecasts(game.id)
+            if all_forecasts:
+                # First forecast is oldest (Thursday morning capture)
+                thursday_forecasts[game.id] = all_forecasts[0]
+        logger.info(f"  Loaded {len(thursday_forecasts)} Thursday forecasts (earliest capture per game)")
 
     stats = capture_with_watchlist(
         cfbd_client,
