@@ -105,42 +105,6 @@ class GarbageTimeFilter:
 
         return filtered
 
-    def filter_game_stats(
-        self, game_stats: dict, quarter_scores: list[dict]
-    ) -> dict:
-        """Adjust game-level stats to exclude garbage time contribution.
-
-        This is an approximation when play-by-play isn't available.
-
-        Args:
-            game_stats: Dictionary of game statistics
-            quarter_scores: List of quarter-by-quarter scores
-
-        Returns:
-            Adjusted game statistics dictionary
-        """
-        # Calculate what portion of game was in garbage time
-        garbage_quarters = 0
-        for q, scores in enumerate(quarter_scores, start=1):
-            if q > 4:
-                break
-            diff = abs(scores.get("home", 0) - scores.get("away", 0))
-            if self.is_garbage_time(q, diff):
-                garbage_quarters += 1
-
-        # Rough adjustment factor
-        adjustment = 1.0 - (garbage_quarters * 0.15)
-
-        # Apply to counting stats (not percentages)
-        adjusted = game_stats.copy()
-        counting_stats = ["yards", "plays", "first_downs", "penalties"]
-        for stat in counting_stats:
-            if stat in adjusted:
-                adjusted[stat] = adjusted[stat] * adjustment
-
-        return adjusted
-
-
 class RecencyWeighter:
     """Apply exponential decay weighting to game data based on recency."""
 
