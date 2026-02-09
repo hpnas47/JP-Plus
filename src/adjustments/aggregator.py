@@ -52,7 +52,7 @@ Interaction Effects (where double-counting IS a risk):
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from src.adjustments.situational import SituationalFactors
