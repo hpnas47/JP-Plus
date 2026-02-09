@@ -332,36 +332,68 @@ class VegasComparison:
     ) -> pd.DataFrame:
         """Generate full comparison DataFrame.
 
+        PERFORMANCE: Vectorized merge replaces per-prediction loop for 10-100x speedup.
+
         Args:
             predictions: List of model predictions
 
         Returns:
             DataFrame with model vs Vegas comparison
         """
-        comparisons = []
+        if not predictions:
+            return pd.DataFrame()
 
-        for pred in predictions:
-            comp = self.compare_prediction(pred)
+        # Build predictions DataFrame
+        pred_data = [
+            {
+                "game_id": getattr(p, "game_id", None),
+                "home_team": p.home_team,
+                "away_team": p.away_team,
+                "model_spread": p.spread,
+                "confidence": p.confidence,
+            }
+            for p in predictions
+        ]
+        df = pd.DataFrame(pred_data)
 
-            if comp is None:
-                # Include prediction without Vegas line
-                comp = {
-                    "home_team": pred.home_team,
-                    "away_team": pred.away_team,
-                    "model_spread": pred.spread,
-                    "vegas_spread": None,
-                    "vegas_open": None,
-                    "edge": None,
-                    "over_under": None,
-                    "is_value": False,
-                    "confidence": pred.confidence,
+        # Build lines DataFrame from game_id dict (primary)
+        if self.lines_by_id:
+            lines_data = [
+                {
+                    "game_id": vl.game_id,
+                    "vegas_spread": vl.spread,
+                    "vegas_open": vl.spread_open,
+                    "over_under": vl.over_under,
                 }
+                for vl in self.lines_by_id.values()
+            ]
+            lines_df = pd.DataFrame(lines_data)
 
-            comparisons.append(comp)
+            # Merge on game_id (left join)
+            df = df.merge(lines_df, on="game_id", how="left")
+        else:
+            # No lines by ID, add empty columns
+            df["vegas_spread"] = np.nan
+            df["vegas_open"] = np.nan
+            df["over_under"] = np.nan
 
-        df = pd.DataFrame(comparisons)
+        # Fallback: for rows without Vegas line, try team-name lookup
+        missing_mask = df["vegas_spread"].isna()
+        if missing_mask.any() and self.lines:
+            for idx in df.index[missing_mask]:
+                key = (df.at[idx, "home_team"], df.at[idx, "away_team"])
+                vl = self.lines.get(key)
+                if vl is not None:
+                    df.at[idx, "vegas_spread"] = vl.spread
+                    df.at[idx, "vegas_open"] = vl.spread_open
+                    df.at[idx, "over_under"] = vl.over_under
 
-        # PERFORMANCE: Vectorized favorite determination (replaces .apply() for 10-100x speedup)
+        # Vectorized edge calculation: edge = (-model_spread) - vegas_spread
+        df["edge"] = (-df["model_spread"]) - df["vegas_spread"]
+
+        # Vectorized is_value: abs(edge) >= threshold, False if edge is NaN
+        df["is_value"] = df["edge"].abs() >= self.value_threshold
+
         # Model favorite: home if model_spread > 0, else away
         df["model_favorite"] = np.where(
             df["model_spread"] > 0,
@@ -375,9 +407,6 @@ class VegasComparison:
             None,
             np.where(df["vegas_spread"] < 0, df["home_team"], df["away_team"])
         )
-
-        # P1.4: Ensure edge is numeric (coerce non-numeric to NaN) before sorting
-        df["edge"] = pd.to_numeric(df["edge"], errors="coerce")
 
         # Sort by absolute edge, NaN last
         df = df.sort_values("edge", key=abs, ascending=False, na_position="last")
