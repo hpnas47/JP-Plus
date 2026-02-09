@@ -238,21 +238,12 @@ class VegasComparison:
         Returns:
             Comparison dict or None if no Vegas line available
         """
-        # P0.1: Prefer game_id matching (reliable), fallback to team names
+        # Prefer game_id matching (reliable), fallback to team names handled internally by get_line
         vegas = self.get_line(
             prediction.home_team,
             prediction.away_team,
             game_id=prediction.game_id if hasattr(prediction, 'game_id') else None
         )
-
-        # P0.1: Log diagnostic when falling back to team name matching
-        if vegas is None and hasattr(prediction, 'game_id') and prediction.game_id is not None:
-            logger.debug(
-                f"No Vegas line found via game_id={prediction.game_id} for "
-                f"{prediction.home_team} vs {prediction.away_team}, trying team name fallback"
-            )
-            # Retry without game_id as explicit fallback
-            vegas = self.get_line(prediction.home_team, prediction.away_team, game_id=None)
 
         if vegas is None:
             return None
