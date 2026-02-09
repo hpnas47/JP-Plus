@@ -567,7 +567,7 @@ UNIQUE(snapshot_type, season, week)
 2. Recreating table with new UNIQUE constraint
 3. Preserving all existing data and foreign key relationships
 
-**Commit**: (pending)
+**Commit**: `53632c0` (Prevent duplicate odds captures via UNIQUE constraint)
 
 ---
 
