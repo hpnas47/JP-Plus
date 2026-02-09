@@ -54,6 +54,7 @@ class CFBDClient:
         self._ratings_api: Optional[cfbd.RatingsApi] = None
         self._rankings_api: Optional[cfbd.RankingsApi] = None
         self._players_api: Optional[cfbd.PlayersApi] = None
+        self._venues_api: Optional[cfbd.VenuesApi] = None
 
         # Retry settings
         self.max_retries = settings.max_retries
@@ -115,6 +116,12 @@ class CFBDClient:
         if self._players_api is None:
             self._players_api = cfbd.PlayersApi(cfbd.ApiClient(self.configuration))
         return self._players_api
+
+    @property
+    def venues_api(self) -> cfbd.VenuesApi:
+        if self._venues_api is None:
+            self._venues_api = cfbd.VenuesApi(cfbd.ApiClient(self.configuration))
+        return self._venues_api
 
     def _call_with_retry(self, func: callable, *args, **kwargs) -> Any:
         """Execute API call with exponential backoff retry on rate limits."""
@@ -614,3 +621,21 @@ class CFBDClient:
         return self._call_with_retry(
             self.players_api.get_returning_production, **kwargs
         )
+
+    def get_venues(self) -> list:
+        """Get all college football venues with location data.
+
+        Returns:
+            List of venue objects with:
+            - id: Venue ID
+            - name: Stadium name
+            - city, state, zip, country_code: Location
+            - location: Dict with latitude/longitude coordinates
+            - elevation: Elevation in feet
+            - capacity: Seating capacity
+            - year_constructed: Year built
+            - grass: Boolean for natural grass (vs turf)
+            - dome: Boolean for indoor stadium
+            - timezone: Timezone string
+        """
+        return self._call_with_retry(self.venues_api.get_venues)

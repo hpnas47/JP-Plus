@@ -6,7 +6,7 @@
 
 ## Session: February 8, 2026
 
-### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis
+### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
 
 ---
 
@@ -111,6 +111,55 @@
 - **Big 12 guardrail never triggered** — feature failed the global 5+ Edge test first.
 - **Infrastructure preserved**: `ooc_credibility_weight` param in EFM + CLI `--ooc-cred-weight` (default 0.0 = disabled).
 - **Decision**: Conference circularity to be addressed via betting confidence filter (operational change, not model change).
+
+#### Tomorrow.io Weather Forecast Infrastructure — OPERATIONAL (Totals Only)
+**Impact: Live weather forecasts for operational totals predictions**
+
+- **Purpose:** Backtest showed perfect weather data provides MAE -0.04 improvement but 0% ATS change (market already prices weather). However, for operational predictions, we need forecast data to match backtest methodology. CFBD provides look-back weather (post-game actuals), not forecasts.
+- **API:** Tomorrow.io Hourly Forecast API (free tier: 25 calls/hour, 500 calls/day)
+- **Database:** `data/weather_forecasts.db` (SQLite) — separate from `odds_api_lines.db`
+
+**Files Created:**
+- `src/api/tomorrow_io.py` — Full client implementation:
+  - `WeatherForecast` dataclass (temp, wind, precip, confidence factor)
+  - `VenueLocation` dataclass (stadium coordinates)
+  - `TomorrowIOClient` class with rate limiting + exponential backoff on 429
+  - `forecast_to_weather_conditions()` — converts to existing `WeatherConditions` for `WeatherAdjuster` integration
+  - Weather concern detection: wind >15 mph OR temp <32°F OR precip >60%
+
+- `scripts/capture_weather_forecasts.py` — Capture script:
+  - `--year/--week` for specific games
+  - `--dry-run` to preview venues without API calls
+  - `--refresh-venues` to populate venue database from CFBD
+  - `--limit N` to stay within rate limits (recommended: 20 per hour)
+  - `--delay` to customize inter-call wait time (default: 3s)
+  - Early stopping after 3 consecutive rate limit failures
+  - Weather concern flagging in output
+
+- `src/api/cfbd_client.py` — Added `get_venues()` method for stadium coordinates
+
+**Venue Database:**
+- 795 FBS/FCS venues loaded with coordinates
+- Dome detection for indoor stadiums (auto-skip forecast)
+- Example: 2025 Week 14 = 67 games, 63 outdoor, 4 indoor
+
+**Rate Limit Strategy:**
+- Free tier: 25 calls/hour → batch with `--limit 20`
+- Exponential backoff: 5s, 10s, 20s on 429 errors
+- Auto-stop after 3 consecutive failures
+
+**Confidence Factor (forecast horizon):**
+- 0-6h before game: 0.95
+- 6-12h: 0.90
+- 12-24h: 0.85
+- 24-48h: 0.75
+- 48h+: 0.65
+
+**Integration path:** `TomorrowIOClient.forecast_to_weather_conditions()` → `WeatherAdjuster` (existing infrastructure)
+
+**Next steps:** Capture Saturday morning forecasts (6-12h before kickoff) for live predictions.
+
+---
 
 #### Documentation Sync (All Three Docs)
 - **MODEL_ARCHITECTURE.md**: Updated per-year MAE/RMSE tables, per-year ATS tables (Close + Open), added changelog entries (HFA Global Offset, Conference Anchor, RZ Leverage), added 8 rejections to "Explored but Not Included", added 2025 Season Performance section with consolidated phase-by-phase table.

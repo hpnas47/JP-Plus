@@ -1,0 +1,618 @@
+"""Tomorrow.io Weather Forecast API client.
+
+Provides weather forecasts for CFB game venues using the Tomorrow.io API.
+Used for operational totals predictions where we need forecasts BEFORE game time.
+
+API Documentation: https://docs.tomorrow.io/reference/weather-forecast
+"""
+
+import logging
+import sqlite3
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+# Default database path
+DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "weather_forecasts.db"
+
+
+@dataclass
+class WeatherForecast:
+    """Weather forecast for a game venue."""
+
+    venue_id: int
+    venue_name: str
+    latitude: float
+    longitude: float
+    forecast_time: datetime  # When forecast was captured
+    game_time: datetime  # When game is scheduled
+    hours_until_game: int  # Forecast horizon
+
+    # Core weather fields
+    temperature: Optional[float]  # Fahrenheit
+    wind_speed: Optional[float]  # MPH
+    wind_gust: Optional[float]  # MPH
+    wind_direction: Optional[int]  # Degrees 0-360
+    precipitation_probability: Optional[float]  # 0-100%
+    rain_intensity: Optional[float]  # mm/hr
+    snow_intensity: Optional[float]  # mm/hr
+    humidity: Optional[int]  # 0-100%
+    cloud_cover: Optional[int]  # 0-100%
+    weather_code: Optional[int]  # Tomorrow.io weather code
+
+    # Metadata
+    is_indoor: bool = False
+    confidence_factor: float = 1.0  # Reduce for longer forecast horizons
+
+
+@dataclass
+class VenueLocation:
+    """Venue with geographic coordinates."""
+
+    venue_id: int
+    name: str
+    city: str
+    state: str
+    latitude: float
+    longitude: float
+    dome: bool  # True if indoor stadium
+    elevation: Optional[float] = None
+    timezone: Optional[str] = None
+
+
+class TomorrowIOClient:
+    """Client for Tomorrow.io Weather Forecast API.
+
+    Usage:
+        client = TomorrowIOClient(api_key="your_key")
+        forecast = client.get_forecast(latitude=40.7128, longitude=-74.0060, game_time=dt)
+    """
+
+    BASE_URL = "https://api.tomorrow.io/v4/weather/forecast"
+
+    # Weather codes that indicate precipitation
+    # https://docs.tomorrow.io/reference/data-layers-weather-codes
+    PRECIPITATION_CODES = {
+        4000,  # Drizzle
+        4001,  # Rain
+        4200,  # Light Rain
+        4201,  # Heavy Rain
+        5000,  # Snow
+        5001,  # Flurries
+        5100,  # Light Snow
+        5101,  # Heavy Snow
+        6000,  # Freezing Drizzle
+        6001,  # Freezing Rain
+        6200,  # Light Freezing Rain
+        6201,  # Heavy Freezing Rain
+        7000,  # Ice Pellets
+        7101,  # Heavy Ice Pellets
+        7102,  # Light Ice Pellets
+        8000,  # Thunderstorm
+    }
+
+    def __init__(
+        self,
+        api_key: str,
+        db_path: Path = DEFAULT_DB_PATH,
+        units: str = "imperial",
+        rate_limit_delay: float = 3.0,  # Seconds between API calls
+        max_retries: int = 3,  # Max retries on rate limit
+    ):
+        """Initialize Tomorrow.io client.
+
+        Args:
+            api_key: Tomorrow.io API key
+            db_path: Path to SQLite database for caching forecasts
+            units: "imperial" (Fahrenheit, MPH) or "metric" (Celsius, m/s)
+            rate_limit_delay: Seconds to wait between API calls (free tier: 25/hr)
+            max_retries: Maximum retries on 429 rate limit errors
+        """
+        self.api_key = api_key
+        self.db_path = db_path
+        self.units = units
+        self.rate_limit_delay = rate_limit_delay
+        self.max_retries = max_retries
+        self._last_call_time = 0.0
+        self._ensure_db()
+
+    def _ensure_db(self) -> None:
+        """Create database and tables if they don't exist."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS forecasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id INTEGER,
+                    venue_id INTEGER,
+                    venue_name TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    forecast_time TEXT,
+                    game_time TEXT,
+                    hours_until_game INTEGER,
+                    temperature REAL,
+                    wind_speed REAL,
+                    wind_gust REAL,
+                    wind_direction INTEGER,
+                    precipitation_probability REAL,
+                    rain_intensity REAL,
+                    snow_intensity REAL,
+                    humidity INTEGER,
+                    cloud_cover INTEGER,
+                    weather_code INTEGER,
+                    is_indoor INTEGER,
+                    confidence_factor REAL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(game_id, forecast_time)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS venues (
+                    venue_id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    city TEXT,
+                    state TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    dome INTEGER,
+                    elevation REAL,
+                    timezone TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Index for efficient game lookups
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_forecasts_game
+                ON forecasts(game_id, forecast_time)
+            """)
+
+    def get_forecast(
+        self,
+        latitude: float,
+        longitude: float,
+        game_time: datetime,
+        venue_id: Optional[int] = None,
+        venue_name: Optional[str] = None,
+    ) -> Optional[WeatherForecast]:
+        """Get weather forecast for a location and time.
+
+        Args:
+            latitude: Venue latitude
+            longitude: Venue longitude
+            game_time: Scheduled game start time
+            venue_id: Optional venue ID for caching
+            venue_name: Optional venue name
+
+        Returns:
+            WeatherForecast or None if API call fails
+        """
+        try:
+            # Build request
+            params = {
+                "location": f"{latitude},{longitude}",
+                "apikey": self.api_key,
+                "units": self.units,
+                "timesteps": "1h",  # Hourly forecasts
+            }
+
+            headers = {
+                "accept": "application/json",
+                "accept-encoding": "gzip",
+            }
+
+            # Retry loop with exponential backoff for rate limits
+            data = None
+            for attempt in range(self.max_retries + 1):
+                # Rate limiting - wait between calls
+                elapsed = time.time() - self._last_call_time
+                if elapsed < self.rate_limit_delay:
+                    time.sleep(self.rate_limit_delay - elapsed)
+                self._last_call_time = time.time()
+
+                response = requests.get(
+                    self.BASE_URL,
+                    params=params,
+                    headers=headers,
+                    timeout=30,
+                )
+
+                if response.status_code == 429:
+                    # Rate limited - exponential backoff
+                    if attempt < self.max_retries:
+                        wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                        logger.warning(
+                            f"Rate limited (429), retry {attempt + 1}/{self.max_retries} "
+                            f"in {wait_time}s"
+                        )
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error("Max retries exceeded on rate limit")
+                        return None
+
+                response.raise_for_status()
+                data = response.json()
+                break
+
+            if data is None:
+                return None
+
+            # Find the forecast closest to game time
+            forecast_data = self._find_forecast_for_time(data, game_time)
+            if not forecast_data:
+                logger.warning(f"No forecast found for game time {game_time}")
+                return None
+
+            # Calculate hours until game
+            forecast_time = datetime.now()
+            hours_until = int((game_time - forecast_time).total_seconds() / 3600)
+
+            # Calculate confidence factor based on forecast horizon
+            # Shorter horizons = higher confidence
+            if hours_until <= 6:
+                confidence = 0.95
+            elif hours_until <= 12:
+                confidence = 0.90
+            elif hours_until <= 24:
+                confidence = 0.85
+            elif hours_until <= 48:
+                confidence = 0.75
+            else:
+                confidence = 0.65
+
+            values = forecast_data.get("values", {})
+
+            return WeatherForecast(
+                venue_id=venue_id or 0,
+                venue_name=venue_name or "Unknown",
+                latitude=latitude,
+                longitude=longitude,
+                forecast_time=forecast_time,
+                game_time=game_time,
+                hours_until_game=hours_until,
+                temperature=values.get("temperature"),
+                wind_speed=values.get("windSpeed"),
+                wind_gust=values.get("windGust"),
+                wind_direction=values.get("windDirection"),
+                precipitation_probability=values.get("precipitationProbability"),
+                rain_intensity=values.get("rainIntensity"),
+                snow_intensity=values.get("snowIntensity"),
+                humidity=values.get("humidity"),
+                cloud_cover=values.get("cloudCover"),
+                weather_code=values.get("weatherCode"),
+                is_indoor=False,
+                confidence_factor=confidence,
+            )
+
+        except requests.RequestException as e:
+            logger.error(f"Tomorrow.io API error: {e}")
+            return None
+        except (KeyError, ValueError) as e:
+            logger.error(f"Error parsing Tomorrow.io response: {e}")
+            return None
+
+    def _find_forecast_for_time(
+        self, data: dict, target_time: datetime
+    ) -> Optional[dict]:
+        """Find the hourly forecast closest to target time.
+
+        Args:
+            data: Tomorrow.io API response
+            target_time: Target game time
+
+        Returns:
+            Forecast data dict or None
+        """
+        timelines = data.get("timelines", {})
+        hourly = timelines.get("hourly", [])
+
+        if not hourly:
+            return None
+
+        # Find closest forecast to target time
+        best_match = None
+        min_diff = float("inf")
+
+        for forecast in hourly:
+            time_str = forecast.get("time", "")
+            try:
+                # Parse ISO format: 2024-01-15T14:00:00Z
+                forecast_time = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                # Convert to naive datetime for comparison
+                forecast_time = forecast_time.replace(tzinfo=None)
+
+                diff = abs((forecast_time - target_time).total_seconds())
+                if diff < min_diff:
+                    min_diff = diff
+                    best_match = forecast
+            except ValueError:
+                continue
+
+        return best_match
+
+    def save_forecast(
+        self,
+        forecast: WeatherForecast,
+        game_id: int,
+    ) -> None:
+        """Save forecast to database.
+
+        Args:
+            forecast: WeatherForecast to save
+            game_id: CFBD game ID
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO forecasts (
+                    game_id, venue_id, venue_name, latitude, longitude,
+                    forecast_time, game_time, hours_until_game,
+                    temperature, wind_speed, wind_gust, wind_direction,
+                    precipitation_probability, rain_intensity, snow_intensity,
+                    humidity, cloud_cover, weather_code,
+                    is_indoor, confidence_factor
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    game_id,
+                    forecast.venue_id,
+                    forecast.venue_name,
+                    forecast.latitude,
+                    forecast.longitude,
+                    forecast.forecast_time.isoformat(),
+                    forecast.game_time.isoformat(),
+                    forecast.hours_until_game,
+                    forecast.temperature,
+                    forecast.wind_speed,
+                    forecast.wind_gust,
+                    forecast.wind_direction,
+                    forecast.precipitation_probability,
+                    forecast.rain_intensity,
+                    forecast.snow_intensity,
+                    forecast.humidity,
+                    forecast.cloud_cover,
+                    forecast.weather_code,
+                    1 if forecast.is_indoor else 0,
+                    forecast.confidence_factor,
+                ),
+            )
+
+    def get_saved_forecast(
+        self,
+        game_id: int,
+        max_age_hours: int = 24,
+    ) -> Optional[WeatherForecast]:
+        """Get most recent saved forecast for a game.
+
+        Args:
+            game_id: CFBD game ID
+            max_age_hours: Maximum age of forecast to consider valid
+
+        Returns:
+            WeatherForecast or None if not found/stale
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT * FROM forecasts
+                WHERE game_id = ?
+                ORDER BY forecast_time DESC
+                LIMIT 1
+                """,
+                (game_id,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            # Check if forecast is stale
+            forecast_time = datetime.fromisoformat(row["forecast_time"])
+            age_hours = (datetime.now() - forecast_time).total_seconds() / 3600
+            if age_hours > max_age_hours:
+                return None
+
+            return WeatherForecast(
+                venue_id=row["venue_id"],
+                venue_name=row["venue_name"],
+                latitude=row["latitude"],
+                longitude=row["longitude"],
+                forecast_time=forecast_time,
+                game_time=datetime.fromisoformat(row["game_time"]),
+                hours_until_game=row["hours_until_game"],
+                temperature=row["temperature"],
+                wind_speed=row["wind_speed"],
+                wind_gust=row["wind_gust"],
+                wind_direction=row["wind_direction"],
+                precipitation_probability=row["precipitation_probability"],
+                rain_intensity=row["rain_intensity"],
+                snow_intensity=row["snow_intensity"],
+                humidity=row["humidity"],
+                cloud_cover=row["cloud_cover"],
+                weather_code=row["weather_code"],
+                is_indoor=bool(row["is_indoor"]),
+                confidence_factor=row["confidence_factor"],
+            )
+
+    def save_venue(self, venue: VenueLocation) -> None:
+        """Save venue location to database.
+
+        Args:
+            venue: VenueLocation to save
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO venues (
+                    venue_id, name, city, state, latitude, longitude,
+                    dome, elevation, timezone, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    venue.venue_id,
+                    venue.name,
+                    venue.city,
+                    venue.state,
+                    venue.latitude,
+                    venue.longitude,
+                    1 if venue.dome else 0,
+                    venue.elevation,
+                    venue.timezone,
+                ),
+            )
+
+    def get_venue(self, venue_id: int) -> Optional[VenueLocation]:
+        """Get venue location from database.
+
+        Args:
+            venue_id: Venue ID
+
+        Returns:
+            VenueLocation or None if not found
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM venues WHERE venue_id = ?",
+                (venue_id,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            return VenueLocation(
+                venue_id=row["venue_id"],
+                name=row["name"],
+                city=row["city"],
+                state=row["state"],
+                latitude=row["latitude"],
+                longitude=row["longitude"],
+                dome=bool(row["dome"]),
+                elevation=row["elevation"],
+                timezone=row["timezone"],
+            )
+
+    def is_weather_concern(self, forecast: WeatherForecast) -> bool:
+        """Check if forecast indicates weather that may impact totals.
+
+        Uses the attention filter thresholds:
+        - Wind > 15 mph
+        - Temperature < 32°F
+        - Precipitation probability > 60%
+
+        Args:
+            forecast: WeatherForecast to check
+
+        Returns:
+            True if weather warrants attention for totals betting
+        """
+        if forecast.is_indoor:
+            return False
+
+        high_wind = (
+            forecast.wind_speed is not None
+            and forecast.wind_speed > 15
+        )
+
+        freezing = (
+            forecast.temperature is not None
+            and forecast.temperature < 32
+        )
+
+        likely_precip = (
+            forecast.precipitation_probability is not None
+            and forecast.precipitation_probability > 60
+        )
+
+        return high_wind or freezing or likely_precip
+
+    def forecast_to_weather_conditions(
+        self, forecast: WeatherForecast, game_id: int
+    ):
+        """Convert forecast to WeatherConditions for use with WeatherAdjuster.
+
+        Args:
+            forecast: WeatherForecast from tomorrow.io
+            game_id: Game ID
+
+        Returns:
+            WeatherConditions compatible with existing WeatherAdjuster
+        """
+        # Import here to avoid circular dependency
+        from src.adjustments.weather import WeatherConditions
+
+        # Convert rain/snow intensity from mm/hr to inches
+        # (Tomorrow.io uses mm/hr even in imperial mode for intensity)
+        rain_inches = (forecast.rain_intensity or 0) / 25.4
+        snow_inches = (forecast.snow_intensity or 0) / 25.4
+
+        # Map weather code to condition string
+        weather_condition = self._weather_code_to_condition(forecast.weather_code)
+
+        return WeatherConditions(
+            game_id=game_id,
+            home_team="",  # Not available from forecast
+            away_team="",
+            venue=forecast.venue_name,
+            game_indoors=forecast.is_indoor,
+            temperature=forecast.temperature,
+            wind_speed=forecast.wind_speed,
+            wind_direction=forecast.wind_direction,
+            precipitation=rain_inches,
+            snowfall=snow_inches,
+            humidity=forecast.humidity,
+            weather_condition=weather_condition,
+        )
+
+    def _weather_code_to_condition(self, code: Optional[int]) -> Optional[str]:
+        """Convert Tomorrow.io weather code to condition string.
+
+        Args:
+            code: Tomorrow.io weather code
+
+        Returns:
+            Condition string compatible with WeatherAdjuster
+        """
+        if code is None:
+            return None
+
+        # Map Tomorrow.io codes to our condition strings
+        # https://docs.tomorrow.io/reference/data-layers-weather-codes
+        code_map = {
+            0: "Unknown",
+            1000: "Clear",
+            1100: "Mostly Clear",
+            1101: "Partly Cloudy",
+            1102: "Mostly Cloudy",
+            1001: "Cloudy",
+            2000: "Fog",
+            2100: "Light Fog",
+            4000: "Drizzle",
+            4001: "Rain",
+            4200: "Light Rain",
+            4201: "Heavy Rain",
+            5000: "Snow",
+            5001: "Flurries",
+            5100: "Light Snow",
+            5101: "Heavy Snow",
+            6000: "Freezing Drizzle",
+            6001: "Freezing Rain",
+            6200: "Light Freezing Rain",
+            6201: "Heavy Freezing Rain",
+            7000: "Sleet",
+            7101: "Heavy Ice Pellets",
+            7102: "Light Ice Pellets",
+            8000: "Thunderstorm",
+        }
+
+        return code_map.get(code, "Unknown")
