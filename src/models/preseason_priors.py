@@ -814,36 +814,78 @@ class PreseasonPriors:
             .fillna('OTHER')
         )
 
-        # Calculate OUTGOING value (what team loses - WITH level discount for symmetry)
-        # The player's value is evaluated in the same transfer context as incoming.
-        # This ensures G5→P4 transfers are roughly zero-sum (minus continuity tax)
-        # rather than creating a systematic downward bias across the system.
-        transfers_df['outgoing_value'] = transfers_df.apply(
-            lambda row: self._calculate_player_value(
-                row.get('stars'),
-                row.get('rating'),
-                row['pos_group'],
-                origin=row.get('origin'),
-                destination=row.get('destination'),
-                team_conferences=team_conferences,
-            ),
-            axis=1
+        # VECTORIZED player value calculation (replaces 2x .apply() over ~2000 rows)
+        # Formula: pos_weight × quality_factor × level_discount
+
+        # 1. Position weights (vectorized map)
+        pos_weight = transfers_df['pos_group'].map(self.POSITION_WEIGHTS).fillna(0.35)
+
+        # 2. Quality factor (vectorized np.where chains)
+        stars = pd.to_numeric(transfers_df['stars'], errors='coerce')
+        rating = pd.to_numeric(transfers_df['rating'], errors='coerce')
+
+        # Stars factor: (stars - 2) / 3, clamped to [0.1, 1.0]
+        stars_factor = ((stars - 2) / 3).clip(0.1, 1.0)
+        # Rating factor: (rating - 0.77) / 0.22, clamped to [0.1, 1.0]
+        rating_factor = ((rating - 0.77) / 0.22).clip(0.1, 1.0)
+
+        has_stars = stars.notna()
+        has_rating = rating.notna()
+
+        # Blend: 60% rating + 40% stars when both present
+        quality_factor = np.where(
+            has_stars & has_rating,
+            0.6 * rating_factor + 0.4 * stars_factor,
+            np.where(
+                has_stars,
+                stars_factor,
+                np.where(
+                    has_rating,
+                    rating_factor,
+                    0.33  # Default: 3-star equivalent
+                )
+            )
         )
 
-        # Calculate INCOMING value (what team gains - WITH level-up discount)
-        # G5→P4 transfers get discounted based on physicality/athleticism.
-        # Same discount applied to outgoing value above for symmetry.
-        transfers_df['incoming_value'] = transfers_df.apply(
-            lambda row: self._calculate_player_value(
-                row.get('stars'),
-                row.get('rating'),
-                row['pos_group'],
-                origin=row.get('origin'),
-                destination=row.get('destination'),
-                team_conferences=team_conferences,
-            ),
-            axis=1
-        )
+        # 3. Level-up discount (vectorized based on P4 status and position)
+        level_discount = np.ones(len(transfers_df))  # Default: no discount
+
+        if team_conferences:
+            # Pre-compute P4 set for vectorized lookup
+            p4_set = self.P4_TEAMS | {
+                t for t, c in team_conferences.items() if c in self.P4_CONFERENCES
+            }
+            origin_is_p4 = transfers_df['origin'].isin(p4_set)
+            dest_is_p4 = transfers_df['destination'].isin(p4_set)
+
+            # G5→P4: Apply position-based discount
+            g5_to_p4 = ~origin_is_p4 & dest_is_p4
+            is_high_contact = transfers_df['pos_group'].isin(self.HIGH_CONTACT_POSITIONS)
+            is_skill = transfers_df['pos_group'].isin(self.SKILL_POSITIONS)
+
+            level_discount = np.where(
+                g5_to_p4 & is_high_contact,
+                self.PHYSICALITY_TAX,  # 0.75 for trench
+                np.where(
+                    g5_to_p4 & is_skill,
+                    self.ATHLETICISM_DISCOUNT,  # 0.90 for skill
+                    np.where(
+                        g5_to_p4,
+                        0.85,  # Other positions (QB, TE, ST)
+                        np.where(
+                            origin_is_p4 & ~dest_is_p4,
+                            1.10,  # P4→G5: 10% boost
+                            1.0   # Same level: no discount
+                        )
+                    )
+                )
+            )
+
+        # 4. Final value: pos_weight × quality_factor × level_discount
+        # Same formula for both outgoing and incoming (symmetric treatment)
+        player_value = pos_weight * quality_factor * level_discount
+        transfers_df['outgoing_value'] = player_value
+        transfers_df['incoming_value'] = player_value
 
         # Log position group distribution
         pos_dist = transfers_df['pos_group'].value_counts()
