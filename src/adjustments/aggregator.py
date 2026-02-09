@@ -43,9 +43,11 @@ The environmental soft cap (5.0 pts, 60% excess) protects against over-predictio
 in extreme scenarios without artificially dampening independent effects.
 
 Interaction Effects (where double-counting IS a risk):
-- Travel × Consecutive Road: When travel >1.5 pts, consecutive road reduced 50%
+- Travel × Consecutive Road: When travel > TRAVEL_INTERACTION_THRESHOLD (1.5 pts),
+  consecutive road reduced by CONSECUTIVE_ROAD_INTERACTION_DAMPENING (50%)
   (both measure physical fatigue from being away from home)
-- Travel × Altitude: When travel >1.5 pts, altitude reduced 30%
+- Travel × Altitude: When travel > TRAVEL_INTERACTION_THRESHOLD (1.5 pts),
+  altitude reduced by ALTITUDE_INTERACTION_DAMPENING (30%)
   (stacking physical stressors on already-fatigued team; affects ~5 games/year)
 """
 
@@ -174,6 +176,11 @@ class AdjustmentAggregator:
     MENTAL_SECOND_WEIGHT: float = 0.50  # Weight for second-largest mental factor
     MENTAL_OTHER_WEIGHT: float = 0.25  # Weight for remaining mental factors
 
+    # Interaction effect constants (prevent double-counting correlated fatigue)
+    TRAVEL_INTERACTION_THRESHOLD: float = 1.5  # Travel penalty above which interactions apply
+    ALTITUDE_INTERACTION_DAMPENING: float = 0.70  # Altitude reduced to 70% when travel > threshold
+    CONSECUTIVE_ROAD_INTERACTION_DAMPENING: float = 0.50  # Consec road reduced to 50% when travel > threshold
+
     def __init__(
         self,
         global_cap: Optional[float] = None,
@@ -181,6 +188,9 @@ class AdjustmentAggregator:
         env_excess_weight: Optional[float] = None,
         mental_second_weight: Optional[float] = None,
         mental_other_weight: Optional[float] = None,
+        travel_interaction_threshold: Optional[float] = None,
+        altitude_interaction_dampening: Optional[float] = None,
+        consecutive_road_interaction_dampening: Optional[float] = None,
     ):
         """Initialize the aggregator with smoothing parameters.
 
@@ -190,6 +200,9 @@ class AdjustmentAggregator:
             env_excess_weight: Weight for excess above soft cap (default: 0.60)
             mental_second_weight: Weight for second-largest mental factor
             mental_other_weight: Weight for remaining mental factors
+            travel_interaction_threshold: Travel penalty above which interactions apply (default: 1.5)
+            altitude_interaction_dampening: Altitude multiplier when travel > threshold (default: 0.70)
+            consecutive_road_interaction_dampening: Consecutive road multiplier when travel > threshold (default: 0.50)
         """
         self.global_cap = global_cap if global_cap is not None else self.GLOBAL_CAP
         self.env_soft_cap = (
@@ -207,6 +220,21 @@ class AdjustmentAggregator:
             mental_other_weight
             if mental_other_weight is not None
             else self.MENTAL_OTHER_WEIGHT
+        )
+        self.travel_interaction_threshold = (
+            travel_interaction_threshold
+            if travel_interaction_threshold is not None
+            else self.TRAVEL_INTERACTION_THRESHOLD
+        )
+        self.altitude_interaction_dampening = (
+            altitude_interaction_dampening
+            if altitude_interaction_dampening is not None
+            else self.ALTITUDE_INTERACTION_DAMPENING
+        )
+        self.consecutive_road_interaction_dampening = (
+            consecutive_road_interaction_dampening
+            if consecutive_road_interaction_dampening is not None
+            else self.CONSECUTIVE_ROAD_INTERACTION_DAMPENING
         )
 
     def aggregate(
@@ -249,10 +277,10 @@ class AdjustmentAggregator:
         # abs() is a safety belt - TravelBreakdown validates non-negative in __post_init__
         altitude = abs(travel_breakdown.altitude_penalty)
 
-        # Travel/Altitude Interaction: When travel >1.5 pts, reduce altitude by 30%
+        # Travel/Altitude Interaction: When travel exceeds threshold, reduce altitude
         # to prevent over-stacking physical stressors (affects ~5 games/year)
-        if result.raw_travel > 1.5 and altitude > 0:
-            altitude *= 0.7
+        if result.raw_travel > self.travel_interaction_threshold and altitude > 0:
+            altitude *= self.altitude_interaction_dampening
 
         result.raw_altitude = altitude
 
@@ -294,11 +322,11 @@ class AdjustmentAggregator:
         consecutive_away = abs(away_factors.consecutive_road_penalty)
         consecutive_home = abs(home_factors.consecutive_road_penalty)
 
-        # Travel/Consecutive Road Interaction: When travel >1.5 pts, reduce
-        # consecutive road by 50% to prevent double-counting the fatigue component
-        if result.raw_travel > 1.5:
-            consecutive_away *= 0.5
-            consecutive_home *= 0.5
+        # Travel/Consecutive Road Interaction: When travel exceeds threshold, reduce
+        # consecutive road to prevent double-counting the fatigue component
+        if result.raw_travel > self.travel_interaction_threshold:
+            consecutive_away *= self.consecutive_road_interaction_dampening
+            consecutive_home *= self.consecutive_road_interaction_dampening
 
         result.raw_consecutive_road = consecutive_away - consecutive_home
 
