@@ -10,6 +10,23 @@
 
 ---
 
+#### Extract Interaction Effect Constants — COMMITTED
+**Impact: Tunable interaction dampening without editing source code**
+
+Extracted hardcoded interaction values to class-level constants with constructor overrides:
+
+| Constant | Default | Purpose |
+|----------|---------|---------|
+| `TRAVEL_INTERACTION_THRESHOLD` | 1.5 | Travel penalty above which interactions apply |
+| `ALTITUDE_INTERACTION_DAMPENING` | 0.70 | Altitude reduced to 70% when travel > threshold |
+| `CONSECUTIVE_ROAD_INTERACTION_DAMPENING` | 0.50 | Consec road reduced to 50% when travel > threshold |
+
+All three have constructor parameters for sweep testing without source edits.
+
+**Commit**: `2d120eb` (Extract interaction effect constants to class-level with constructor overrides)
+
+---
+
 #### Short-Week × Travel Interaction Analysis — DOCUMENTED
 **Impact: Explicit reasoning for why short-week has no travel interaction**
 
