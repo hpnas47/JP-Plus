@@ -2,11 +2,11 @@
 """Weekly odds capture for opening and closing lines.
 
 This script is designed to be run twice per week during CFB season:
-1. Sunday evening - Capture opening lines (after lines are posted)
+1. Sunday morning - Capture opening lines (lines post by 8-10 AM ET)
 2. Saturday morning - Capture closing lines (before games start)
 
 Usage:
-    # Capture opening lines (run Sunday ~6 PM ET)
+    # Capture opening lines (run Sunday ~8 AM ET)
     python scripts/weekly_odds_capture.py --opening
 
     # Capture closing lines (run Saturday ~9 AM ET)
@@ -16,8 +16,8 @@ Usage:
     python scripts/weekly_odds_capture.py --preview
 
 Schedule with cron (example):
-    # Opening lines: Sunday 6 PM ET (11 PM UTC)
-    0 23 * * 0 cd /path/to/project && python scripts/weekly_odds_capture.py --opening
+    # Opening lines: Sunday 8 AM ET (1 PM UTC)
+    0 13 * * 0 cd /path/to/project && python scripts/weekly_odds_capture.py --opening
 
     # Closing lines: Saturday 9 AM ET (2 PM UTC)
     0 14 * * 6 cd /path/to/project && python scripts/weekly_odds_capture.py --closing

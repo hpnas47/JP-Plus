@@ -297,12 +297,12 @@ def backfill_opening_lines(
             # Calculate Sunday before first game
             if w['first_date']:
                 first_date = w['first_date']  # Already a datetime object
-                # Go back to Sunday (opening lines typically post Sunday/Monday)
+                # Go back to Sunday (opening lines typically post by 8-10 AM ET Sunday)
                 days_since_sunday = first_date.weekday() + 1  # Monday=0, so +1
                 if days_since_sunday > 6:
                     days_since_sunday = 0  # Already Sunday
                 opening_date = first_date - timedelta(days=days_since_sunday)
-                opening_date = opening_date.replace(hour=18, minute=0, second=0)  # 6 PM ET
+                opening_date = opening_date.replace(hour=13, minute=0, second=0)  # 8 AM ET (1 PM UTC)
                 date_str = opening_date.strftime("%Y-%m-%dT%H:%M:%SZ")
             else:
                 date_str = "unknown"
@@ -331,13 +331,13 @@ def backfill_opening_lines(
             logger.warning(f"Week {w['week']}: no date info, skipping")
             continue
 
-        # Calculate query date (Sunday before first game, 6 PM ET)
+        # Calculate query date (Sunday before first game, 8 AM ET)
         first_date = w['first_date']  # Already a datetime object
         days_since_sunday = first_date.weekday() + 1
         if days_since_sunday > 6:
             days_since_sunday = 0
         opening_date = first_date - timedelta(days=days_since_sunday)
-        opening_date = opening_date.replace(hour=23, minute=0, second=0)  # 11 PM UTC (6 PM ET)
+        opening_date = opening_date.replace(hour=13, minute=0, second=0)  # 1 PM UTC (8 AM ET)
         date_str = opening_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         logger.info(f"Fetching week {w['week']} opening lines (date: {date_str})...")
