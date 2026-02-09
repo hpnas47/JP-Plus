@@ -375,8 +375,28 @@ class AdjustmentAggregator:
 
         # =====================================================================
         # STEP 4: Mental Bucket (Standard Smoothing)
-        # Components: letdown, lookahead, sandwich
+        # Components: letdown, lookahead, sandwich, game_shape
         # Net = (away penalties favor home) - (home penalties hurt home)
+        #
+        # DESIGN DECISION: Per-Team Smoothing Before Netting
+        # -------------------------------------------------
+        # We smooth each team's mental factors INDEPENDENTLY, then net the results.
+        # This is intentional and models diminishing marginal psychological impact.
+        #
+        # Example asymmetry (intentional):
+        #   Team A: letdown 3.5 only           → smoothed = 3.5
+        #   Team B: letdown 2.0 + lookahead 1.5 → smoothed = 2.0 + 0.75 = 2.75
+        #   Net: 3.5 - 2.75 = 0.75 (even though raw sums both equal 3.5)
+        #
+        # Why this is correct:
+        # 1. One overwhelming distraction is worse than two smaller ones of equal
+        #    total magnitude. A team in a SINGLE massive spot is fully distracted.
+        # 2. Multiple smaller concerns "mask" each other - coaching can only focus
+        #    on so many messages, players have limited capacity for additional load.
+        # 3. The alternative (net raw values first, then smooth) would lose this
+        #    per-team psychological reality.
+        #
+        # The raw_mental_sum diagnostic field captures unsmoothed net for comparison.
         # =====================================================================
         # Away team mental penalties (favor home)
         away_mental = []
