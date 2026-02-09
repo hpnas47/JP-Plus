@@ -6,7 +6,31 @@
 
 ## Session: February 9, 2026
 
-### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property
+### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening
+
+---
+
+#### Sign Convention Documentation and Validation — COMMITTED
+**Impact: Prevents silent wrong results if upstream adjusters change sign conventions**
+
+Traced through TravelAdjuster, AltitudeAdjuster, and SituationalFactors to document actual sign conventions:
+
+1. **TravelBreakdown**:
+   - Corrected docstring: values are **positive magnitudes** (not "negative value" as previously documented)
+   - Added `__post_init__` validation to raise `ValueError` if values are negative
+   - Documented that values come from `TravelAdjuster.get_total_travel_adjustment()` (positive = favors home)
+
+2. **SituationalFactors**:
+   - Added "Sign Convention" section to class docstring
+   - All penalties are **positive magnitudes** on the affected team
+   - `game_shape_penalty` is the exception (stored as negative)
+   - Added inline comments on each field with sign expectations
+
+3. **Aggregator**:
+   - Documented that `abs()` calls are safety belts (values already validated positive)
+   - Expanded `consecutive_road_penalty` comment with sign semantics
+
+**Commit**: `64ae4cf` (Document and validate sign conventions for adjustment components)
 
 ---
 
