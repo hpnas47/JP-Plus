@@ -146,11 +146,11 @@ class WeatherAdjuster:
         pass  # All config is in class constants
 
     # Pass rate multiplier for wind adjustment (The "Passing Team" Multiplier)
-    # Air Raid teams (60%+ pass rate) suffer more; Option teams (<40%) barely care
-    PASS_RATE_HIGH_THRESHOLD = 0.55  # Combined pass rate above this = pass-heavy
-    PASS_RATE_LOW_THRESHOLD = 0.45   # Combined pass rate below this = run-heavy
-    PASS_RATE_HIGH_MULTIPLIER = 1.25  # Pass-heavy teams get 25% more wind penalty
-    PASS_RATE_LOW_MULTIPLIER = 0.50   # Run-heavy teams get 50% less wind penalty
+    # Continuous scaling: multiplier = combined_pass_rate / 0.50
+    # Air Raid (65%+ pass): ~1.3x penalty; Option teams (35%): ~0.7x penalty
+    PASS_RATE_BASELINE = 0.50  # 50% pass rate = 1.0x multiplier (neutral)
+    PASS_RATE_MULTIPLIER_MIN = 0.50  # Floor for extreme run teams (Army at ~30%)
+    PASS_RATE_MULTIPLIER_MAX = 1.50  # Cap for extreme pass teams
 
     def _get_effective_wind(
         self,
@@ -175,10 +175,11 @@ class WeatherAdjuster:
         Uses average of wind_speed and wind_gust for effective wind,
         since gusts matter for passing and kicking.
 
-        The "Passing Team" Multiplier: Wind hurts pass-heavy teams more.
-        - Air Raid (Ole Miss): 60%+ combined pass rate → 1.25x adjustment
-        - Balanced: 45-55% combined pass rate → 1.0x adjustment
-        - Triple Option (Army): <45% combined pass rate → 0.5x adjustment
+        The "Passing Team" Multiplier: Continuous scaling based on pass rate.
+        - multiplier = combined_pass_rate / 0.50 (clamped to [0.5, 1.5])
+        - Air Raid (65% pass): 1.3x penalty
+        - Balanced (50% pass): 1.0x penalty
+        - Triple Option (35% pass): 0.7x penalty
 
         Args:
             wind_speed: Sustained wind speed in MPH
@@ -192,7 +193,7 @@ class WeatherAdjuster:
         if effective_wind == 0.0:
             return 0.0
 
-        # Non-linear tiers
+        # Non-linear tiers for base adjustment
         if effective_wind < self.WIND_TIER_1:
             base_adj = 0.0
         elif effective_wind < self.WIND_TIER_2:
@@ -202,12 +203,13 @@ class WeatherAdjuster:
         else:
             base_adj = self.WIND_ADJ_TIER_3  # -6.0
 
-        # Apply pass rate multiplier if provided
+        # Apply continuous pass rate multiplier if provided
+        # multiplier = pass_rate / 0.50, clamped to [0.5, 1.5]
         if combined_pass_rate is not None and base_adj != 0.0:
-            if combined_pass_rate >= self.PASS_RATE_HIGH_THRESHOLD:
-                base_adj *= self.PASS_RATE_HIGH_MULTIPLIER  # More penalty for pass-heavy
-            elif combined_pass_rate <= self.PASS_RATE_LOW_THRESHOLD:
-                base_adj *= self.PASS_RATE_LOW_MULTIPLIER  # Less penalty for run-heavy
+            raw_multiplier = combined_pass_rate / self.PASS_RATE_BASELINE
+            multiplier = max(self.PASS_RATE_MULTIPLIER_MIN,
+                           min(self.PASS_RATE_MULTIPLIER_MAX, raw_multiplier))
+            base_adj *= multiplier
 
         return base_adj
 
