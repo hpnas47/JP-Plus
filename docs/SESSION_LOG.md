@@ -63,6 +63,72 @@ Updated:
 
 ---
 
+#### Pro-Rata Smoothing for Adjustment Buckets — COMMITTED
+**Impact: Accurate per-bucket post-smoothing values in SpreadComponents**
+
+**Problem:** `components.situational` was computed as residual (`net_adjustment - raw_hfa - raw_travel - raw_altitude`), which absorbed smoothing deltas from env soft-cap. Made situational values misleading.
+
+**Solution:** Added pro-rata allocation via `env_smoothing_factor`:
+- `AggregatedAdjustments.env_smoothing_factor`: ratio of `env_score / raw_env_stack`
+- `AggregatedAdjustments.situational_score`: pure situational (rest + consec + mental + boosts)
+- SpreadGenerator now uses `raw_value * factor` for HFA/travel/altitude
+- Renamed `smoothed_correlated_stack` → `full_env_stack` for clarity
+
+**Commit**: `e4b5d3e` (Add pro-rata smoothing for accurate per-bucket adjustment reporting)
+
+---
+
+#### spread_generator.py Cleanup — COMMITTED
+**Impact: game_id support, import cleanup, dead code removal**
+
+1. **game_id parameter support (P0.1)**:
+   - Added `game_id` param to `predict_spread()`
+   - `predict_week()` extracts from game dict ("id" or "game_id")
+   - Added `game_id` to `PredictedSpread.to_dict()` output
+
+2. **ELITE_FCS_TEAMS cleanup**:
+   - Removed James Madison and Sam Houston (now FBS, were dead entries)
+   - Added historical note comment
+
+3. **Import cleanup**:
+   - Moved `SituationalFactors` to top-level import
+   - Removed inline import in fallback path
+
+4. **Documentation**:
+   - Updated `predict_week()` docstring with all expected game dict fields
+
+**Commit**: `b727eb8` (Clean up spread_generator.py: game_id support, imports, dead code)
+
+---
+
+#### totals_model.py Hardening — COMMITTED
+**Impact: Validation, bounds, alignment fixes across 7 areas**
+
+1. **Year parameter fix (P0.1)**: `walk_forward_totals_backtest()` now passes `year` to `predict_total()` for correct year-specific baseline.
+
+2. **decay_factor validation**: Raises `ValueError` if not in `(0, 1.0]`. Values > 1.0 would upweight old games. Short-circuit when `decay_factor == 1.0`.
+
+3. **Model reuse optimization**: Create `TotalsModel` once before backtest loop, call `set_team_universe()` once.
+
+4. **ridge_alpha alignment**: Backtest default now 10.0 (was 5.0), matches model default and documented optimal.
+
+5. **/2 shrinkage documentation**: Documented that `/2` is intentional:
+   - Without /2: MAE 12.90 (better), 5+ Edge 53.3% (worse)
+   - With /2: MAE 13.09 (worse), 5+ Edge 54.5% (better)
+   - Since 5+ Edge is binding constraint, keep shrinkage
+
+6. **Prediction bounds**:
+   - Per-team floor: `max(0, expected)`
+   - Total floor: 21 pts
+   - Total ceiling: 105 pts
+   - `weather_adjustment` now included in total calculation
+
+7. **Index alignment robustness**: Filter/reset DataFrame BEFORE computing `home_idx`/`away_idx` to prevent silent misalignment.
+
+**Commit**: `e83cbba` (Harden totals_model.py: validation, bounds, alignment fixes)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
