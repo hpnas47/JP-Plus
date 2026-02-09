@@ -47,22 +47,27 @@ logger = logging.getLogger(__name__)
 # The cache invalidates naturally via key mismatch when any parameter changes.
 # A data_hash is also included in the key to guard against edge cases where
 # the same (season, week) combination has different underlying data.
+#
+# LRU Eviction: Cache is bounded to prevent unbounded growth during sweeps.
+# Uses OrderedDict with move-to-end on hit, pop-from-front when full.
 # =============================================================================
+from collections import OrderedDict
 
-_RIDGE_ADJUST_CACHE: dict[tuple, tuple[dict, dict, Optional[float]]] = {}
-_CACHE_STATS = {"hits": 0, "misses": 0}
+_RIDGE_CACHE_MAX_SIZE = 500  # ~4 years × 15 weeks × 2 metrics × 4 hyperparameter combos
+_RIDGE_ADJUST_CACHE: OrderedDict[tuple, tuple[dict, dict, Optional[float]]] = OrderedDict()
+_CACHE_STATS = {"hits": 0, "misses": 0, "evictions": 0, "eviction_warned": False}
 
 
 def clear_ridge_cache() -> dict:
     """Clear the ridge adjustment cache and return stats.
 
     Returns:
-        Dict with cache statistics (hits, misses) before clearing.
+        Dict with cache statistics (hits, misses, evictions) before clearing.
     """
     global _RIDGE_ADJUST_CACHE, _CACHE_STATS
     stats = _CACHE_STATS.copy()
     _RIDGE_ADJUST_CACHE.clear()
-    _CACHE_STATS = {"hits": 0, "misses": 0}
+    _CACHE_STATS = {"hits": 0, "misses": 0, "evictions": 0, "eviction_warned": False}
     logger.info(f"Ridge cache cleared. Previous stats: {stats}")
     return stats
 
@@ -71,14 +76,16 @@ def get_ridge_cache_stats() -> dict:
     """Get current cache statistics.
 
     Returns:
-        Dict with hits, misses, size, and hit_rate.
+        Dict with hits, misses, evictions, size, max_size, and hit_rate.
     """
     total = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
     hit_rate = _CACHE_STATS["hits"] / total if total > 0 else 0.0
     return {
         "hits": _CACHE_STATS["hits"],
         "misses": _CACHE_STATS["misses"],
+        "evictions": _CACHE_STATS["evictions"],
         "size": len(_RIDGE_ADJUST_CACHE),
+        "max_size": _RIDGE_CACHE_MAX_SIZE,
         "hit_rate": hit_rate,
     }
 
@@ -1272,6 +1279,8 @@ class EfficiencyFoundationModel:
 
             if cache_key in _RIDGE_ADJUST_CACHE:
                 _CACHE_STATS["hits"] += 1
+                # LRU: Move accessed key to end (most recently used)
+                _RIDGE_ADJUST_CACHE.move_to_end(cache_key)
                 cached_result = _RIDGE_ADJUST_CACHE[cache_key]
                 logger.debug(
                     f"Cache HIT for ridge adjust: season={season}, week={eval_week}, "
@@ -1487,11 +1496,26 @@ class EfficiencyFoundationModel:
         )
 
         # =================================================================
-        # CACHE STORAGE
+        # CACHE STORAGE (with LRU eviction)
         # =================================================================
         result = (off_adjusted, def_adjusted, learned_hfa)
         if cache_key is not None:
             _RIDGE_ADJUST_CACHE[cache_key] = result
+
+            # LRU eviction: remove oldest entries if cache exceeds max size
+            while len(_RIDGE_ADJUST_CACHE) > _RIDGE_CACHE_MAX_SIZE:
+                evicted_key = next(iter(_RIDGE_ADJUST_CACHE))
+                _RIDGE_ADJUST_CACHE.pop(evicted_key)
+                _CACHE_STATS["evictions"] += 1
+
+                # Warn once per session when eviction starts
+                if not _CACHE_STATS["eviction_warned"]:
+                    logger.warning(
+                        f"Ridge cache exceeded max size ({_RIDGE_CACHE_MAX_SIZE}), "
+                        f"LRU eviction active. Consider clearing cache between sweeps."
+                    )
+                    _CACHE_STATS["eviction_warned"] = True
+
             logger.debug(
                 f"Cached ridge adjust result: season={season}, week={eval_week}, "
                 f"metric={metric_col} (cache size={len(_RIDGE_ADJUST_CACHE)})"
