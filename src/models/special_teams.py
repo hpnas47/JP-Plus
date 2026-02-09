@@ -221,6 +221,8 @@ class SpecialTeamsModel:
         self,
         plays_df: pd.DataFrame,
         games_played: Optional[dict[str, int]] = None,
+        *,
+        _pre_filtered: Optional[pd.DataFrame] = None,
     ) -> None:
         """Calculate FG ratings for all teams from play-by-play data.
 
@@ -230,16 +232,21 @@ class SpecialTeamsModel:
         Args:
             plays_df: DataFrame with play-by-play data (must have play_type, play_text, offense columns)
             games_played: Optional dict of team -> games played for per-game normalization
+            _pre_filtered: Internal use - pre-filtered FG plays to skip redundant str.contains scan
         """
         if plays_df.empty:
             logger.warning("Empty plays dataframe, skipping FG rating calculation")
             return
 
-        # Filter to field goal plays
-        # P3.5: Select only needed columns and copy once (drop unused columns early)
-        needed_cols = ["offense", "play_type", "play_text"]
-        fg_mask = plays_df["play_type"].str.contains("Field Goal", case=False, na=False)
-        fg_plays = plays_df.loc[fg_mask, needed_cols].copy()
+        # Use pre-filtered data if provided (from calculate_all_st_ratings_from_plays)
+        if _pre_filtered is not None:
+            fg_plays = _pre_filtered
+        else:
+            # Filter to field goal plays
+            # P3.5: Select only needed columns and copy once (drop unused columns early)
+            needed_cols = ["offense", "play_type", "play_text"]
+            fg_mask = plays_df["play_type"].str.contains("Field Goal", case=False, na=False)
+            fg_plays = plays_df.loc[fg_mask, needed_cols].copy()
 
         if fg_plays.empty:
             logger.warning("No field goal plays found")
@@ -358,6 +365,8 @@ class SpecialTeamsModel:
         self,
         plays_df: pd.DataFrame,
         games_played: Optional[dict[str, int]] = None,
+        *,
+        _pre_filtered: Optional[pd.DataFrame] = None,
     ) -> dict[str, float]:
         """Calculate punt ratings for all teams from play-by-play data.
 
@@ -372,6 +381,7 @@ class SpecialTeamsModel:
         Args:
             plays_df: DataFrame with play-by-play data
             games_played: Optional dict of team -> games played
+            _pre_filtered: Internal use - pre-filtered punt plays to skip redundant str.contains scan
 
         Returns:
             Dict mapping team to per-game punt rating (POINTS better than average)
@@ -380,11 +390,15 @@ class SpecialTeamsModel:
             logger.debug("Empty plays dataframe, skipping punt rating calculation")
             return {}
 
-        # Filter to punt plays
-        # P3.5: Select only needed columns and copy once (drop unused columns early)
-        needed_cols = ["offense", "play_type", "play_text"]
-        punt_mask = plays_df["play_type"].str.contains("Punt", case=False, na=False)
-        punt_plays = plays_df.loc[punt_mask, needed_cols].copy()
+        # Use pre-filtered data if provided (from calculate_all_st_ratings_from_plays)
+        if _pre_filtered is not None:
+            punt_plays = _pre_filtered
+        else:
+            # Filter to punt plays
+            # P3.5: Select only needed columns and copy once (drop unused columns early)
+            needed_cols = ["offense", "play_type", "play_text"]
+            punt_mask = plays_df["play_type"].str.contains("Punt", case=False, na=False)
+            punt_plays = plays_df.loc[punt_mask, needed_cols].copy()
 
         if punt_plays.empty:
             logger.debug("No punt plays found")
@@ -501,6 +515,8 @@ class SpecialTeamsModel:
         self,
         plays_df: pd.DataFrame,
         games_played: Optional[dict[str, int]] = None,
+        *,
+        _pre_filtered: Optional[pd.DataFrame] = None,
     ) -> dict[str, float]:
         """Calculate kickoff ratings for all teams from play-by-play data.
 
@@ -514,6 +530,7 @@ class SpecialTeamsModel:
         Args:
             plays_df: DataFrame with play-by-play data
             games_played: Optional dict of team -> games played
+            _pre_filtered: Internal use - pre-filtered kickoff plays to skip redundant str.contains scan
 
         Returns:
             Dict mapping team to per-game kickoff rating (POINTS better than average)
@@ -522,15 +539,19 @@ class SpecialTeamsModel:
             logger.debug("Empty plays dataframe, skipping kickoff rating calculation")
             return {}
 
-        # Filter to kickoff plays (exclude touchdowns which are in play_type)
-        # P3.5: Select only needed columns and copy once (drop unused columns early)
-        needed_cols = ["offense", "defense", "play_type", "play_text"]
-        play_type_lower = plays_df["play_type"].str.lower()
-        kickoff_mask = (
-            play_type_lower.str.contains("kickoff", na=False) &
-            ~play_type_lower.str.contains("touchdown", na=False)
-        )
-        kickoff_plays = plays_df.loc[kickoff_mask, needed_cols].copy()
+        # Use pre-filtered data if provided (from calculate_all_st_ratings_from_plays)
+        if _pre_filtered is not None:
+            kickoff_plays = _pre_filtered
+        else:
+            # Filter to kickoff plays (exclude touchdowns which are in play_type)
+            # P3.5: Select only needed columns and copy once (drop unused columns early)
+            needed_cols = ["offense", "defense", "play_type", "play_text"]
+            play_type_lower = plays_df["play_type"].str.lower()
+            kickoff_mask = (
+                play_type_lower.str.contains("kickoff", na=False) &
+                ~play_type_lower.str.contains("touchdown", na=False)
+            )
+            kickoff_plays = plays_df.loc[kickoff_mask, needed_cols].copy()
 
         if kickoff_plays.empty:
             logger.debug("No kickoff plays found")
@@ -678,18 +699,37 @@ class SpecialTeamsModel:
                 f"but max_week={max_week}. Filter plays before calling."
             )
 
-        # Calculate each component
+        # PERFORMANCE: Pre-compute play type masks ONCE (avoids 3x str.contains over ~50K plays)
+        play_type_lower = plays_df["play_type"].str.lower()
+
+        fg_mask = play_type_lower.str.contains("field goal", na=False)
+        punt_mask = play_type_lower.str.contains("punt", na=False)
+        kickoff_mask = (
+            play_type_lower.str.contains("kickoff", na=False) &
+            ~play_type_lower.str.contains("touchdown", na=False)
+        )
+
+        # Pre-filter and copy once per component
+        fg_cols = ["offense", "play_type", "play_text"]
+        punt_cols = ["offense", "play_type", "play_text"]
+        kickoff_cols = ["offense", "defense", "play_type", "play_text"]
+
+        fg_plays = plays_df.loc[fg_mask, fg_cols].copy()
+        punt_plays = plays_df.loc[punt_mask, punt_cols].copy()
+        kickoff_plays = plays_df.loc[kickoff_mask, kickoff_cols].copy()
+
+        # Calculate each component with pre-filtered data
         # FG ratings (stored directly in self.team_ratings)
-        self.calculate_fg_ratings_from_plays(plays_df, games_played)
+        self.calculate_fg_ratings_from_plays(plays_df, games_played, _pre_filtered=fg_plays)
 
         # Get existing FG ratings to merge with
         fg_ratings = {team: r.field_goal_rating for team, r in self.team_ratings.items()}
 
         # Punt ratings
-        punt_ratings = self.calculate_punt_ratings_from_plays(plays_df, games_played)
+        punt_ratings = self.calculate_punt_ratings_from_plays(plays_df, games_played, _pre_filtered=punt_plays)
 
         # Kickoff ratings
-        kickoff_ratings = self.calculate_kickoff_ratings_from_plays(plays_df, games_played)
+        kickoff_ratings = self.calculate_kickoff_ratings_from_plays(plays_df, games_played, _pre_filtered=kickoff_plays)
 
         # Merge all ratings
         # DETERMINISM: Sort for consistent iteration order
