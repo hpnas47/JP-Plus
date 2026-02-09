@@ -566,55 +566,68 @@ class SpecialTeamsModel:
         # Kicking team = offense (the team kicking off)
         # Returning team = defense (the team receiving)
 
-        # Coverage rating (for kicking teams)
-        coverage_ratings = {}
-        kicker_groups = kickoff_plays.groupby("offense")
-        for team, group in kicker_groups:
-            touchbacks = group["is_touchback"].sum()
-            total_kicks = len(group)
-            tb_rate = touchbacks / total_kicks if total_kicks > 0 else 0.6
+        # PERFORMANCE: Vectorized coverage rating aggregation (replaces Python loop)
+        # For non-touchbacks, we need return yards; touchbacks contribute 0 to return sum
+        kickoff_plays["return_yards_non_tb"] = np.where(
+            kickoff_plays["is_touchback"], np.nan, kickoff_plays["return_yards"]
+        )
 
-            # Returns allowed (non-touchback kicks)
-            returns = group[~group["is_touchback"]]
-            if len(returns) > 0:
-                avg_return_allowed = returns["return_yards"].mean()
-            else:
-                avg_return_allowed = 23  # Expected
+        coverage_agg = kickoff_plays.groupby("offense").agg(
+            touchbacks=("is_touchback", "sum"),
+            total_kicks=("is_touchback", "count"),
+            return_yards_sum=("return_yards_non_tb", "sum"),
+            return_count=("return_yards_non_tb", "count"),
+        )
 
-            # Coverage value in POINTS:
-            # Touchback bonus: opponent starts at 25 vs avg return to ~27, ~2 yards = ~0.08 pts
-            # Per 10% touchback rate above expected = ~0.1 pts per game
-            tb_bonus = (tb_rate - self.EXPECTED_TOUCHBACK_RATE) * 1.0
-            # Return yards saved: convert to points (~0.04 pts/yard)
-            return_saved = (23.0 - avg_return_allowed) * self.YARDS_TO_POINTS
+        # Vectorized coverage calculations
+        coverage_agg["tb_rate"] = coverage_agg["touchbacks"] / coverage_agg["total_kicks"]
+        coverage_agg["avg_return_allowed"] = np.where(
+            coverage_agg["return_count"] > 0,
+            coverage_agg["return_yards_sum"] / coverage_agg["return_count"],
+            23.0,  # Expected if no returns
+        )
+        # Coverage value in POINTS:
+        # Touchback bonus: per 10% touchback rate above expected = ~0.1 pts per game
+        coverage_agg["tb_bonus"] = (coverage_agg["tb_rate"] - self.EXPECTED_TOUCHBACK_RATE) * 1.0
+        # Return yards saved: convert to points (~0.04 pts/yard)
+        coverage_agg["return_saved"] = (23.0 - coverage_agg["avg_return_allowed"]) * self.YARDS_TO_POINTS
 
-            # Coverage rating (in points per kick, not per game)
-            # tb_bonus and return_saved are per-kick averages
-            # When games_played is provided, scale to per-game; otherwise keep per-kick
-            if games_played and team in games_played:
-                kicks_per_game = total_kicks / games_played[team]
-                coverage_ratings[team] = (tb_bonus + return_saved) * kicks_per_game
-            else:
-                coverage_ratings[team] = tb_bonus + return_saved
+        # Scale to per-game if games_played provided
+        if games_played:
+            games_series = pd.Series(games_played)
+            coverage_agg["games"] = coverage_agg.index.map(games_series).fillna(1)
+            coverage_agg["kicks_per_game"] = coverage_agg["total_kicks"] / coverage_agg["games"]
+            coverage_agg["coverage_rating"] = (
+                coverage_agg["tb_bonus"] + coverage_agg["return_saved"]
+            ) * coverage_agg["kicks_per_game"]
+        else:
+            coverage_agg["coverage_rating"] = coverage_agg["tb_bonus"] + coverage_agg["return_saved"]
 
-        # Return rating (for returning teams) in POINTS
-        return_ratings = {}
-        returner_groups = kickoff_plays[~kickoff_plays["is_touchback"]].groupby("defense")
-        for team, group in returner_groups:
-            if len(group) == 0:
-                continue
-            avg_return = group["return_yards"].mean()
+        coverage_ratings = coverage_agg["coverage_rating"].to_dict()
+
+        # PERFORMANCE: Vectorized return rating aggregation (replaces Python loop)
+        non_tb_plays = kickoff_plays[~kickoff_plays["is_touchback"]]
+        if not non_tb_plays.empty:
+            return_agg = non_tb_plays.groupby("defense").agg(
+                return_yards_sum=("return_yards", "sum"),
+                return_count=("return_yards", "count"),
+            )
+            return_agg["avg_return"] = return_agg["return_yards_sum"] / return_agg["return_count"]
             # Return yards above expected, converted to points (~0.04 pts/yard)
-            return_value = (avg_return - 23.0) * self.YARDS_TO_POINTS
+            return_agg["return_value"] = (return_agg["avg_return"] - 23.0) * self.YARDS_TO_POINTS
 
-            # Return rating (in points per return, not per game)
-            # return_value is per-return average
-            # When games_played is provided, scale to per-game; otherwise keep per-return
-            if games_played and team in games_played:
-                returns_per_game = len(group) / games_played[team]
-                return_ratings[team] = return_value * returns_per_game
+            # Scale to per-game if games_played provided
+            if games_played:
+                games_series = pd.Series(games_played)
+                return_agg["games"] = return_agg.index.map(games_series).fillna(1)
+                return_agg["returns_per_game"] = return_agg["return_count"] / return_agg["games"]
+                return_agg["return_rating"] = return_agg["return_value"] * return_agg["returns_per_game"]
             else:
-                return_ratings[team] = return_value
+                return_agg["return_rating"] = return_agg["return_value"]
+
+            return_ratings = return_agg["return_rating"].to_dict()
+        else:
+            return_ratings = {}
 
         # Combine coverage and return ratings
         # DETERMINISM: Sort for consistent iteration order
