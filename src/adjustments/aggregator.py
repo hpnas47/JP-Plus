@@ -249,7 +249,33 @@ class AdjustmentAggregator:
         result.raw_altitude = altitude
 
         # Rest advantage (positive = home has more rest, negative = home has less rest)
-        # This includes both bye week advantage AND short week penalty
+        # This includes both bye week advantage AND short week penalty.
+        #
+        # NOTE: rest_advantage intentionally has NO interaction with travel.
+        #
+        # Why consecutive_road interacts with travel (50% reduction):
+        #   Consecutive road = "you've been traveling for 2+ weeks" (travel fatigue)
+        #   Travel penalty = "this trip's fatigue" (also travel fatigue)
+        #   → Same mechanism, so we dampen to avoid double-counting.
+        #
+        # Why altitude interacts with travel (30% reduction):
+        #   Altitude = acute physical stress (oxygen debt)
+        #   Travel = acute physical stress (jet lag)
+        #   → Both are game-day physical stressors, some overlap.
+        #
+        # Why short-week does NOT interact with travel:
+        #   Short-week = incomplete RECOVERY from previous game:
+        #     - Fewer practices (preparation)
+        #     - Less film study (preparation)
+        #     - Not fully healed from injuries (chronic fatigue)
+        #     - Mental fatigue from quick turnaround
+        #   Travel = acute JOURNEY stress (jet lag, disrupted sleep)
+        #
+        #   These are orthogonal mechanisms:
+        #     - A team on short week AT HOME still has recovery/prep penalties
+        #     - A team with normal rest traveling far still has journey fatigue
+        #   They stack linearly because they measure different things.
+        #   The env soft cap (5.0 pts) handles extreme stacks adequately.
         result.raw_rest = home_factors.rest_advantage
 
         # Consecutive road penalty: positive magnitude on the penalized team.
