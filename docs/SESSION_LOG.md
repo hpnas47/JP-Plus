@@ -6,7 +6,117 @@
 
 ## Session: February 9, 2026
 
-### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening
+### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening + Infrastructure Hardening
+
+---
+
+#### Fix Asymmetric Portal Transfer Penalty — COMMITTED
+**Impact: G5→P4 trench transfers now consistently ~8-11% net negative (continuity tax only)**
+
+Fixed asymmetric penalty for G5→P4 trench player transfers in `preseason_priors.py`.
+
+**The Bug:**
+- Outgoing values computed WITHOUT level-up discount → 1.11x (continuity tax)
+- Incoming values computed WITH level-up discount → 0.75x (G5→P4 trench)
+- Net: 36% penalty for transfers that should be roughly zero-sum minus continuity tax
+
+**The Fix:** Applied level-up discount to outgoing values as well:
+```python
+transfers_df['outgoing_value'] = transfers_df.apply(
+    lambda row: self._calculate_player_value(
+        row.get('stars'), row.get('rating'), row['pos_group'],
+        origin=row.get('origin'),
+        destination=row.get('destination'),
+        team_conferences=team_conferences,
+    ), axis=1
+)
+```
+
+**Backtest:** 5+ Edge 54.6% (0.1% decrease = 3 games out of 867). Model Strategist confirmed: "Preserving known-incorrect logic because of 3 lucky games is the definition of overfitting to noise."
+
+**Commit**: `329654e`
+
+---
+
+#### Fix Latent NameError in Coaching Change Path — COMMITTED
+**Impact: Prevents crash if triple-option team has coaching change**
+
+In `preseason_priors.py`, `extremity_talent_scale` was only defined inside the non-triple-option branch but referenced unconditionally later for coaching adjustment tracking.
+
+**The Fix:** Initialize `extremity_talent_scale = 1.0` before branching:
+```python
+# Default extremity scale (used for coaching adjustment tracking)
+# Must be initialized before branching to avoid NameError if triple-option
+# team has a coaching change (triple-option branch doesn't set this)
+extremity_talent_scale = 1.0
+```
+
+**Commit**: `b82e6f8`
+
+---
+
+#### Remove Dead Code from SpecialTeamsModel — COMMITTED
+**Impact: -211 lines, cleaner codebase**
+
+Removed `calculate_team_rating()` and 6 helper methods from `special_teams.py`. Docstring claimed "kept for run_weekly.py" but `run_weekly.py` actually uses `calculate_from_game_stats()`.
+
+Also contained a circular bug where `punts_per_game` always equaled 5.0.
+
+**Commit**: `1d14895`
+
+---
+
+#### Batch Odds Inserts with executemany() — COMMITTED
+**Impact: ~480 SQLite round-trips → 1 batch insert**
+
+Refactored `capture_odds()` in `weekly_odds_capture.py` to build tuples during validation and batch insert with `cursor.executemany()`.
+
+**Commit**: `ae39bd5`
+
+---
+
+#### Add LRU Eviction to Ridge Cache — COMMITTED
+**Impact: Prevents unbounded memory growth during parameter sweeps**
+
+Added LRU eviction to `_RIDGE_ADJUST_CACHE` in `efficiency_foundation_model.py`:
+- Max size: 500 entries
+- Uses `collections.OrderedDict` with `move_to_end()` on hit
+- Evicts oldest entries when full
+- Added cache stats tracking (hits, misses, evictions)
+
+**Commit**: `14b0ec8`
+
+---
+
+#### Kickoff Per-Game Scaling Fix — REVERTED
+**Impact: Would have normalized coverage/return by actual games played**
+
+Attempted to fix inconsistent per-game scaling in kickoff ratings (coverage used actual games, return used estimated). Backtest showed 5+ Edge degradation: 54.7% → 54.1%.
+
+**Reverted:** Not a valid fix per decision gate.
+
+---
+
+#### FG Rate Lookup Investigation — NOT A BUG
+**Impact: Confirmed np.select distance buckets are correct**
+
+User reported that `np.select` might be slicing off the last (50,60) bucket. Traced through code and verified:
+- 5 distance buckets: (0,20), (20,30), (30,40), (40,50), (50,60)
+- `conditions[:-1]` correctly returns indices 0-3, but conditions list has 5 elements
+- Index 4 (the 50-60 bucket) is retained as `default` fallback
+- Tested edge cases: 19yd, 29yd, 49yd, 55yd all mapped correctly
+
+**No change required.**
+
+---
+
+#### to_pandas() Profiling — NO CHANGE
+**Impact: Confirmed overhead is negligible**
+
+Profiled Polars→pandas conversion in `calculate_ats_results()`:
+- 0.34ms per call
+- ~0.005% of backtest runtime
+- Not worth optimizing
 
 ---
 
