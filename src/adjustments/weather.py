@@ -126,41 +126,71 @@ class WeatherAdjuster:
         """
         pass  # All config is in class constants
 
+    # Pass rate multiplier for wind adjustment (The "Passing Team" Multiplier)
+    # Air Raid teams (60%+ pass rate) suffer more; Option teams (<40%) barely care
+    PASS_RATE_HIGH_THRESHOLD = 0.55  # Combined pass rate above this = pass-heavy
+    PASS_RATE_LOW_THRESHOLD = 0.45   # Combined pass rate below this = run-heavy
+    PASS_RATE_HIGH_MULTIPLIER = 1.25  # Pass-heavy teams get 25% more wind penalty
+    PASS_RATE_LOW_MULTIPLIER = 0.50   # Run-heavy teams get 50% less wind penalty
+
+    def _get_effective_wind(
+        self,
+        wind_speed: Optional[float],
+        wind_gust: Optional[float] = None,
+    ) -> float:
+        """Calculate effective wind from speed and gust."""
+        if wind_speed is None:
+            return 0.0
+        if wind_gust is not None:
+            return (wind_speed + wind_gust) / 2
+        return wind_speed
+
     def _calculate_wind_adjustment(
         self,
         wind_speed: Optional[float],
         wind_gust: Optional[float] = None,
+        combined_pass_rate: Optional[float] = None,
     ) -> float:
         """Calculate wind-based adjustment using non-linear tiers.
 
         Uses average of wind_speed and wind_gust for effective wind,
         since gusts matter for passing and kicking.
 
+        The "Passing Team" Multiplier: Wind hurts pass-heavy teams more.
+        - Air Raid (Ole Miss): 60%+ combined pass rate → 1.25x adjustment
+        - Balanced: 45-55% combined pass rate → 1.0x adjustment
+        - Triple Option (Army): <45% combined pass rate → 0.5x adjustment
+
         Args:
             wind_speed: Sustained wind speed in MPH
             wind_gust: Peak wind gust in MPH (optional)
+            combined_pass_rate: (home_pass_rate + away_pass_rate) / 2 (optional, 0-1)
 
         Returns:
             Points adjustment (negative = lower total)
         """
-        if wind_speed is None:
+        effective_wind = self._get_effective_wind(wind_speed, wind_gust)
+        if effective_wind == 0.0:
             return 0.0
-
-        # Use average of speed and gust if gust available
-        if wind_gust is not None:
-            effective_wind = (wind_speed + wind_gust) / 2
-        else:
-            effective_wind = wind_speed
 
         # Non-linear tiers
         if effective_wind < self.WIND_TIER_1:
-            return 0.0
+            base_adj = 0.0
         elif effective_wind < self.WIND_TIER_2:
-            return self.WIND_ADJ_TIER_1  # -1.5
+            base_adj = self.WIND_ADJ_TIER_1  # -1.5
         elif effective_wind < self.WIND_TIER_3:
-            return self.WIND_ADJ_TIER_2  # -4.0
+            base_adj = self.WIND_ADJ_TIER_2  # -4.0
         else:
-            return self.WIND_ADJ_TIER_3  # -6.0
+            base_adj = self.WIND_ADJ_TIER_3  # -6.0
+
+        # Apply pass rate multiplier if provided
+        if combined_pass_rate is not None and base_adj != 0.0:
+            if combined_pass_rate >= self.PASS_RATE_HIGH_THRESHOLD:
+                base_adj *= self.PASS_RATE_HIGH_MULTIPLIER  # More penalty for pass-heavy
+            elif combined_pass_rate <= self.PASS_RATE_LOW_THRESHOLD:
+                base_adj *= self.PASS_RATE_LOW_MULTIPLIER  # Less penalty for run-heavy
+
+        return base_adj
 
     def _calculate_temperature_adjustment(
         self, temperature: Optional[float]
@@ -214,6 +244,7 @@ class WeatherAdjuster:
         precipitation: Optional[float],
         snowfall: Optional[float] = None,
         weather_condition: Optional[str] = None,
+        effective_wind: float = 0.0,
     ) -> float:
         """Calculate precipitation-based adjustment.
 
@@ -221,18 +252,30 @@ class WeatherAdjuster:
         miss tackles, and games can go OVER. Only HEAVY rain/snow with
         conservative playcalling reduces scoring.
 
+        THE "SNOW OVERREACTION FADE": Public loves betting "Snow Unders" but
+        snow without wind often goes OVER. Defenders slip, receivers know
+        their routes. Only bet Snow Under if wind is ALSO present (wind makes
+        snow swirl, disrupts passing lanes).
+
         Args:
             precipitation: Rain intensity in inches/hr
             snowfall: Snowfall in inches (accumulation)
             weather_condition: Text description (Rain, Snow, etc.)
+            effective_wind: Effective wind speed in MPH (for snow+wind check)
 
         Returns:
             Points adjustment (negative = lower total)
         """
-        # Snow gets its own penalty (visual impairment, footing)
+        # Snow: THE "OVERREACTION FADE"
+        # Snow without wind = NO penalty (sharps often bet OVER)
+        # Snow with significant wind = apply penalty
         if weather_condition in self.SNOW_CONDITIONS:
             if (snowfall or 0.0) > 0.1:  # Accumulating snow
-                return self.SNOW_PENALTY  # -3.0
+                if effective_wind >= self.WIND_TIER_1:  # Wind >= 12 mph
+                    return self.SNOW_PENALTY  # -3.0 (wind makes snow bad)
+                else:
+                    logger.debug(f"Snow without wind ({effective_wind:.0f} mph) - no penalty (overreaction fade)")
+                    return 0.0  # Snow alone = defenders slip, game can go OVER
             return 0.0
 
         # Light rain/drizzle = NO penalty (the slick trap)
@@ -257,11 +300,15 @@ class WeatherAdjuster:
     def calculate_adjustment(
         self,
         conditions: WeatherConditions,
+        combined_pass_rate: Optional[float] = None,
     ) -> WeatherAdjustment:
         """Calculate total weather adjustment for a game.
 
         Args:
             conditions: WeatherConditions dataclass with game weather
+            combined_pass_rate: (home_pass_rate + away_pass_rate) / 2, range 0-1
+                               Pass-heavy matchups (>55%) get bigger wind penalty
+                               Run-heavy matchups (<45%) get smaller wind penalty
 
         Returns:
             WeatherAdjustment with breakdown of all adjustments
@@ -277,16 +324,24 @@ class WeatherAdjuster:
                 conditions=conditions,
             )
 
+        # Get effective wind (needed for snow+wind check)
+        effective_wind = self._get_effective_wind(
+            conditions.wind_speed,
+            conditions.wind_gust,
+        )
+
         # Calculate individual adjustments
         wind_adj = self._calculate_wind_adjustment(
             conditions.wind_speed,
             conditions.wind_gust,
+            combined_pass_rate=combined_pass_rate,
         )
         temp_adj = self._calculate_temperature_adjustment(conditions.temperature)
         precip_adj = self._calculate_precipitation_adjustment(
             conditions.precipitation,
             conditions.snowfall,
             conditions.weather_condition,
+            effective_wind=effective_wind,
         )
 
         # Combine adjustments (they stack)

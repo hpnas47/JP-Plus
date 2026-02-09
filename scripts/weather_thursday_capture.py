@@ -87,12 +87,80 @@ def get_current_cfb_week() -> tuple[int, int]:
     return year, week
 
 
+def calculate_team_pass_rates(
+    cfbd_client: CFBDClient,
+    year: int,
+    week: int,
+) -> dict[str, float]:
+    """Calculate pass rate for each team from play-by-play data.
+
+    The "Passing Team" Multiplier: Wind hurts pass-heavy teams more.
+    - Air Raid (Ole Miss): 60%+ pass rate → bigger wind penalty
+    - Triple Option (Army): <40% pass rate → smaller wind penalty
+
+    Args:
+        cfbd_client: CFBD API client
+        year: Season year
+        week: Current week (use data from weeks < week)
+
+    Returns:
+        Dict mapping team name to pass rate (0-1)
+    """
+    logger.info(f"Calculating team pass rates for {year} weeks 1-{week-1}...")
+
+    try:
+        # Get play-by-play data
+        from scripts.backtest import fetch_season_plays
+        plays_df = fetch_season_plays(cfbd_client, year)
+        plays = plays_df.to_pandas()
+
+        # Filter to weeks < current week
+        plays = plays[plays['week'] < week]
+
+        # Only count scrimmage plays (pass/rush)
+        plays = plays[plays['play_type'].notna()].copy()
+        plays['play_type_lower'] = plays['play_type'].str.lower()
+
+        # Identify pass and rush plays
+        plays['is_pass'] = plays['play_type_lower'].str.contains('pass|sack|scramble', na=False)
+        plays['is_rush'] = plays['play_type_lower'].str.contains('rush|run|kneel', na=False)
+        plays['is_scrimmage'] = plays['is_pass'] | plays['is_rush']
+
+        # Filter to scrimmage plays only
+        scrimmage = plays[plays['is_scrimmage']]
+
+        # Calculate pass rate by team
+        team_stats = scrimmage.groupby('offense').agg(
+            passes=('is_pass', 'sum'),
+            total=('is_scrimmage', 'sum')
+        ).reset_index()
+
+        # Avoid division by zero
+        team_stats['pass_rate'] = team_stats['passes'] / team_stats['total'].clip(lower=1)
+
+        pass_rates = dict(zip(team_stats['offense'], team_stats['pass_rate']))
+        logger.info(f"  Calculated pass rates for {len(pass_rates)} teams")
+
+        # Log some examples
+        if pass_rates:
+            top_3 = sorted(pass_rates.items(), key=lambda x: x[1], reverse=True)[:3]
+            bottom_3 = sorted(pass_rates.items(), key=lambda x: x[1])[:3]
+            logger.info(f"  Highest pass rates: {top_3}")
+            logger.info(f"  Lowest pass rates: {bottom_3}")
+
+        return pass_rates
+
+    except Exception as e:
+        logger.warning(f"Could not calculate pass rates: {e}")
+        return {}
+
+
 def train_totals_model(
     cfbd_client: CFBDClient,
     year: int,
     week: int,
-) -> TotalsModel:
-    """Train TotalsModel on data up to current week.
+) -> tuple[TotalsModel, dict[str, float]]:
+    """Train TotalsModel and calculate team pass rates.
 
     Args:
         cfbd_client: CFBD API client
@@ -100,7 +168,7 @@ def train_totals_model(
         week: Current week (train on weeks < week)
 
     Returns:
-        Trained TotalsModel
+        Tuple of (Trained TotalsModel, dict of team pass rates)
     """
     logger.info(f"Training JP+ TotalsModel on {year} weeks 1-{week-1}...")
 
@@ -139,7 +207,10 @@ def train_totals_model(
     else:
         logger.warning("  Model training failed")
 
-    return model
+    # Calculate pass rates
+    pass_rates = calculate_team_pass_rates(cfbd_client, year, week)
+
+    return model, pass_rates
 
 
 def capture_with_watchlist(
@@ -179,11 +250,12 @@ def capture_with_watchlist(
     except Exception as e:
         logger.warning(f"Could not fetch betting lines: {e}")
 
-    # Train JP+ TotalsModel on data up to this week
+    # Train JP+ TotalsModel and calculate pass rates
     totals_model = None
+    team_pass_rates = {}
     if week > 1 and not dry_run:
         try:
-            totals_model = train_totals_model(cfbd_client, year, week)
+            totals_model, team_pass_rates = train_totals_model(cfbd_client, year, week)
         except Exception as e:
             logger.warning(f"Could not train TotalsModel: {e}")
 
@@ -270,9 +342,20 @@ def capture_with_watchlist(
 
             # Check if this is a watchlist game
             if tomorrow_client.is_weather_concern(forecast):
-                # Calculate the adjustment
+                # Calculate the adjustment with pass rate scaling
                 conditions = tomorrow_client.forecast_to_weather_conditions(forecast, game.id)
-                adjustment = weather_adjuster.calculate_adjustment(conditions)
+
+                # Calculate combined pass rate for pass-rate multiplier
+                home_pass_rate = team_pass_rates.get(game.home_team)
+                away_pass_rate = team_pass_rates.get(game.away_team)
+                combined_pass_rate = None
+                if home_pass_rate is not None and away_pass_rate is not None:
+                    combined_pass_rate = (home_pass_rate + away_pass_rate) / 2
+
+                adjustment = weather_adjuster.calculate_adjustment(
+                    conditions,
+                    combined_pass_rate=combined_pass_rate,
+                )
 
                 # Get JP+ predicted total and Vegas total
                 jp_total = None
@@ -311,6 +394,7 @@ def capture_with_watchlist(
                     ),
                     "precip_prob": forecast.precipitation_probability,
                     "weather_code": forecast.weather_code,
+                    "combined_pass_rate": combined_pass_rate,
                     "jp_total": jp_total,
                     "jp_weather_adjusted": jp_weather_adjusted,
                     "vegas_total": vegas_total,
@@ -402,6 +486,18 @@ def print_watchlist_report(stats: dict) -> None:
 
             print(f"    🌧️ Weather Adjustment: {entry['weather_adjustment']:+.1f} pts")
             print(f"       Wind: {entry['wind_adjustment']:+.1f}, Temp: {entry['temp_adjustment']:+.1f}, Precip: {entry['precip_adjustment']:+.1f}")
+
+            # Show pass rate context if significant wind adjustment
+            combined_pass_rate = entry.get('combined_pass_rate')
+            if combined_pass_rate is not None and entry['wind_adjustment'] < 0:
+                if combined_pass_rate >= 0.55:
+                    style = "Pass-heavy matchup (wind hurts more)"
+                elif combined_pass_rate <= 0.45:
+                    style = "Run-heavy matchup (wind hurts less)"
+                else:
+                    style = "Balanced matchup"
+                print(f"       📋 Pass Rate: {combined_pass_rate:.0%} ({style})")
+
             print(f"    Confidence: {entry['confidence']:.0%} ({entry['hours_until_game']}h until game)")
             print()
 
