@@ -159,7 +159,10 @@ class VegasComparison:
                 )
             else:
                 self.lines_by_id[vl.game_id] = vl
-            self.lines[(game.home_team, game.away_team)] = vl  # Fallback: by team names
+            # Fallback dict: also keep first for consistency with lines_by_id
+            team_key = (game.home_team, game.away_team)
+            if team_key not in self.lines:
+                self.lines[team_key] = vl
 
         # P2.1: Opener data reliability diagnostics
         n_lines = len(vegas_lines)
