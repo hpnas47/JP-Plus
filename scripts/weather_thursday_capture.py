@@ -107,6 +107,21 @@ def capture_with_watchlist(
     # Get games for the week
     games = cfbd_client.get_games(year=year, week=week, season_type="regular")
 
+    # Get betting lines for over/under totals
+    betting_lines = {}
+    try:
+        all_lines = cfbd_client.get_betting_lines(year=year, week=week, season_type="regular")
+        for game_lines in (all_lines or []):
+            # Find the best available line with over_under
+            for line in (game_lines.lines or []):
+                ou = getattr(line, 'over_under', None)
+                if ou is not None:
+                    betting_lines[game_lines.id] = ou
+                    break
+        logger.info(f"Found {len(betting_lines)} games with over/under totals")
+    except Exception as e:
+        logger.warning(f"Could not fetch betting lines: {e}")
+
     # Also check postseason if week > 15
     if week > 15:
         try:
@@ -194,6 +209,12 @@ def capture_with_watchlist(
                 conditions = tomorrow_client.forecast_to_weather_conditions(forecast, game.id)
                 adjustment = weather_adjuster.calculate_adjustment(conditions)
 
+                # Get Vegas total for this game
+                vegas_total = betting_lines.get(game.id)
+                adjusted_total = None
+                if vegas_total is not None:
+                    adjusted_total = vegas_total + adjustment.total_adjustment
+
                 watchlist_entry = {
                     "game_id": game.id,
                     "matchup": f"{game.away_team} @ {game.home_team}",
@@ -208,6 +229,8 @@ def capture_with_watchlist(
                     ),
                     "precip_prob": forecast.precipitation_probability,
                     "weather_code": forecast.weather_code,
+                    "vegas_total": vegas_total,
+                    "adjusted_total": adjusted_total,
                     "total_adjustment": adjustment.total_adjustment,
                     "wind_adjustment": adjustment.wind_adjustment,
                     "temp_adjustment": adjustment.temperature_adjustment,
@@ -262,6 +285,17 @@ def print_watchlist_report(stats: dict) -> None:
             print(f"    Venue: {entry['venue']}")
             print(f"    Wind: {entry['wind_speed']:.0f} mph (gust: {entry.get('wind_gust') or 'N/A'})")
             print(f"    Temp: {entry['temperature']:.0f}°F")
+
+            # Show Vegas total and weather-adjusted total
+            vegas_total = entry.get('vegas_total')
+            adjusted_total = entry.get('adjusted_total')
+            if vegas_total is not None and adjusted_total is not None:
+                print(f"    📊 Vegas Total: {vegas_total:.1f} → Weather-Adjusted: {adjusted_total:.1f}")
+            elif vegas_total is not None:
+                print(f"    📊 Vegas Total: {vegas_total:.1f}")
+            else:
+                print(f"    📊 Vegas Total: N/A")
+
             print(f"    📉 UNDER ADJUSTMENT: {entry['total_adjustment']:+.1f} pts")
             print(f"       Wind: {entry['wind_adjustment']:+.1f}, Temp: {entry['temp_adjustment']:+.1f}, Precip: {entry['precip_adjustment']:+.1f}")
             print(f"    Confidence: {entry['confidence']:.0%} ({entry['hours_until_game']}h until game)")
