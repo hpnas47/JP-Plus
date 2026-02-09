@@ -39,7 +39,8 @@ from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster, HistoricalRankings, precalculate_schedule_metadata
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
-from src.models.finishing_drives import FinishingDrivesModel
+# FinishingDrivesModel import removed — shelved after 4 backtest rejections (70-80% overlap with EFM)
+# Infrastructure preserved in src/models/finishing_drives.py for future reactivation
 from src.models.special_teams import SpecialTeamsModel
 from src.predictions.spread_generator import SpreadGenerator
 import numpy as np
@@ -658,6 +659,13 @@ def walk_forward_predict(
     # Pre-calculate rest days + schedule metadata (vectorized, runs once)
     games_df_pd = precalculate_schedule_metadata(games_df_pd)
 
+    # Stateless adjusters: construct once, reuse every week
+    # These use static lookup tables (team locations, altitudes, rivalry config)
+    # and don't depend on training data, so they're safe to reuse.
+    travel_adjuster = TravelAdjuster()
+    altitude_adjuster = AltitudeAdjuster()
+    situational_adjuster = SituationalAdjuster()
+
     for pred_week in range(start_week, max_week + 1):
         # Training data: all plays from games before this week
         # P1.2: Use Polars semi-join instead of materializing game_id list to Python
@@ -777,11 +785,6 @@ def walk_forward_predict(
         sorted_teams = sorted(team_ratings.items(), key=lambda x: (-x[1], x[0]))
         rankings = {team: rank + 1 for rank, (team, _) in enumerate(sorted_teams)}
 
-        # Calculate finishing drives with regression to mean
-        finishing = FinishingDrivesModel(regress_to_mean=True, prior_strength=10)
-        if "yards_to_goal" in train_plays_pd.columns:
-            finishing.calculate_all_from_plays(train_plays_pd, max_week=pred_week - 1)
-
         # Calculate FG efficiency ratings from FG plays
         special_teams = SpecialTeamsModel()
         if st_plays_df is not None and len(st_plays_df) > 0:
@@ -806,15 +809,16 @@ def walk_forward_predict(
                     efm.set_special_teams_rating(team, st_rating.overall_rating)
 
         # Build spread generator with EFM ratings
-        situational = SituationalAdjuster()
+        # Note: travel/altitude/situational are stateless (reused from outside loop)
+        # special_teams is retrained each week (fresh instance)
+        # finishing_drives removed — shelved (hardcoded to 0.0 in SpreadGenerator)
         spread_gen = SpreadGenerator(
             ratings=team_ratings,
-            finishing_drives=finishing,  # Regressed RZ efficiency
-            special_teams=special_teams,  # FG/Punt/Kickoff efficiency differential
+            special_teams=special_teams,  # FG/Punt/Kickoff efficiency (retrained each week)
             home_field=hfa,
-            situational=situational,
-            travel=TravelAdjuster(),
-            altitude=AltitudeAdjuster(),
+            situational=situational_adjuster,  # Stateless (reused)
+            travel=travel_adjuster,  # Stateless (reused)
+            altitude=altitude_adjuster,  # Stateless (reused)
             fbs_teams=fbs_teams,
             fcs_penalty_elite=fcs_penalty_elite,
             fcs_penalty_standard=fcs_penalty_standard,
