@@ -762,7 +762,10 @@ class PreseasonPriors:
             year: Season year (fetches transfers FOR this year)
             portal_scale: How much to scale portal impact (default 0.15, matches production caller)
             fbs_only: If True, only include FBS teams in results (default True)
-            impact_cap: Maximum team-wide portal impact (default ±12%)
+            impact_cap: Pre-penalty cap on portal impact (default ±12%). The effective
+                cap for high-churn teams is impact_cap * churn_penalty (e.g., 8.4% if
+                churn_penalty=0.7). This is intentional: high-turnover teams face
+                integration risk that should limit their portal upside.
             returning_production: Optional dict of returning production pct per team (for churn penalty)
 
         Returns:
@@ -913,9 +916,11 @@ class PreseasonPriors:
                 if churn_penalty < 0.95:
                     churn_penalties_applied.append((team, ret_pct, portal_adds, churn_penalty))
 
-            # Scale the impact, cap to ±12%, THEN apply churn penalty
-            # Penalty must come AFTER the cap so high-churn teams that hit the
-            # cap still get penalized (otherwise the cap absorbs the penalty)
+            # Scale the impact, cap to ±12%, THEN apply churn penalty.
+            # Order is intentional: cap THEN penalty means high-churn teams have
+            # a LOWER effective ceiling (e.g., 12% * 0.7 = 8.4%). This reflects
+            # integration risk — a team that churned 50% of their roster shouldn't
+            # be able to claim +12% portal uplift regardless of incoming talent.
             scaled_impact = net_val * portal_scale
             scaled_impact = max(-impact_cap, min(impact_cap, scaled_impact))
             scaled_impact *= churn_penalty
