@@ -123,6 +123,8 @@ def get_current_week() -> tuple[int, int]:
 
 def init_database() -> sqlite3.Connection:
     """Initialize database connection."""
+    import re
+
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
 
@@ -130,6 +132,8 @@ def init_database() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
 
     # Ensure tables exist
+    # P0: UNIQUE(snapshot_type, season, week) prevents duplicate captures
+    # snapshot_type is just "opening" or "closing" (not composite label)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS odds_snapshots (
@@ -140,7 +144,7 @@ def init_database() -> sqlite3.Connection:
             credits_used INTEGER,
             season INTEGER,
             week INTEGER,
-            UNIQUE(snapshot_type, snapshot_time)
+            UNIQUE(snapshot_type, season, week)
         )
     """)
     cursor.execute("""
@@ -162,7 +166,8 @@ def init_database() -> sqlite3.Connection:
             UNIQUE(snapshot_id, game_id, sportsbook)
         )
     """)
-    # P1.1: Migrate existing tables — add new columns if missing
+
+    # Migration: Add columns if missing (for existing databases)
     for col, coltype in [("season", "INTEGER"), ("week", "INTEGER")]:
         try:
             cursor.execute(f"ALTER TABLE odds_snapshots ADD COLUMN {col} {coltype}")
@@ -172,6 +177,55 @@ def init_database() -> sqlite3.Connection:
         cursor.execute("ALTER TABLE odds_lines ADD COLUMN cfbd_game_id INTEGER")
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # P0: Migration - convert composite snapshot_type labels to simple labels
+    # Old format: "opening_2024_week5" -> New format: "opening" with season=2024, week=5
+    cursor.execute("SELECT id, snapshot_type, season, week FROM odds_snapshots")
+    rows = cursor.fetchall()
+    migrated = 0
+    for row_id, snap_type, season, week in rows:
+        # Check if this is an old composite label
+        match = re.match(r'^(opening|closing)_(\d{4})_week(\d+)$', snap_type)
+        if match:
+            new_type = match.group(1)  # "opening" or "closing"
+            parsed_season = int(match.group(2))
+            parsed_week = int(match.group(3))
+            # Update to simple label and ensure season/week are set
+            cursor.execute(
+                "UPDATE odds_snapshots SET snapshot_type = ?, season = ?, week = ? WHERE id = ?",
+                (new_type, parsed_season, parsed_week, row_id)
+            )
+            migrated += 1
+    if migrated > 0:
+        logger.info(f"Migrated {migrated} composite snapshot labels to simple format")
+
+    # P0: Migration - update UNIQUE constraint from (type, time) to (type, season, week)
+    # Check if old index exists and needs migration
+    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='odds_snapshots'")
+    table_sql = cursor.fetchone()
+    if table_sql and 'UNIQUE(snapshot_type, snapshot_time)' in table_sql[0]:
+        # Old schema detected - need to recreate table with new constraint
+        logger.info("Migrating odds_snapshots table to new UNIQUE constraint...")
+        cursor.execute("ALTER TABLE odds_snapshots RENAME TO odds_snapshots_old")
+        cursor.execute("""
+            CREATE TABLE odds_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_type TEXT NOT NULL,
+                snapshot_time TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                credits_used INTEGER,
+                season INTEGER,
+                week INTEGER,
+                UNIQUE(snapshot_type, season, week)
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO odds_snapshots (id, snapshot_type, snapshot_time, captured_at, credits_used, season, week)
+            SELECT id, snapshot_type, snapshot_time, captured_at, credits_used, season, week
+            FROM odds_snapshots_old
+        """)
+        cursor.execute("DROP TABLE odds_snapshots_old")
+        logger.info("Migration complete: UNIQUE constraint updated to (snapshot_type, season, week)")
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_lines_game_id ON odds_lines(game_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_lines_teams ON odds_lines(home_team, away_team)")
@@ -226,7 +280,6 @@ def capture_odds(
     # P0: Wrap entire insertion in explicit transaction for all-or-nothing semantics
     # If any insert fails, the entire batch is rolled back (no partial writes)
     cursor = conn.cursor()
-    snapshot_label = f"{snapshot_type}_{year}_week{week}"
 
     # Pre-filter lines with null spreads before starting transaction
     valid_lines = []
@@ -262,18 +315,18 @@ def capture_odds(
         cursor.execute("BEGIN")
 
         # Store snapshot
-        # P0.2: Use INSERT...ON CONFLICT DO UPDATE to preserve snapshot_id
+        # P0: UNIQUE(snapshot_type, season, week) prevents duplicate captures
+        # snapshot_type is just "opening" or "closing" (not composite label)
         cursor.execute("""
             INSERT INTO odds_snapshots
             (snapshot_type, snapshot_time, captured_at, credits_used, season, week)
             VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(snapshot_type, snapshot_time) DO UPDATE SET
+            ON CONFLICT(snapshot_type, season, week) DO UPDATE SET
+                snapshot_time = excluded.snapshot_time,
                 captured_at = excluded.captured_at,
-                credits_used = excluded.credits_used,
-                season = excluded.season,
-                week = excluded.week
+                credits_used = excluded.credits_used
         """, (
-            snapshot_label,
+            snapshot_type,  # Just "opening" or "closing"
             snapshot.timestamp.isoformat(),
             datetime.now(timezone.utc).isoformat(),
             snapshot.credits_used,
@@ -281,10 +334,10 @@ def capture_odds(
             week,
         ))
 
-        # P0.2: Retrieve the actual snapshot_id (lastrowid may be 0 on UPDATE)
+        # Retrieve the snapshot_id (lastrowid may be 0 on UPDATE)
         cursor.execute(
-            "SELECT id FROM odds_snapshots WHERE snapshot_type = ? AND snapshot_time = ?",
-            (snapshot_label, snapshot.timestamp.isoformat())
+            "SELECT id FROM odds_snapshots WHERE snapshot_type = ? AND season = ? AND week = ?",
+            (snapshot_type, year, week)
         )
         snapshot_id = cursor.fetchone()[0]
 

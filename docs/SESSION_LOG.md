@@ -538,6 +538,39 @@ with closing(init_database()) as conn:
 
 ---
 
+#### Prevent Duplicate Odds Captures via UNIQUE Constraint — COMMITTED
+**Impact: Running --opening twice for the same week now updates instead of duplicating**
+
+**The Bug:** UNIQUE constraint was `(snapshot_type, snapshot_time)` where:
+- `snapshot_type` was composite like "opening_2024_week5"
+- `snapshot_time` was the API timestamp (different each call)
+
+Running `--opening --year 2024 --week 5` twice would create two separate snapshots because the timestamps differ.
+
+**Fix:**
+1. Changed `snapshot_type` from composite label to simple "opening"/"closing"
+2. Changed UNIQUE constraint to `(snapshot_type, season, week)`
+3. Added migration to convert existing composite labels
+4. Added migration to recreate table with new constraint
+
+**Schema change:**
+```sql
+-- Before
+UNIQUE(snapshot_type, snapshot_time)
+
+-- After
+UNIQUE(snapshot_type, season, week)
+```
+
+**Migration handles:**
+1. Converting "opening_2024_week5" → snapshot_type="opening", season=2024, week=5
+2. Recreating table with new UNIQUE constraint
+3. Preserving all existing data and foreign key relationships
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure
