@@ -571,6 +571,36 @@ UNIQUE(snapshot_type, season, week)
 
 ---
 
+#### Remove Stale GT Thresholds Cache — COMMITTED
+**Impact: Fixes garbage time threshold persistence when sweeping settings between iterations**
+
+**The Bug:** `_GT_THRESHOLDS` was a module-level cache that stored garbage time thresholds from `get_settings()` on first use and never reset. `clear_ridge_cache()` cleared the Ridge model cache but NOT `_GT_THRESHOLDS`. If a sweep or test changed garbage time settings between iterations (e.g., testing Q4=14 vs Q4=16), the old thresholds would persist.
+
+**Fix:** Removed the module-level cache entirely. `is_garbage_time()` now reads directly from settings on each call. This is a negligible performance impact (cheap dict access) in exchange for guaranteed correctness.
+
+**Before:**
+```python
+_GT_THRESHOLDS: Optional[tuple[float, float, float, float]] = None
+
+def is_garbage_time(...):
+    global _GT_THRESHOLDS
+    if _GT_THRESHOLDS is None:
+        settings = get_settings()
+        _GT_THRESHOLDS = (settings.garbage_time_q1, ...)
+```
+
+**After:**
+```python
+def is_garbage_time(...):
+    settings = get_settings()
+    gt_q1 = settings.garbage_time_q1
+    # ... reads fresh each call
+```
+
+**Commit**: (pending)
+
+---
+
 ## Session: February 8, 2026
 
 ### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis + Weather Forecast Infrastructure

@@ -52,9 +52,6 @@ logger = logging.getLogger(__name__)
 _RIDGE_ADJUST_CACHE: dict[tuple, tuple[dict, dict, Optional[float]]] = {}
 _CACHE_STATS = {"hits": 0, "misses": 0}
 
-# P2.2: Cache garbage time thresholds at module level (avoids rebuilding per call)
-_GT_THRESHOLDS: Optional[tuple[float, float, float, float]] = None
-
 
 def clear_ridge_cache() -> dict:
     """Clear the ridge adjustment cache and return stats.
@@ -183,16 +180,13 @@ def is_garbage_time_vectorized(
     Returns:
         Boolean array indicating garbage time plays
     """
-    global _GT_THRESHOLDS
-    if _GT_THRESHOLDS is None:
-        settings = get_settings()
-        _GT_THRESHOLDS = (
-            settings.garbage_time_q1,
-            settings.garbage_time_q2,
-            settings.garbage_time_q3,
-            settings.garbage_time_q4,
-        )
-    gt_q1, gt_q2, gt_q3, gt_q4 = _GT_THRESHOLDS
+    # P0: Read directly from settings each time (cheap dict access)
+    # Avoids stale cache issue when sweeping GT thresholds between iterations
+    settings = get_settings()
+    gt_q1 = settings.garbage_time_q1
+    gt_q2 = settings.garbage_time_q2
+    gt_q3 = settings.garbage_time_q3
+    gt_q4 = settings.garbage_time_q4
 
     # Year-conditional thresholds tested but REJECTED (see docstring)
     # Keeping year parameter for future experimentation
