@@ -19,7 +19,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -47,10 +47,31 @@ import pandas as pd
 import polars as pl
 
 
+class SeasonData(NamedTuple):
+    """Typed container for all season data required by backtest.
+
+    Using NamedTuple instead of raw tuple:
+    - Named field access prevents positional unpacking bugs
+    - Picklable for multiprocessing (unlike some dataclasses)
+    - Adding new fields is safe (access by name, not position)
+    """
+
+    games_df: pl.DataFrame
+    betting_df: pl.DataFrame
+    plays_df: pl.DataFrame  # Turnover plays (legacy name kept for compatibility)
+    turnover_df: pl.DataFrame
+    priors: Optional["PreseasonPriors"]
+    efficiency_plays_df: pl.DataFrame
+    fbs_teams: set[str]
+    st_plays_df: pl.DataFrame
+    historical_rankings: Optional["HistoricalRankings"]
+    team_conferences: Optional[dict[str, str]]
+
+
 def build_team_records(
     client: CFBDClient,
     years: list[int],
-    season_data: dict | None = None,
+    season_data: Optional[dict[int, SeasonData]] = None,
 ) -> dict[str, dict[int, tuple[int, int]]]:
     """Build team win-loss records for trajectory calculation.
 
@@ -61,7 +82,6 @@ def build_team_records(
         client: CFBD API client
         years: List of years to fetch records for
         season_data: Optional dict from fetch_all_season_data(), keyed by year.
-                     Each value is a tuple where index 0 is a Polars games DataFrame.
 
     Returns:
         Dict mapping team -> {year: (wins, losses)}
@@ -69,9 +89,9 @@ def build_team_records(
     records = {}
 
     for year in years:
-        # Try cached games DataFrame first (index 0 in the season_data tuple)
+        # Try cached games DataFrame first
         if season_data is not None and year in season_data:
-            games_df = season_data[year][0]  # Polars DataFrame
+            games_df = season_data[year].games_df
             # Filter to regular season (weeks 1-15) with completed scores
             regular = games_df.filter(
                 (pl.col("week") <= 15)
@@ -1408,15 +1428,12 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
     warnings = []
 
     for year in years:
-        # Unpack season data (historical_rankings added for letdown spot detection)
-        season_tuple = season_data[year]
-        if len(season_tuple) >= 10:
-            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings, team_conferences = season_tuple
-        elif len(season_tuple) == 9:
-            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
-        else:
-            # Backward compatibility for old 8-tuple format
-            games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
+        # Extract fields from SeasonData (named access prevents positional bugs)
+        sd = season_data[year]
+        games_df = sd.games_df
+        betting_df = sd.betting_df
+        efficiency_plays_df = sd.efficiency_plays_df
+        fbs_teams = sd.fbs_teams
 
         n_games = len(games_df)
         n_betting = len(betting_df)
@@ -1850,8 +1867,8 @@ def fetch_all_season_data(
     portal_scale: float = 0.15,
     use_cache: bool = True,
     force_refresh: bool = False,
-) -> dict:
-    """Fetch and cache all season data (games, betting, plays, turnovers, priors, fbs_teams, historical_rankings).
+) -> dict[int, SeasonData]:
+    """Fetch and cache all season data for backtest.
 
     Args:
         years: List of years to fetch
@@ -1862,8 +1879,7 @@ def fetch_all_season_data(
         force_refresh: If True, bypass cache and force fresh API calls (default False)
 
     Returns:
-        Dict mapping year to (games_df, betting_df, plays_df, turnover_df, priors,
-                              efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings)
+        Dict mapping year to SeasonData namedtuple with all required DataFrames.
     """
     from src.data.season_cache import SeasonDataCache
 
@@ -2040,14 +2056,25 @@ def fetch_all_season_data(
                 logger.warning(f"Could not load preseason priors for {year}: {e}")
                 priors = None
 
-        season_data[year] = (games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings, team_conferences)
+        season_data[year] = SeasonData(
+            games_df=games_df,
+            betting_df=betting_df,
+            plays_df=plays_df,
+            turnover_df=turnover_df,
+            priors=priors,
+            efficiency_plays_df=efficiency_plays_df,
+            fbs_teams=fbs_teams,
+            st_plays_df=st_plays_df,
+            historical_rankings=historical_rankings,
+            team_conferences=team_conferences,
+        )
 
     return season_data
 
 
 def _process_single_season(
     year: int,
-    season_tuple: tuple,
+    season_data: SeasonData,
     team_records: dict,
     start_week: int,
     end_week: Optional[int],
@@ -2079,16 +2106,15 @@ def _process_single_season(
     # Each worker starts with a fresh ridge cache
     clear_ridge_cache()
 
-    # Unpack season data
-    if len(season_tuple) >= 10:
-        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings, team_conferences = season_tuple
-    elif len(season_tuple) == 9:
-        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df, historical_rankings = season_tuple
-        team_conferences = None
-    else:
-        games_df, betting_df, plays_df, turnover_df, priors, efficiency_plays_df, fbs_teams, st_plays_df = season_tuple
-        historical_rankings = None
-        team_conferences = None
+    # Extract fields from SeasonData (named access prevents positional bugs)
+    games_df = season_data.games_df
+    betting_df = season_data.betting_df
+    efficiency_plays_df = season_data.efficiency_plays_df
+    fbs_teams = season_data.fbs_teams
+    st_plays_df = season_data.st_plays_df
+    priors = season_data.priors
+    historical_rankings = season_data.historical_rankings
+    team_conferences = season_data.team_conferences
 
     # Walk-forward predictions
     predictions = walk_forward_predict(
@@ -2199,6 +2225,9 @@ def run_backtest(
             use_cache=use_season_cache,
             force_refresh=force_refresh,
         )
+    else:
+        # Shallow copy to avoid mutating caller's dict (sweep reuses cached_data)
+        season_data = {**season_data}
 
     # Build team records for trajectory calculation (need ~4 years before earliest year)
     # Pre-cache trajectory years not already in season_data to avoid extra API calls
@@ -2224,11 +2253,9 @@ def run_backtest(
     # Strip non-picklable client references from priors for multiprocessing
     # (client is only used during data fetching, which is already complete)
     for year in years:
-        season_tuple = season_data[year]
-        if len(season_tuple) >= 5:
-            priors = season_tuple[4]
-            if priors is not None and hasattr(priors, "client"):
-                priors.client = None
+        priors = season_data[year].priors
+        if priors is not None and hasattr(priors, "client"):
+            priors.client = None
 
     # Common kwargs for _process_single_season
     season_kwargs = dict(
@@ -2260,7 +2287,7 @@ def run_backtest(
                 executor.submit(
                     _process_single_season,
                     year=year,
-                    season_tuple=season_data[year],
+                    season_data=season_data[year],
                     **season_kwargs,
                 ): year
                 for year in years
@@ -2284,7 +2311,7 @@ def run_backtest(
             logger.debug(f"Backtesting {year} season...")
             year_val, predictions, ats_results, year_mae = _process_single_season(
                 year=year,
-                season_tuple=season_data[year],
+                season_data=season_data[year],
                 **season_kwargs,
             )
             all_predictions.extend(predictions)
