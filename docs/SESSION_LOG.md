@@ -443,7 +443,7 @@ error: --year and --week are REQUIRED for --opening/--closing.
 The auto-detection heuristic can mislabel weeks at month boundaries...
 ```
 
-**Commit**: (pending)
+**Commit**: `6e72d8c` (Require explicit --year/--week for odds capture operations)
 
 ---
 
