@@ -539,9 +539,24 @@ The single biggest unmodeled source of prediction error. Manual flagging system:
 Weather adjustments use **non-linear thresholds** based on sharp betting research. The edge is in **timing** — capture forecasts Thursday before market moves, confirm Saturday with accurate 6-12h forecasts.
 
 #### Data Source
-- **API:** Tomorrow.io Hourly Forecast API (free tier: 25 calls/hour)
+- **API:** Tomorrow.io Hourly Forecast API (free tier: 25 calls/hour, 500/day)
 - **Database:** `data/weather_forecasts.db` (SQLite)
 - **Venue data:** 795 FBS/FCS stadiums with coordinates + dome detection
+- **Rate limiting:** Scripts default to `--limit 20` per run (free tier safe)
+
+#### Confidence Gating
+
+**All weather adjustments are scaled by forecast confidence** based on hours until kickoff:
+
+| Hours Until Game | Confidence Factor | Effect on -6.0 raw |
+|------------------|-------------------|-------------------|
+| ≤6h | 0.95 | -5.7 pts |
+| 6-12h | 0.90 | -5.4 pts |
+| 12-24h | 0.85 | -5.1 pts |
+| 24-48h | 0.75 | -4.5 pts |
+| >48h (Thursday) | 0.65 | -3.9 pts |
+
+**HIGH_VARIANCE Flag:** If `confidence < 0.75` AND `abs(raw_adjustment) > 3.0`, the game is flagged `high_variance=True`. **Rule: Never bet OVER on these games** — weather is uncertain but potentially severe.
 
 #### Wind Thresholds (Non-Linear Tiers)
 
@@ -554,10 +569,18 @@ Wind is the #1 driver of totals movement. Uses **effective wind = (wind_speed + 
 | 15-20 mph | -4.0 pts | Kicking range reduced, deep ball erased |
 | >20 mph | -6.0 pts | Run-only game profiles, clock runs constantly |
 
-**"Passing Team" Multiplier:** Wind adjustments scaled by combined pass rate:
-- Pass-heavy matchups (>55%): **1.25x** penalty (Air Raid teams suffer more)
-- Run-heavy matchups (<45%): **0.5x** penalty (Option teams barely notice)
-- Example: Army in 20mph wind = -3.0 pts; Ole Miss in 20mph wind = -7.5 pts
+**"Passing Team" Multiplier:** Continuous scaling based on combined pass rate:
+```
+multiplier = combined_pass_rate / 0.50 (clamped to [0.5, 1.5])
+```
+
+| Team Style | Pass Rate | Multiplier | 20 mph Wind (after scaling) |
+|------------|-----------|------------|----------------------------|
+| Triple Option (Army) | 35% | 0.70x | -4.2 pts |
+| Run-Heavy | 40% | 0.80x | -4.8 pts |
+| Balanced | 50% | 1.00x | -6.0 pts |
+| Pass-Heavy | 60% | 1.20x | -7.2 pts |
+| Air Raid (Ole Miss) | 65% | 1.30x | -7.8 pts |
 
 #### Temperature Thresholds
 
@@ -586,6 +609,8 @@ Wind is the #1 driver of totals movement. Uses **effective wind = (wind_speed + 
 |-------|--------|------------|---------|
 | Thursday 6 AM | 72h out | 65% | Early alert, bet before market moves |
 | Saturday 8 AM | 6-12h out | 90%+ | Confirmation, final model input |
+
+**Saturday comparison:** Uses **earliest** forecast per game (not latest) to ensure comparison against original Thursday morning capture, even if script was re-run for debugging.
 
 **Cron automation:** `./scripts/setup_weather_cron.sh install`
 
