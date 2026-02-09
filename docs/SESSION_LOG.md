@@ -6,7 +6,7 @@
 
 ## Session: February 9, 2026
 
-### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening + Infrastructure Hardening
+### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening + Infrastructure Hardening + Vectorization Sweep
 
 ---
 
@@ -790,6 +790,109 @@ class SeasonData(NamedTuple):
 **Backtest verified:** MAE 12.50, ATS 52.2%, 5+ Edge 54.7% (unchanged)
 
 **Commit**: `ba2e4c5` (Refactor season data from raw tuple to SeasonData NamedTuple)
+
+---
+
+#### Performance: Vectorize Portal Player Value Calculation — COMMITTED
+**Impact: Eliminates Python loop over ~2,000 transfers per year**
+
+Replaced row-wise `.apply()` with vectorized numpy operations in `calculate_portal_impact()`:
+- `np.select()` for position group weights
+- `np.where()` for level-up discount logic
+- Direct column arithmetic for value calculations
+
+**Commit**: `e9279cc`
+
+---
+
+#### Performance: Vectorize Kickoff Ratings Calculation — COMMITTED
+**Impact: Eliminates ~130 Python loop iterations per team**
+
+Replaced Python `for team, group in kicker_groups` loops with:
+- `groupby("offense").agg()` for coverage ratings
+- `groupby("defense").agg()` for return ratings
+- Vectorized column arithmetic for tb_rate, avg_return, etc.
+
+**Backtest verified:** MAE 12.50, ATS 52.2%, 5+ Edge 54.6%
+
+**Commit**: `73efb40`
+
+---
+
+#### Performance: Pre-compute ST Play Type Masks — COMMITTED
+**Impact: Reduces 3x redundant str.contains calls per play type**
+
+In `calculate_all_st_ratings_from_plays()`, play type masks (FG, punt, kickoff) were computed inside each sub-method. Now computed once and passed to each method.
+
+**Commit**: `d3de174`
+
+---
+
+#### Performance: Consolidate Redundant get_fbs_teams API Calls — COMMITTED
+**Impact: Eliminates redundant API call/iteration in calculate_portal_impact**
+
+`fetch_fbs_teams()` and `_fetch_team_conferences()` both called `get_fbs_teams(year)`. Now call once and derive both the fbs_teams set and team_conferences dict from the same response.
+
+**Commit**: `5ec5f93`
+
+---
+
+#### Performance: Vectorize generate_comparison_df — COMMITTED
+**Impact: Eliminates per-prediction Python loop**
+
+Replaced `for pred in predictions: compare_prediction(pred)` loop with:
+- DataFrame merge on game_id (primary lookup)
+- Team-name fallback only for unmatched rows
+- Vectorized edge/is_value calculation
+
+**Commit**: `0d5672f`
+
+---
+
+#### Docs: Clarify Portal impact_cap vs churn_penalty Order — COMMITTED
+**Impact: Documents intentional cap-then-penalty behavior**
+
+The order (cap first, then churn penalty) is intentional: high-churn teams have a LOWER effective ceiling (e.g., 12% × 0.7 = 8.4%). This reflects integration risk.
+
+Updated docstring and inline comments to make this explicit.
+
+**Commit**: `9137fff`
+
+---
+
+#### Fix: ST is_complete Flag for Missing Components — COMMITTED
+**Impact: Prevents incomplete ST ratings from being marked complete**
+
+When one ST component (FG, punt, or kickoff) had zero plays, `is_complete` was incorrectly set to True because the None-check failed.
+
+**Commit**: `d0d9915`
+
+---
+
+#### Fix: Warning for Unlisted Coaches in COACHING_CHANGES — COMMITTED
+**Impact: Alerts when coaching change detected but not in config**
+
+If a coaching change is detected in the data but not listed in `COACHING_CHANGES`, now logs a warning instead of silently ignoring.
+
+**Commit**: `8af7916`
+
+---
+
+#### Fix: Remove Dead Retry Block in compare_prediction — COMMITTED
+**Impact: -12 lines dead code**
+
+The retry logic in `compare_prediction()` was unreachable because the method returns early on any failure.
+
+**Commit**: `9a8b423`
+
+---
+
+#### Fix: Inconsistent Duplicate Handling in VegasComparison — COMMITTED
+**Impact: Consistent "keep first" behavior for duplicate game_ids**
+
+Both `lines_by_id` and `lines` dicts now consistently keep the first encountered line when duplicates exist, matching documented behavior.
+
+**Commit**: `e0ecd57`
 
 ---
 
