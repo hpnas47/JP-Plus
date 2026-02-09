@@ -60,10 +60,40 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TravelBreakdown:
-    """Container for raw travel-related adjustments."""
+    """Container for raw travel-related adjustments.
 
-    travel_penalty: float = 0.0  # Distance + timezone penalty (negative value)
-    altitude_penalty: float = 0.0  # Altitude penalty (negative value)
+    Sign Convention:
+        Both fields are **positive magnitudes** representing the advantage
+        the home team gains from the away team's travel burden.
+
+        - travel_penalty: How much the away team is disadvantaged by travel
+          (distance + timezone). E.g., 1.5 means home gains 1.5 pts.
+        - altitude_penalty: How much the away team is disadvantaged by altitude.
+          E.g., 2.0 means home gains 2.0 pts from altitude advantage.
+
+        These values come directly from TravelAdjuster.get_total_travel_adjustment()
+        and AltitudeAdjuster.get_altitude_adjustment(), both of which return
+        positive values favoring the home team.
+
+    Validation:
+        The aggregator asserts these are non-negative to catch upstream sign errors.
+    """
+
+    travel_penalty: float = 0.0  # Positive magnitude: away team's travel disadvantage
+    altitude_penalty: float = 0.0  # Positive magnitude: away team's altitude disadvantage
+
+    def __post_init__(self):
+        """Validate sign convention."""
+        if self.travel_penalty < 0:
+            raise ValueError(
+                f"travel_penalty must be >= 0 (positive = home advantage), "
+                f"got {self.travel_penalty}. Check TravelAdjuster output."
+            )
+        if self.altitude_penalty < 0:
+            raise ValueError(
+                f"altitude_penalty must be >= 0 (positive = home advantage), "
+                f"got {self.altitude_penalty}. Check AltitudeAdjuster output."
+            )
 
 
 @dataclass
@@ -204,9 +234,11 @@ class AdjustmentAggregator:
         result.raw_hfa = raw_hfa
 
         # Travel penalty (positive = favors home, away team traveled)
+        # abs() is a safety belt - TravelBreakdown validates non-negative in __post_init__
         result.raw_travel = abs(travel_breakdown.travel_penalty)
 
         # Altitude penalty (positive = favors home, away team at altitude disadvantage)
+        # abs() is a safety belt - TravelBreakdown validates non-negative in __post_init__
         altitude = abs(travel_breakdown.altitude_penalty)
 
         # Travel/Altitude Interaction: When travel >1.5 pts, reduce altitude by 30%
@@ -220,8 +252,11 @@ class AdjustmentAggregator:
         # This includes both bye week advantage AND short week penalty
         result.raw_rest = home_factors.rest_advantage
 
-        # Consecutive road penalty for away team (positive = favors home)
-        # Home team consecutive road is rare but would be negative
+        # Consecutive road penalty: positive magnitude on the penalized team.
+        # SituationalFactors stores this as a positive value (e.g., 1.5) on whichever
+        # team is playing their 2nd straight road game. The away team having this penalty
+        # favors home; the home team having it (rare) hurts home.
+        # abs() is a safety belt - SituationalFactors should always store positive values.
         consecutive_away = abs(away_factors.consecutive_road_penalty)
         consecutive_home = abs(home_factors.consecutive_road_penalty)
 

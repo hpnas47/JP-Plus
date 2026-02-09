@@ -113,28 +113,38 @@ class SituationalFactors:
     No smoothing is applied here - all smoothing is consolidated in the
     AdjustmentAggregator to prevent double-counting across correlated factors.
 
+    Sign Convention:
+        All penalty/boost fields are stored as **positive magnitudes** on the
+        affected team. The aggregator interprets them directionally:
+        - Away team penalties → favor home team
+        - Home team penalties → hurt home team
+        - Boosts → favor the team that has them
+
     Factors stored:
-    - rest_advantage: Days of rest differential (positive = home advantage)
+    - rest_advantage: Days of rest differential (positive = home advantage).
+      Only set on home_factors; away_factors.rest_advantage is always 0.
     - rest_days: Actual days of rest for this team
     - is_season_opener: True if team has no prior games this season
-    - letdown_penalty: Penalty for coming off a big win vs unranked opponent
-    - lookahead_penalty: Penalty for having a big game next week
+    - letdown_penalty: Positive magnitude for coming off a big win vs unranked
+    - lookahead_penalty: Positive magnitude for having a big game next week
     - sandwich_penalty: Extra penalty when BOTH letdown AND lookahead apply
-    - rivalry_boost: Boost for underdog in rivalry games
-    - consecutive_road_penalty: Penalty for 2nd consecutive road game
-    - game_shape_penalty: Rust penalty for opener vs team with game experience
+    - rivalry_boost: Positive boost for underdog in rivalry games
+    - consecutive_road_penalty: Positive magnitude for 2nd consecutive road game.
+      Set on the team that IS playing consecutive road (typically away team).
+    - game_shape_penalty: Negative value for opener vs team with game experience.
+      This is the only field stored as negative (rust = disadvantage to this team).
     """
 
     team: str
-    rest_advantage: float = 0.0  # Days of rest differential (replaces binary bye_week)
+    rest_advantage: float = 0.0  # Positive = home advantage (only set on home_factors)
     rest_days: int = 7  # Actual days of rest for this team
     is_season_opener: bool = False  # True if team has no prior games this season
-    letdown_penalty: float = 0.0
-    lookahead_penalty: float = 0.0
-    sandwich_penalty: float = 0.0  # Extra penalty when BOTH letdown AND lookahead apply
-    rivalry_boost: float = 0.0
-    consecutive_road_penalty: float = 0.0  # Penalty for 2nd consecutive road game
-    game_shape_penalty: float = 0.0  # Rust penalty for opener vs team with game experience
+    letdown_penalty: float = 0.0  # Positive magnitude (e.g., 1.5)
+    lookahead_penalty: float = 0.0  # Positive magnitude (e.g., 1.0)
+    sandwich_penalty: float = 0.0  # Positive magnitude for letdown+lookahead combo
+    rivalry_boost: float = 0.0  # Positive magnitude (underdog boost)
+    consecutive_road_penalty: float = 0.0  # Positive magnitude (e.g., 1.5) on penalized team
+    game_shape_penalty: float = 0.0  # NEGATIVE value (e.g., -1.5) for opener rust
 
     # Backward compatibility alias
     @property
