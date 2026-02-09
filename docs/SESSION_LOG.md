@@ -10,6 +10,25 @@
 
 ---
 
+#### Short-Week × Travel Interaction Analysis — DOCUMENTED
+**Impact: Explicit reasoning for why short-week has no travel interaction**
+
+Analyzed whether short-week rest should have an interaction effect with travel (like consecutive_road at 50% and altitude at 30%):
+
+**Why existing interactions exist:**
+- **Consecutive road × travel**: Both measure "travel fatigue" (2+ weeks away vs. this trip)
+- **Altitude × travel**: Both are acute physical stressors on game day
+
+**Why short-week is intentionally exempt:**
+- Short-week = incomplete RECOVERY from previous game (prep time, healing, mental fatigue)
+- Travel = acute JOURNEY stress (jet lag, disrupted sleep)
+- These are orthogonal mechanisms: a team on short week **at home** still has recovery penalties
+- The env soft cap (5.0 pts, 60% excess) handles extreme stacks adequately
+
+**Commit**: `c44a3cf` (Document why short-week has no travel interaction effect)
+
+---
+
 #### Sign Convention Documentation and Validation — COMMITTED
 **Impact: Prevents silent wrong results if upstream adjusters change sign conventions**
 
