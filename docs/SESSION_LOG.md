@@ -597,7 +597,7 @@ def is_garbage_time(...):
     # ... reads fresh each call
 ```
 
-**Commit**: (pending)
+**Commit**: `46dc230` (Remove stale GT thresholds cache from EFM)
 
 ---
 
