@@ -10,6 +10,39 @@
 
 ---
 
+#### Global Cap Priority Ordering — DOCUMENTED
+**Impact: Explains why mental factors may have reduced effect in extreme scenarios**
+
+When global cap (7.0) is hit, environmental factors implicitly take priority over mental:
+- Utah home (4.5 HFA + 1.5 travel + 2.0 altitude) → env_score ~6.8
+- Add rivalry (+1.0) → 7.8 pre-mental
+- Add letdown (+2.0) → 9.8 capped to 7.0
+- Mental's marginal contribution: only 0.2 of its 2.0 value
+
+**This is intentional:**
+1. Global cap triggers rarely (~1% of games)
+2. Environmental factors are objectively measurable
+3. Mental factors are more speculative/psychological
+4. When caps are hit, trust "harder" signals over "softer" ones
+
+**Commit**: `4b4b6a9` (Document global cap priority ordering design decision)
+
+---
+
+#### Per-Team Mental Smoothing — DOCUMENTED
+**Impact: Explains asymmetric smoothing design for mental factors**
+
+Mental factors are smoothed per-team BEFORE netting (not raw values netted first):
+- Team A: letdown 3.5 only → smoothed = 3.5
+- Team B: letdown 2.0 + lookahead 1.5 → smoothed = 2.75
+- Net: 0.75 (even though raw sums both equal 3.5)
+
+**This is intentional:** Models diminishing marginal psychological impact. One overwhelming distraction is worse than two smaller ones of equal total magnitude.
+
+**Commit**: `fc9b233` (Document per-team mental smoothing design decision)
+
+---
+
 #### Extract Interaction Effect Constants — COMMITTED
 **Impact: Tunable interaction dampening without editing source code**
 
