@@ -1118,7 +1118,6 @@ predicted_total = home_expected + away_expected
 
 ### Low Priority
 - [ ] Real-time line movement tracking
-- [ ] Expected value calculations with Kelly criterion
 
 ### 2026 Production Planning
 
@@ -1187,6 +1186,46 @@ predicted_total = home_expected + away_expected
 - Automatic hedging on line movement
 
 **Implementation:** `src/betting/exchange_client.py`, `src/betting/order_manager.py`
+
+#### Kelly Criterion Stake Sizing
+
+**Problem:** Current system treats all bets equally (flat betting). A 3-point edge and an 8-point edge get the same stake, leaving money on the table.
+
+**Solution: Kelly Criterion for Optimal Bankroll Growth**
+
+The Kelly formula maximizes long-term bankroll growth by sizing bets proportional to edge:
+
+```
+f* = (bp - q) / b
+
+where:
+  f* = fraction of bankroll to wager
+  b  = decimal odds - 1 (for -110 juice, b = 0.909)
+  p  = probability of winning (derived from JP+ edge)
+  q  = probability of losing (1 - p)
+```
+
+**Edge-to-Win-Probability Conversion:**
+
+| JP+ Edge | Implied Win % | Full Kelly | Half Kelly |
+|----------|---------------|------------|------------|
+| 3 pts | 54.5% | 4.5% | 2.25% |
+| 5 pts | 57.5% | 9.5% | 4.75% |
+| 7 pts | 60.0% | 14.0% | 7.0% |
+| 10 pts | 64.0% | 21.0% | 10.5% |
+
+**Practical Implementation:**
+1. **Use Half-Kelly or Quarter-Kelly** — Full Kelly is mathematically optimal but assumes perfect edge estimation. Fractional Kelly reduces variance and accounts for model uncertainty.
+2. **Cap maximum stake** — Never exceed 5% of bankroll on single bet regardless of calculated Kelly.
+3. **Bankroll tracking** — Maintain running bankroll ledger to recalculate stakes weekly.
+4. **Confidence adjustment** — Scale Kelly fraction by model confidence (Phase 1 bets get smaller Kelly than Phase 2).
+
+**Bankroll Simulation (Backtest):**
+- Simulate 2022-2025 seasons with Kelly sizing vs flat betting
+- Measure: Total return, max drawdown, Sharpe ratio, risk of ruin
+- Validate that Kelly outperforms flat betting on historical data
+
+**Implementation:** `src/betting/kelly.py`, `src/betting/bankroll.py`
 
 ### Parking Lot (Needs Evidence Before Implementation)
 - [x] **Pace-based margin scaling** - Theory: Fast games have more plays, so efficiency edges should compound into larger margins. JP+ should scale predicted margins by expected pace. **Status:** INVESTIGATED, NOT IMPLEMENTING. Empirical analysis (2023-2025) shows the theory doesn't match reality: (1) Fast games actually have smaller margins (R²=2.2% correlation), (2) JP+ over-predicts fast game margins (mean error -2.1), not under-predicts, (3) ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Efficiency metrics implicitly capture tempo. Adding pace scaling would add complexity without benefit.
