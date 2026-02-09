@@ -472,7 +472,7 @@ Opening lines captured:
   Credits remaining: 487
 ```
 
-**Commit**: (pending)
+**Commit**: `e477692` (Add null spread resilience to odds capture)
 
 ---
 
