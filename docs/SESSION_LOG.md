@@ -343,6 +343,26 @@ Systematic performance audit of `TotalsModel` and `backtest_totals.py`:
 - **Why it holds:** Earlier audit showed offense/defense coefficient std devs are nearly identical (3.49 vs 3.46). Ridge learns balanced coefficients; no suppressed signal on either side.
 - **Decision:** No change. The 50/50 assumption is empirically validated.
 
+#### Prior-Informed Baseline — REJECTED
+**Impact: Degrades both Phase 1 and Phase 2 performance**
+
+- **Hypothesis:** Static per-season baseline creates coefficient drift when training data is sparse. Early weeks (1-3) have only 40-80 games; Ridge learns baseline from small sample. If first 3 weeks are cupcake-heavy (FCS, G5 mismatches), baseline is inflated vs true CFB average.
+- **Proposal:** Use prior season's learned baseline as a prior. Blend: `effective_baseline = (1-w) * learned + w * prior_baseline`, where w decays over training weeks.
+- **Implementation tested:** Decay rates 4, 6, 8 weeks (w = max(0, 1 - week/decay))
+
+| Decay | Phase 1 5+ Edge | Phase 2 5+ Edge | Delta |
+|-------|-----------------|-----------------|-------|
+| None (baseline) | **57.5%** | **56.0%** | — |
+| 4 weeks | 54.8% | 56.0% | **-2.7% (P1)** |
+| 6 weeks | 56.8% | 55.1% | **-0.9% (P2)** |
+| 8 weeks | 51.2% | 55.0% | **-6.3% (P1), -1.0% (P2)** |
+
+- **Why it failed:**
+  1. **Baselines nearly identical:** 2023=24.97, 2024=24.85, 2025=25.27 — only ~0.5 pt variance. No systematic drift to correct.
+  2. **Phase 1 is already strong:** 57.5% at 5+ Edge without any prior. This is a model STRENGTH, not a problem to fix.
+  3. **Prior contamination:** Using 2024 baseline for early 2025 games introduces stale information. Walk-forward already handles temporal validity — adding another layer hurts.
+- **Decision:** No change. Current per-season learned baseline is optimal.
+
 ---
 
 ## Session: February 7, 2026 (Continued)
