@@ -557,6 +557,75 @@ Watchlist now shows pass rate context:
 - `cfbd_client.get_weather()` — no longer used (158 lines removed)
 - Weather API was for look-back actuals, not forecasts
 
+#### Saturday Weather Confirmation Run — OPERATIONAL
+**Impact: Two-stage weather capture workflow for maximum timing edge**
+
+- **Purpose:** Thursday forecasts (72h out) are useful for identifying concerns but have lower confidence. Saturday 8 AM ET forecasts (6-12h out) are high-confidence and should be compared to Thursday predictions.
+
+**Saturday Workflow (`scripts/weather_thursday_capture.py --saturday`):**
+- Loads Thursday forecasts from database
+- Captures fresh Saturday morning forecasts
+- Compares forecast changes (wind, temp, precip)
+- Re-calculates weather adjustments with updated data
+- Highlights games where conditions improved/worsened significantly
+
+**Output includes Thursday vs Saturday comparison:**
+```
+📊 THURSDAY vs SATURDAY COMPARISON:
+
+  Iowa @ Nebraska
+    Wind: 22 mph → 18 mph (IMPROVED)
+    Thursday Adj: -7.0 pts → Saturday Adj: -4.5 pts
+    ⚠️ Adjustment changed by 2.5+ pts — re-evaluate position
+```
+
+**Cron automation:**
+- Saturday 8:00 AM ET cron job added to `setup_weather_cron.sh`
+- Logs to `logs/weather_saturday.log`
+
+#### Year Leakage Bug Fix (TotalsModel) — COMMITTED
+**Impact: Ensures multi-year training correctly handles scoring environment shifts**
+
+- **Bug:** When `use_year_intercepts=False` (the default), Ridge regression learns a single baseline intercept for ALL years. If training on 2022-2024, the learned intercept averages scoring environments (2022 ~27 PPG vs 2024 ~26 PPG), contaminating predictions for individual years.
+- **Impact:** Walk-forward single-year training (current backtest) is unaffected. Multi-year joint training (e.g., 2026 production with 2023-2025 pooled) would have systematic bias.
+- **Fix:** Auto-detect when `len(unique_years) > 1` and automatically enable year intercepts:
+```python
+if len(years) > 1 and not self.use_year_intercepts:
+    logger.info(f"Auto-enabling year intercepts for multi-year training ({years})")
+    self.use_year_intercepts = True
+```
+- **Verification:** Single-year 2024 backtest still works correctly (year intercepts not triggered).
+
+#### 2026 Production Planning — DOCUMENTED (MODEL_ARCHITECTURE.md)
+**Impact: Roadmap for operational deployment and stake sizing**
+
+Added new section to MODEL_ARCHITECTURE.md covering:
+
+**Bet Automation / Discord Integration:**
+- Discord deep links for sportsbook bet slips (one-click betting)
+- DraftKings: `https://sportsbook.draftkings.com/...`
+- FanDuel/ESPN Bet: Similar deep link APIs
+- Workflow: JP+ generates picks → posts to Discord → deep links to sportsbooks
+
+**API Betting Exchanges:**
+- Sporttrade, ProphetX, Novig — API-first exchanges with better liquidity
+- Advantages: Better odds (-105 vs -110), programmatic betting, larger limits
+- Evaluation criteria: Liquidity depth, API documentation, CFB coverage
+
+**Kelly Criterion Stake Sizing:**
+- Formula: `f* = (p - q) / b` where p = win prob, q = 1-p, b = odds
+- JP+ Edge → Implied Win % mapping:
+
+| JP+ Edge | Implied Win % | Full Kelly | Half Kelly | Quarter Kelly |
+|----------|---------------|------------|------------|---------------|
+| 3 pts | 54.5% | 4.5% | 2.25% | 1.1% |
+| 5 pts | 57.5% | 9.5% | 4.75% | 2.4% |
+| 7 pts | 60.0% | 14.0% | 7.0% | 3.5% |
+| 10 pts | 65.0% | 21.0% | 10.5% | 5.3% |
+
+- **Recommendation:** Half Kelly for most bettors, Quarter Kelly for bankroll preservation
+- Edge confidence tiers: 5+ pts = high confidence, 7+ pts = max confidence
+
 ---
 
 ## Session: February 7, 2026 (Continued)
