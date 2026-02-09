@@ -157,15 +157,28 @@ def is_garbage_time(quarter: int, score_diff: int) -> bool:
     return score_diff > threshold
 
 
-def is_garbage_time_vectorized(periods: np.ndarray, score_diffs: np.ndarray) -> np.ndarray:
+def is_garbage_time_vectorized(
+    periods: np.ndarray,
+    score_diffs: np.ndarray,
+    year: int | None = None
+) -> np.ndarray:
     """Vectorized garbage time detection for entire DataFrame.
 
     P3.2 optimization: Replaces row-wise apply with vectorized numpy operations.
     P2.2: Uses module-level cached thresholds to avoid repeated Settings lookups.
 
+    Note on year-conditional thresholds (Feb 2026 investigation):
+    The 2024 clock rule change makes leads objectively safer (68% vs 63.2% "won by 14+").
+    However, lowering Q4 threshold from 16→14 for 2024+ DEGRADED model performance
+    (5+ Edge 54.7%→54.6%, 3+ Edge 54.0%→53.7%). Reason: play-level efficiency data
+    is still informative even when game outcomes are harder to achieve. The trailing
+    team's plays in a 14-15 pt Q4 deficit still reflect their true capability.
+    Year parameter preserved for future experimentation but not currently used.
+
     Args:
         periods: Array of quarter/period values (1-4)
         score_diffs: Array of absolute score differentials
+        year: Season year (currently unused, preserved for future experiments)
 
     Returns:
         Boolean array indicating garbage time plays
@@ -180,6 +193,9 @@ def is_garbage_time_vectorized(periods: np.ndarray, score_diffs: np.ndarray) -> 
             settings.garbage_time_q4,
         )
     gt_q1, gt_q2, gt_q3, gt_q4 = _GT_THRESHOLDS
+
+    # Year-conditional thresholds tested but REJECTED (see docstring)
+    # Keeping year parameter for future experimentation
 
     # Build threshold array based on period
     # Default to Q4 threshold for periods outside 1-4 (OT, etc.)
@@ -565,7 +581,8 @@ class EfficiencyFoundationModel:
 
     def _prepare_plays(
         self, plays_df: pd.DataFrame, max_week: int | None = None,
-        team_conferences: Optional[dict[str, str]] = None
+        team_conferences: Optional[dict[str, str]] = None,
+        season: int | None = None
     ) -> pd.DataFrame:
         """Filter and prepare plays for analysis.
 
@@ -579,6 +596,8 @@ class EfficiencyFoundationModel:
                       If provided, asserts no plays exceed this week and uses it for time_decay.
             team_conferences: Optional dict mapping team name to conference name.
                             If provided, applies 1.5x weight to non-conference games.
+            season: Season year for year-conditional garbage time thresholds.
+                    2024+ uses Q4=14 (clock rule change), earlier uses Q4=16.
 
         Returns:
             Filtered DataFrame with success and garbage time flags
@@ -653,10 +672,12 @@ class EfficiencyFoundationModel:
         )
 
         # P3.2: Vectorized garbage time detection (replaces row-wise apply)
+        # Year-conditional threshold: Q4=14 for 2024+ (clock rule change), Q4=16 for earlier
         df["score_diff"] = (df["offense_score"] - df["defense_score"]).abs()
         df["is_garbage_time"] = is_garbage_time_vectorized(
             df["period"].values,
             df["score_diff"].values,
+            year=season,
         )
 
         # P3.2: Vectorized weight calculation (replaces row-wise apply)
@@ -1652,7 +1673,8 @@ class EfficiencyFoundationModel:
             Dict mapping team name to TeamEFMRating
         """
         # Prepare plays (with data leakage guard if max_week provided)
-        prepared = self._prepare_plays(plays_df, max_week=max_week, team_conferences=team_conferences)
+        # Season passed for year-conditional garbage time thresholds (2024+ clock rule change)
+        prepared = self._prepare_plays(plays_df, max_week=max_week, team_conferences=team_conferences, season=season)
         # P3.9: Debug level for per-week logging
         logger.debug(f"Prepared {len(prepared)} plays for EFM")
 

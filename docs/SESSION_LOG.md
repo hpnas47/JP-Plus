@@ -6,7 +6,40 @@
 
 ## Session: February 8, 2026
 
-### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation
+### Theme: Error Cohort Diagnostic + HFA Calibration + G5 Circularity Investigation + Totals Model + GT Threshold Analysis
+
+---
+
+#### Year-Conditional Garbage Time Thresholds — REJECTED
+**Impact: Degraded both 3+ and 5+ Edge despite valid hypothesis**
+
+- **Hypothesis:** The 2024 clock rule change (running clock on first downs) makes leads safer. A 14-point Q4 lead under new rules is functionally equivalent to a 16-point lead under old rules. Therefore, lower Q4 GT threshold from 16 to 14 for 2024+.
+
+- **Diagnostic results (N=753 games with Q4 plays in 14-16 pt margin window):**
+
+| Metric | Old Rules (2022-23) | New Rules (2024-25) | Delta |
+|--------|---------------------|---------------------|-------|
+| Leader Won by 14+ | 63.2% | **68.0%** | **+4.8pp** |
+| Leader ATS (covered) | 92.3% (361-30) | 92.8% (336-26) | +0.5% |
+| Mean Final Margin | +14.2 | +14.8 | +0.6 |
+
+- **Hypothesis validated for game outcomes:** Leads ARE objectively safer (+4.8pp in "won by 14+"). Clock rules matter.
+- **But ATS is flat:** Vegas already prices this (92.3% vs 92.8% leader cover rate).
+
+- **Backtest with Q4=14 for 2024+:**
+
+| Metric | Baseline (Q4=16) | Year-Conditional (Q4=14 for 2024+) | Delta |
+|--------|------------------|-----------------------------------|-------|
+| Core 5+ Edge (Close) | 54.7% (473-391) | 54.6% (470-391) | **-0.1%** |
+| Core 3+ Edge (Close) | 54.0% (764-650) | 53.7% (762-658) | **-0.3%** |
+| Core MAE | 12.50 | 12.50 | 0.00 |
+
+- **Why it failed:** Game outcomes are affected by clock rules, but **play-level efficiency data is not**. The trailing team in a 14-15 pt Q4 deficit is still running real plays that inform their capability — even if the game is harder to win. By down-weighting those plays (treating them as GT), we lose informative signal.
+
+- **Key insight:** "Leads are safer" ≠ "trailing team's plays are less informative." The GT threshold should reflect when teams stop trying, not when games become mathematically difficult.
+
+- **Decision:** Reverted. Infrastructure preserved (year parameter added to `is_garbage_time_vectorized`) but not used.
+- **Diagnostic script:** `scripts/diagnose_gt_threshold.py`
 
 ---
 
