@@ -312,7 +312,59 @@ predicted_total = home_expected + away_expected
 - **Ridge Alpha:** 10.0
 - **Decay Factor:** 1.0 (no within-season decay)
 - **Learned HFA:** Via Ridge column (+3.5 to +4.5 pts typical)
-- **Weather:** Available but optional (no ATS improvement)
+- **Weather:** Available — see Weather Adjustments section below
+
+---
+
+## Weather Adjustments (Totals)
+
+Weather affects totals through wind, cold, and precipitation. The model uses **non-linear thresholds** based on sharp betting research — the key insight is that **light weather doesn't matter, but severe weather kills scoring**.
+
+### The Timing Edge
+
+The market prices weather, but slowly. The edge is in **timing**:
+- **Thursday 6 AM** — Capture forecasts 72 hours out, bet before books adjust
+- **Saturday 8 AM** — Confirm with accurate 6-12h forecasts (final model input)
+
+### Wind (The #1 Factor)
+
+Wind is king of unders. Uses **effective wind = (wind_speed + wind_gust) / 2**.
+
+| Effective Wind | Adjustment |
+|----------------|------------|
+| <12 mph | 0 pts (no impact) |
+| 12-15 mph | -1.5 pts |
+| 15-20 mph | -4.0 pts |
+| >20 mph | -6.0 pts |
+
+**"Passing Team" Multiplier:** Air Raid teams (55%+ pass rate) get 1.25x wind penalty. Option teams (<45% pass rate) get only 0.5x. Example: Army in 20mph wind = -3.0 pts; Ole Miss in same wind = -7.5 pts.
+
+### Temperature
+
+Cold turns the ball into a rock (harder to catch and kick).
+
+| Temperature | Adjustment |
+|-------------|------------|
+| >32°F | 0 pts |
+| 20-32°F | -1.0 pts |
+| <20°F | -3.0 pts |
+
+### Precipitation
+
+**The "Slick Trap":** Light rain does NOT hurt totals. Defenders slip, miss tackles, games can even go OVER. Only heavy rain/snow causes conservative playcalling.
+
+| Condition | Adjustment |
+|-----------|------------|
+| Light rain (<0.1 in/hr) | 0 pts (the "slick trap") |
+| Heavy rain (>0.3 in/hr) | -2.5 pts |
+| Snow with wind (≥12 mph) | -3.0 pts |
+| Snow without wind | 0 pts ("overreaction fade") |
+
+**"Snow Overreaction Fade":** Public loves betting "Snow Unders" but sharps know snow without wind often goes OVER. Defenders slip, receivers know their routes. Only apply snow penalty when wind is also present.
+
+### Backtest Note
+
+Historical backtest shows weather provides no ATS improvement (market already prices it). The edge is in **timing** — acting on Thursday forecasts before the market adjusts totals.
 
 ---
 

@@ -536,18 +536,78 @@ The single biggest unmodeled source of prediction error. Manual flagging system:
 
 ### Weather Adjustments (Totals Only)
 
-| Factor | Threshold | Adjustment | Cap |
-|--------|-----------|------------|-----|
-| **Wind** | >10 mph | -0.3 pts/mph | -6.0 |
-| **Temperature** | <40°F | -0.15 pts/degree | -4.0 |
-| **Precipitation** | >0.02 in | -3.0 pts flat | - |
-| **Heavy Precip** | >0.05 in | -5.0 pts flat | - |
+Weather adjustments use **non-linear thresholds** based on sharp betting research. The edge is in **timing** — capture forecasts Thursday before market moves, confirm Saturday with accurate 6-12h forecasts.
 
-**Indoor games** (via `game_indoors` flag) receive no weather adjustment.
+#### Data Source
+- **API:** Tomorrow.io Hourly Forecast API (free tier: 25 calls/hour)
+- **Database:** `data/weather_forecasts.db` (SQLite)
+- **Venue data:** 795 FBS/FCS stadiums with coordinates + dome detection
 
-**Data source:** CFBD API `get_weather` endpoint (temperature, wind, precipitation, humidity, weather condition, indoor flag).
+#### Wind Thresholds (Non-Linear Tiers)
 
-**Status:** Implemented for future totals prediction. Parameters based on NFL weather studies; validate against historical CFB totals before production use.
+Wind is the #1 driver of totals movement. Uses **effective wind = (wind_speed + wind_gust) / 2**.
+
+| Effective Wind | Base Adjustment | Rationale |
+|----------------|-----------------|-----------|
+| <12 mph | 0.0 pts | No impact |
+| 12-15 mph | -1.5 pts | Deep passing degraded |
+| 15-20 mph | -4.0 pts | Kicking range reduced, deep ball erased |
+| >20 mph | -6.0 pts | Run-only game profiles, clock runs constantly |
+
+**"Passing Team" Multiplier:** Wind adjustments scaled by combined pass rate:
+- Pass-heavy matchups (>55%): **1.25x** penalty (Air Raid teams suffer more)
+- Run-heavy matchups (<45%): **0.5x** penalty (Option teams barely notice)
+- Example: Army in 20mph wind = -3.0 pts; Ole Miss in 20mph wind = -7.5 pts
+
+#### Temperature Thresholds
+
+| Temperature | Adjustment | Rationale |
+|-------------|------------|-----------|
+| >32°F | 0.0 pts | No impact |
+| 20-32°F | -1.0 pts | "Rock effect" — cold balls harder to catch/kick |
+| <20°F | -3.0 pts | Severe mechanics impact |
+
+#### Precipitation Thresholds
+
+**The "Slick Trap":** Light rain does NOT hurt totals. Defenders slip, miss tackles, games can go OVER.
+
+| Condition | Adjustment | Rationale |
+|-----------|------------|-----------|
+| Light rain (<0.1 in/hr) | 0.0 pts | The "slick trap" — no penalty |
+| Heavy rain (>0.3 in/hr) | -2.5 pts | Ball security issues, conservative playcalling |
+| Snow with wind (≥12 mph) | -3.0 pts | Visual impairment, footing, swirling snow |
+| Snow without wind | 0.0 pts | "Overreaction Fade" — sharps bet OVER |
+
+**"Snow Overreaction Fade":** Public loves betting "Snow Unders" but snow without wind often goes OVER. Defenders slip, receivers know their routes. Only apply snow penalty if wind ≥12 mph.
+
+#### Two-Stage Capture Workflow
+
+| Stage | Timing | Confidence | Purpose |
+|-------|--------|------------|---------|
+| Thursday 6 AM | 72h out | 65% | Early alert, bet before market moves |
+| Saturday 8 AM | 6-12h out | 90%+ | Confirmation, final model input |
+
+**Cron automation:** `./scripts/setup_weather_cron.sh install`
+
+#### Integration with JP+ TotalsModel
+
+The Thursday/Saturday capture scripts:
+1. Train TotalsModel walk-forward on weeks 1 to (current_week - 1)
+2. Predict JP+ total for each game
+3. Apply weather adjustment to JP+ prediction
+4. Compare to Vegas total to calculate edge
+5. Generate watchlist sorted by edge (most negative = strongest UNDER signal)
+
+**Edge interpretation:**
+- Edge < -3 pts = 🔥 STRONG UNDER
+- Edge < 0 pts = 📉 LEAN UNDER
+- Edge > 0 pts = Skip (JP+ higher than Vegas)
+
+**Indoor games** (via dome detection) receive no weather adjustment.
+
+**Scripts:**
+- `scripts/weather_thursday_capture.py` — Main capture + watchlist
+- `scripts/weather_thursday_capture.py --saturday` — Saturday confirmation mode
 
 ---
 
@@ -562,7 +622,9 @@ The single biggest unmodeled source of prediction error. Manual flagging system:
 | `src/adjustments/altitude.py` | Altitude adjustment |
 | `src/adjustments/situational.py` | Rest, letdown, lookahead, rivalry (raw values) |
 | `src/adjustments/qb_adjustment.py` | QB injury system |
-| `src/adjustments/weather.py` | Weather for totals |
+| `src/adjustments/weather.py` | Weather adjuster (non-linear thresholds, pass rate scaling) |
+| `src/api/tomorrow_io.py` | Tomorrow.io forecast API client + venue database |
+| `scripts/weather_thursday_capture.py` | Thursday/Saturday capture workflow |
 
 ---
 
@@ -1051,7 +1113,7 @@ predicted_total = home_expected + away_expected
 
 ### Medium Priority
 - [x] **Multi-year backtesting to validate stability** - ✅ DONE. Walk-forward backtest across 2022-2025 (4 seasons). See "Backtest Performance" section at top of file for current metrics.
-- [x] **Weather impact modeling** - ✅ DONE. Added `WeatherAdjuster` class that fetches weather data from CFBD API and calculates totals adjustments based on wind (>10 mph: -0.3 pts/mph), temperature (<40°F: -0.15 pts/degree), and precipitation (>0.02 in: -3.0 pts). Indoor games receive no adjustment. Ready for totals prediction integration.
+- [x] **Weather impact modeling** - ✅ DONE. Full weather system for totals: Tomorrow.io API for forecasts (not CFBD look-back), non-linear thresholds (wind tiers at 12/15/20 mph), "slick trap" (light rain = no penalty), "passing team multiplier" (wind scaled by combined pass rate), "snow overreaction fade" (snow without wind = no penalty). Two-stage capture: Thursday 6 AM (early alert) + Saturday 8 AM (confirmation). Backtest shows market already prices weather (no ATS improvement), but timing edge exists for early movers.
 - [x] **Expand special teams beyond FG** - ✅ DONE. Added punt and kickoff ratings to complete ST model. All components expressed as PBTA (Points Better Than Average) per game. Punt rating: net yards vs expected (40 yds) converted to points + inside-20/touchback adjustments. Kickoff rating: coverage (touchback rate, return yards allowed) + returns (return yards gained). Overall = FG + Punt + Kickoff. FBS distribution: mean ~0, std ~1.0, 95% within ±2 pts/game.
 
 ### Low Priority
