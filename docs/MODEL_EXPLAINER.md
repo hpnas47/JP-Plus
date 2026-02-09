@@ -326,18 +326,41 @@ The market prices weather, but slowly. The edge is in **timing**:
 - **Thursday 6 AM** — Capture forecasts 72 hours out, bet before books adjust
 - **Saturday 8 AM** — Confirm with accurate 6-12h forecasts (final model input)
 
+### Confidence Gating
+
+**All adjustments are scaled by forecast confidence** based on hours until kickoff:
+
+| Hours Out | Confidence | Effect on -6.0 raw |
+|-----------|------------|-------------------|
+| ≤6h | 0.95 | -5.7 pts |
+| 6-12h | 0.90 | -5.4 pts |
+| 12-24h | 0.85 | -5.1 pts |
+| 24-48h | 0.75 | -4.5 pts |
+| >48h | 0.65 | -3.9 pts |
+
+**HIGH_VARIANCE Flag:** If confidence < 0.75 AND raw adjustment > 3.0 pts, the game is flagged `high_variance=True`. **Rule: Never bet OVER on these games** — weather is uncertain but potentially severe.
+
 ### Wind (The #1 Factor)
 
 Wind is king of unders. Uses **effective wind = (wind_speed + wind_gust) / 2**.
 
-| Effective Wind | Adjustment |
-|----------------|------------|
+| Effective Wind | Base Adjustment |
+|----------------|-----------------|
 | <12 mph | 0 pts (no impact) |
 | 12-15 mph | -1.5 pts |
 | 15-20 mph | -4.0 pts |
 | >20 mph | -6.0 pts |
 
-**"Passing Team" Multiplier:** Air Raid teams (55%+ pass rate) get 1.25x wind penalty. Option teams (<45% pass rate) get only 0.5x. Example: Army in 20mph wind = -3.0 pts; Ole Miss in same wind = -7.5 pts.
+**"Passing Team" Multiplier:** Continuous scaling based on combined pass rate:
+```
+multiplier = combined_pass_rate / 0.50 (clamped to [0.5, 1.5])
+```
+
+| Team Style | Pass Rate | Multiplier | 20 mph Wind |
+|------------|-----------|------------|-------------|
+| Triple Option (Army) | 35% | 0.70x | -4.2 pts |
+| Balanced | 50% | 1.00x | -6.0 pts |
+| Air Raid (Ole Miss) | 65% | 1.30x | -7.8 pts |
 
 ### Temperature
 

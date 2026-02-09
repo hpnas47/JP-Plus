@@ -47,6 +47,7 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 | `cfbd_client.py` | CFBD API client. Fetches games, plays, drives, team stats, talent, SP+, and betting lines. |
 | `betting_lines.py` | Betting lines data structures and utilities. |
 | `odds_api_client.py` | OddsAPI client for live market odds capture. |
+| `tomorrow_io.py` | Tomorrow.io weather API client. Captures forecasts, stores in SQLite, provides confidence gating. |
 
 ---
 
@@ -93,6 +94,9 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 | `benchmark.py` | Performance benchmarking for model computation. |
 | `calibrate_situational.py` | Calibration sweep for situational adjustment weights. |
 | `analyze_stack_bias.py` | Analyzes adjustment stack for systematic bias. |
+| `capture_weather_forecasts.py` | Basic weather forecast capture from Tomorrow.io API. |
+| `weather_thursday_capture.py` | Thursday weather workflow: captures forecasts, builds watchlist, integrates with TotalsModel. |
+| `setup_weather_cron.sh` | Installs cron jobs for Thursday (6 AM) and Saturday (8 AM) weather capture. |
 
 ---
 
