@@ -232,7 +232,9 @@ End-of-season power ratings including all postseason (bowls + CFP through Nation
 | 24 | James Madison | +12.5 | +4.1 (41) | +7.5 (22) | +0.89 (38) |
 | 25 | Virginia | +12.3 | +1.3 (56) | +9.8 (11) | +1.25 (26) |
 
-**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP. JP+ ranks them #1 overall with the #2 offense and #9 defense in the country.
+**Ohio State** — JP+ #1 despite losing to Indiana in CFP semifinal. Best combination of offense (#9) and elite defense (#2). The model values consistent efficiency over tournament results.
+
+**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP. JP+ #2 overall with the #2 offense in the country. Their championship run validates the explosive offense (18.0 IsoPPP) that JP+ identified all season.
 
 **Spread Calculation:** Team A rating - Team B rating = expected point spread (before game-specific adjustments).
 
