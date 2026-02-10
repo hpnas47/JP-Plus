@@ -22,6 +22,7 @@ API Documentation: https://docs.tomorrow.io/reference/weather-forecast
 """
 
 import logging
+import random
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -163,6 +164,9 @@ class TomorrowIOClient:
         8000,  # Thunderstorm
     }
 
+    # Free tier limit: 25 requests per hour
+    FREE_TIER_HOURLY_LIMIT = 25
+
     def __init__(
         self,
         api_key: str,
@@ -170,6 +174,7 @@ class TomorrowIOClient:
         units: str = "imperial",
         rate_limit_delay: float = 3.0,  # Seconds between API calls
         max_retries: int = 3,  # Max retries on rate limit
+        max_backoff_seconds: float = 60.0,  # Max wait on exponential backoff
     ):
         """Initialize Tomorrow.io client.
 
@@ -179,13 +184,17 @@ class TomorrowIOClient:
             units: "imperial" (Fahrenheit, MPH) or "metric" (Celsius, m/s)
             rate_limit_delay: Seconds to wait between API calls (free tier: 25/hr)
             max_retries: Maximum retries on 429 rate limit errors
+            max_backoff_seconds: Maximum wait time for exponential backoff
         """
         self.api_key = api_key
         self.db_path = db_path
         self.units = units
         self.rate_limit_delay = rate_limit_delay
         self.max_retries = max_retries
+        self.max_backoff_seconds = max_backoff_seconds
         self._last_call_time = 0.0
+        # Hourly rate limit tracking
+        self._hourly_calls: list[float] = []  # Timestamps of calls within current hour
         self._ensure_db()
 
     def _ensure_db(self) -> None:
@@ -242,6 +251,16 @@ class TomorrowIOClient:
                 ON forecasts(game_id, forecast_time)
             """)
 
+    def _prune_hourly_calls(self) -> None:
+        """Remove call timestamps older than 1 hour."""
+        cutoff = time.time() - 3600  # 1 hour ago
+        self._hourly_calls = [t for t in self._hourly_calls if t > cutoff]
+
+    def get_hourly_call_count(self) -> int:
+        """Return number of API calls made in the last hour."""
+        self._prune_hourly_calls()
+        return len(self._hourly_calls)
+
     def get_forecast(
         self,
         latitude: float,
@@ -262,6 +281,21 @@ class TomorrowIOClient:
         Returns:
             WeatherForecast or None if API call fails
         """
+        location_ctx = f"venue={venue_name or 'Unknown'} ({latitude:.4f}, {longitude:.4f})"
+
+        # Check hourly rate limit before attempting
+        self._prune_hourly_calls()
+        if len(self._hourly_calls) >= self.FREE_TIER_HOURLY_LIMIT:
+            oldest_call = min(self._hourly_calls)
+            wait_until = oldest_call + 3600
+            wait_remaining = wait_until - time.time()
+            logger.warning(
+                f"Hourly rate limit reached ({self.FREE_TIER_HOURLY_LIMIT}/hr). "
+                f"Next slot available in {wait_remaining / 60:.1f} minutes. "
+                f"Skipping {location_ctx}"
+            )
+            return None
+
         try:
             # Build request
             params = {
@@ -276,7 +310,7 @@ class TomorrowIOClient:
                 "accept-encoding": "gzip",
             }
 
-            # Retry loop with exponential backoff for rate limits
+            # Retry loop with exponential backoff + jitter for rate limits
             data = None
             for attempt in range(self.max_retries + 1):
                 # Rate limiting - wait between calls
@@ -293,21 +327,30 @@ class TomorrowIOClient:
                 )
 
                 if response.status_code == 429:
-                    # Rate limited - exponential backoff
+                    # Rate limited - exponential backoff with jitter
                     if attempt < self.max_retries:
-                        wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                        # Base: 5s, 10s, 20s... capped at max_backoff_seconds
+                        base_wait = min((2 ** attempt) * 5, self.max_backoff_seconds)
+                        # Add jitter: ±25% randomization to prevent thundering herd
+                        jitter = base_wait * random.uniform(-0.25, 0.25)
+                        wait_time = base_wait + jitter
                         logger.warning(
-                            f"Rate limited (429), retry {attempt + 1}/{self.max_retries} "
-                            f"in {wait_time}s"
+                            f"Rate limited (429) for {location_ctx}. "
+                            f"Retry {attempt + 1}/{self.max_retries} in {wait_time:.1f}s"
                         )
                         time.sleep(wait_time)
                         continue
                     else:
-                        logger.error("Max retries exceeded on rate limit")
+                        logger.error(
+                            f"Max retries ({self.max_retries}) exceeded on rate limit "
+                            f"for {location_ctx}"
+                        )
                         return None
 
                 response.raise_for_status()
                 data = response.json()
+                # Record successful API call for hourly tracking
+                self._hourly_calls.append(time.time())
                 break
 
             if data is None:
@@ -368,10 +411,10 @@ class TomorrowIOClient:
             )
 
         except requests.RequestException as e:
-            logger.error(f"Tomorrow.io API error: {e}")
+            logger.error(f"Tomorrow.io API error for {location_ctx}: {e}")
             return None
         except (KeyError, ValueError) as e:
-            logger.error(f"Error parsing Tomorrow.io response: {e}")
+            logger.error(f"Error parsing Tomorrow.io response for {location_ctx}: {e}")
             return None
 
     def _find_forecast_for_time(
