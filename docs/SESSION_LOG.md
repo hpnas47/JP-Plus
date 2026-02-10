@@ -4,6 +4,98 @@
 
 ---
 
+## Session: February 10, 2026
+
+### Theme: Weather Capture Infrastructure + Totals Backtest Export + Week Detection Fix
+
+---
+
+#### Add CSV Export to Totals Backtest — COMMITTED
+**Commit**: `74dd186`
+
+Added `--output` flag to `backtest_totals.py` for game-level CSV export:
+- Includes `edge_close`, `edge_open`, `play` (OVER/UNDER), and `result` columns
+- Enables detailed analysis of individual totals predictions
+- Also removed Kennesaw State from triple-option list (transitioned to conventional offense in FBS)
+
+---
+
+#### Replace Hardcoded Week Detection with CFBD Calendar API — COMMITTED
+**Commit**: `7e87d01`
+
+Fixed `get_current_cfb_week()` in `weather_thursday_capture.py`:
+- **Problem**: Used hardcoded arithmetic (`week_of_year - 34`) which was off by ±1-2 weeks
+- **Solution**: Uses `cfbd_client.get_calendar(year)` to find current/upcoming week
+- Handles Week 0, regular season (1-15), and postseason (16+)
+- Fails clearly during off-season (Feb-Jul) with `OffSeasonError`
+- Added `timedelta` import for date arithmetic
+
+---
+
+#### Remove Unused BATCH Constants — COMMITTED
+**Commit**: `7c9a11f`
+
+Removed dead code from `weather_thursday_capture.py`:
+- `BATCH_SIZE` and `BATCH_DELAY_SECONDS` were defined but never referenced
+- Rate limiting handled via `--limit` and `--delay` CLI args
+- Updated docstring to document actual rate limiting approach
+- Added hourly API quota logging before/after capture
+
+---
+
+#### Fix Pass-Rate Handling and Watchlist Sorting — COMMITTED
+**Commit**: `10020e3`
+
+Pass-rate handling:
+- Default to 0.5 (neutral) when team pass rate data unavailable
+- Add `pass_rate_available` flag to watchlist entries
+- Log when pass-rate scaling is inactive (at debug level)
+- Update report to show "N/A (using neutral default)" when data missing
+
+Watchlist sorting:
+- Use tuple sort key: `(0, edge)` for real edges, `(1, weather_adj)` for None
+- Entries with `edge=None` now sort AFTER entries with real edge
+- Most negative edge ranks first within each group
+
+---
+
+#### Compute Weather Adjustments for All Outdoor Games — COMMITTED
+**Commit**: `5ef7d77`
+
+Previously, adjustments were only computed for games flagged by `is_weather_concern()`.
+Now computes adjustments for ALL outdoor games, then builds watchlist by thresholding.
+
+- Add `DEFAULT_WATCHLIST_ADJ_THRESHOLD` (1.5) and `DEFAULT_WATCHLIST_EDGE_THRESHOLD` (3.0)
+- Add `--adj-threshold` and `--edge-threshold` CLI arguments
+- Store all adjustments in `stats["all_adjustments"]`
+- Build watchlist from games where `|adj| >= threshold` OR `|edge| >= threshold`
+- Add `high_variance` flag to game entries
+- Update both report functions to show threshold info and adjustment counts
+
+---
+
+#### Add Hourly Rate Limit Tracking to TomorrowIOClient — COMMITTED
+**Commit**: `4f16c3e`
+
+Improvements to `src/api/tomorrow_io.py`:
+- Add `FREE_TIER_HOURLY_LIMIT` constant (25/hr)
+- Add `_hourly_calls` list to track call timestamps
+- Add `get_hourly_call_count()` method for quota visibility
+- Add hourly limit check before API calls (returns None if limit reached)
+- Add exponential backoff with jitter on 429 errors
+- Add `max_backoff_seconds` parameter (default 60s)
+
+Cleanup:
+- Remove `scripts/diagnose_gt_threshold.py` (one-off diagnostic)
+
+---
+
+#### Memory Updates
+- Added "Betting Analysis Preferences" section: always use OPENING lines for totals betting analysis
+- Saved season summary table format to `memory/season_summary_format.md`
+
+---
+
 ## Session: February 9, 2026
 
 ### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening + Infrastructure Hardening + Vectorization Sweep
