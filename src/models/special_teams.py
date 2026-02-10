@@ -607,22 +607,63 @@ class SpecialTeamsModel:
             coverage_agg["return_yards_sum"] / coverage_agg["return_count"],
             23.0,  # Expected if no returns
         )
-        # Coverage value in POINTS:
-        # Touchback bonus: per 10% touchback rate above expected = ~0.1 pts per game
-        coverage_agg["tb_bonus"] = (coverage_agg["tb_rate"] - self.EXPECTED_TOUCHBACK_RATE) * 1.0
-        # Return yards saved: convert to points (~0.04 pts/yard)
-        coverage_agg["return_saved"] = (23.0 - coverage_agg["avg_return_allowed"]) * self.YARDS_TO_POINTS
+        # Coverage value in POINTS (per-game):
+        # Two components with different units - must handle separately
+        #
+        # Points per excess touchback: ~3.5 yards field position advantage
+        # (touchback at 25 vs avg return to ~21.5) = 3.5 * 0.04 ≈ 0.14 pts
+        POINTS_PER_EXCESS_TOUCHBACK = 0.15
 
-        # Scale to per-game if games_played provided
         if games_played:
             games_series = pd.Series(games_played)
-            coverage_agg["games"] = coverage_agg.index.map(games_series).fillna(1)
-            coverage_agg["kicks_per_game"] = coverage_agg["total_kicks"] / coverage_agg["games"]
+            coverage_agg["games"] = coverage_agg.index.map(games_series).fillna(1)  # [games]
+
+            # Touchback bonus (per-game points):
+            # excess_tb_rate [dimensionless] * total_kicks [kicks] / games [games]
+            #   = excess touchbacks per game [tb/game]
+            # Then multiply by points per touchback [pts/tb] = [pts/game]
+            coverage_agg["excess_tb_rate"] = (
+                coverage_agg["tb_rate"] - self.EXPECTED_TOUCHBACK_RATE
+            )  # [dimensionless: rate difference]
+            coverage_agg["excess_tb_per_game"] = (
+                coverage_agg["excess_tb_rate"] * coverage_agg["total_kicks"] / coverage_agg["games"]
+            )  # [touchbacks/game]
+            coverage_agg["tb_bonus"] = (
+                coverage_agg["excess_tb_per_game"] * POINTS_PER_EXCESS_TOUCHBACK
+            )  # [pts/game]
+
+            # Return yards saved (per-game points):
+            # yards_saved_per_return [yards/return] * YARDS_TO_POINTS [pts/yard]
+            #   = points per return [pts/return]
+            # Then multiply by returns per game [returns/game] = [pts/game]
+            coverage_agg["yards_saved_per_return"] = (
+                23.0 - coverage_agg["avg_return_allowed"]
+            )  # [yards/return]
+            coverage_agg["pts_per_return"] = (
+                coverage_agg["yards_saved_per_return"] * self.YARDS_TO_POINTS
+            )  # [pts/return]
+            coverage_agg["returns_per_game"] = (
+                coverage_agg["return_count"] / coverage_agg["games"]
+            )  # [returns/game]
+            coverage_agg["return_saved"] = (
+                coverage_agg["pts_per_return"] * coverage_agg["returns_per_game"]
+            )  # [pts/game]
+
+            # Coverage rating is sum of per-game components (no further scaling)
             coverage_agg["coverage_rating"] = (
                 coverage_agg["tb_bonus"] + coverage_agg["return_saved"]
-            ) * coverage_agg["kicks_per_game"]
+            )  # [pts/game]
         else:
-            coverage_agg["coverage_rating"] = coverage_agg["tb_bonus"] + coverage_agg["return_saved"]
+            # Without games_played, use raw per-kick/per-return values (less accurate)
+            coverage_agg["tb_bonus"] = (
+                coverage_agg["tb_rate"] - self.EXPECTED_TOUCHBACK_RATE
+            ) * POINTS_PER_EXCESS_TOUCHBACK  # [pts/kick] approximation
+            coverage_agg["return_saved"] = (
+                23.0 - coverage_agg["avg_return_allowed"]
+            ) * self.YARDS_TO_POINTS  # [pts/return]
+            coverage_agg["coverage_rating"] = (
+                coverage_agg["tb_bonus"] + coverage_agg["return_saved"]
+            )  # [pts] approximate
 
         coverage_ratings = coverage_agg["coverage_rating"].to_dict()
 
