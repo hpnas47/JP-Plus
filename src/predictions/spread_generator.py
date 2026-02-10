@@ -246,6 +246,12 @@ class SpreadGenerator:
             global_cap: Maximum total adjustment (default: 7.0)
         """
         self.ratings = ratings or {}
+        # Calculate mean rating for fallback on missing teams
+        # If ratings center around +2.0, a missing team should be treated as +2.0, not 0.0
+        if self.ratings:
+            self._mean_rating = sum(self.ratings.values()) / len(self.ratings)
+        else:
+            self._mean_rating = 0.0
         self.special_teams = special_teams or SpecialTeamsModel()
         self.finishing_drives = finishing_drives or FinishingDrivesModel()
         self.home_field = home_field or HomeFieldAdvantage()
@@ -282,19 +288,24 @@ class SpreadGenerator:
         home_rating = self.ratings.get(home_team)
         away_rating = self.ratings.get(away_team)
 
-        # Warn on missing ratings - likely a misspelling or data issue
+        # Use mean rating as fallback for missing teams (not 0.0)
+        # If ratings center around +2.0, a missing team should be treated as
+        # "average" (+2.0), not "exactly zero". This prevents systematic bias
+        # when team names don't match between ratings dict and game data.
         if home_rating is None:
             logger.warning(
-                f"Team '{home_team}' not found in ratings (defaulting to 0.0). "
-                "Check for misspelling or missing data."
+                f"Team '{home_team}' not found in ratings "
+                f"(defaulting to mean={self._mean_rating:.2f}). "
+                "Check for name mismatch or missing data."
             )
-            home_rating = 0.0
+            home_rating = self._mean_rating
         if away_rating is None:
             logger.warning(
-                f"Team '{away_team}' not found in ratings (defaulting to 0.0). "
-                "Check for misspelling or missing data."
+                f"Team '{away_team}' not found in ratings "
+                f"(defaulting to mean={self._mean_rating:.2f}). "
+                "Check for name mismatch or missing data."
             )
-            away_rating = 0.0
+            away_rating = self._mean_rating
 
         return home_rating - away_rating
 
