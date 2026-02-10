@@ -80,9 +80,15 @@ class TotalsPrediction:
         return self.predicted_total + self.weather_adjustment
 
     def __repr__(self) -> str:
+        if self.weather_adjustment != 0.0:
+            return (
+                f"TotalsPrediction({self.away_team} @ {self.home_team}: "
+                f"base={self.predicted_total:.1f}, weather={self.weather_adjustment:+.1f}, "
+                f"adj={self.adjusted_total:.1f})"
+            )
         return (
             f"TotalsPrediction({self.away_team} @ {self.home_team}: "
-            f"total={self.predicted_total:.1f}, adj={self.adjusted_total:.1f})"
+            f"total={self.predicted_total:.1f})"
         )
 
 
@@ -437,7 +443,9 @@ class TotalsModel:
         home_expected = max(TEAM_FLOOR, home_expected)
         away_expected = max(TEAM_FLOOR, away_expected)
 
-        predicted_total = home_expected + away_expected + weather_adjustment
+        # predicted_total is the base model prediction BEFORE weather adjustments
+        # Weather adjustment is stored separately and applied in adjusted_total property
+        predicted_total = home_expected + away_expected
         predicted_total = max(TOTAL_FLOOR, min(TOTAL_CEILING, predicted_total))
 
         return TotalsPrediction(
