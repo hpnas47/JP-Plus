@@ -1255,6 +1255,41 @@ where:
 
 **Implementation:** `src/betting/kelly.py`, `src/betting/bankroll.py`
 
+#### Totals Preseason Priors (Week 0/1 Predictions)
+
+**Problem:** Current totals model can't predict week 0/1 games because it trains only on same-season data. The walk-forward approach requires weeks 1-2 as training data before predicting week 3+. This leaves early-season totals bets without model signal.
+
+**Solution: Prior-Year Carry-Forward with Decay**
+
+1. **End-of-Season Snapshot**
+   - After each season, save team-level offensive/defensive adjustments from final TotalsModel
+   - Store as `data/totals_priors_{year}.json` (e.g., `totals_priors_2025.json` for 2026 predictions)
+   - Include: team name, offensive adjustment, defensive adjustment, baseline PPG
+
+2. **Regression to Mean**
+   - Apply shrinkage to prior-year ratings (teams regress toward league average)
+   - Suggested: 30-40% regression (similar to spreads priors decay)
+   - Elite offenses won't stay elite forever; bad defenses improve via recruiting
+
+3. **Blending Schedule**
+   - Week 0-1: 100% prior-year ratings (no current-season data)
+   - Week 2: 70% prior / 30% current (1 game of data)
+   - Week 3: 50% prior / 50% current (2 games of data)
+   - Week 4+: 30% prior / 70% current (enough data for Ridge to dominate)
+   - By week 6+: Prior contribution negligible (current-season signal dominates)
+
+4. **Roster Continuity Adjustment**
+   - Teams with high portal churn get heavier regression to mean
+   - Returning production % from CFBStats/CFBD could modulate prior weight
+   - Similar to how spreads priors handle coaching changes
+
+**Backtest Validation:**
+- Modify `backtest_totals.py` to use 2024 priors for 2025 week 1-2 predictions
+- Compare ATS performance with priors vs current "no prediction" approach
+- Target: Any positive edge > 50% on week 0-2 totals justifies implementation
+
+**Implementation:** `src/models/totals_priors.py`, `scripts/save_totals_priors.py`
+
 ### Parking Lot (Needs Evidence Before Implementation)
 - [x] **Pace-based margin scaling** - Theory: Fast games have more plays, so efficiency edges should compound into larger margins. JP+ should scale predicted margins by expected pace. **Status:** INVESTIGATED, NOT IMPLEMENTING. Empirical analysis (2023-2025) shows the theory doesn't match reality: (1) Fast games actually have smaller margins (R²=2.2% correlation), (2) JP+ over-predicts fast game margins (mean error -2.1), not under-predicts, (3) ATS is actually better in fast games (73% vs 67.6%). Vegas already prices pace. Efficiency metrics implicitly capture tempo. Adding pace scaling would add complexity without benefit.
 - [x] **Mercy Rule Dampener (non-linear margins)** - Theory: Coaches tap brakes in blowouts, so efficiency models over-predict large margins. Apply logistic dampening to extreme spreads. **Status:** INVESTIGATED, NOT IMPLEMENTING. The bias EXISTS (mean error -38.7 on 21+ spreads), and dampening DOES improve MAE (-1.66 pts). BUT dampening HURTS ATS (-2.8pp) because our large edges against Vegas are correct directionally even when magnitude is off. A spread of -28 vs Vegas -21 may be "wrong" by 7 points but RIGHT about home covering. Since ATS is our optimization target (Rule #3), we accept worse MAE to maintain betting edge.
