@@ -2,9 +2,14 @@
 """Thursday weather forecast capture for totals betting edge.
 
 This script runs the full Thursday "Setup" capture workflow:
-1. Captures forecasts for all outdoor games (batched for rate limits)
+1. Captures forecasts for outdoor games (rate-limited via --limit and --delay)
 2. Identifies "Watchlist" games with high wind/weather concern
 3. Saves results to database and logs watchlist to console
+
+Rate Limiting:
+    Free tier: 25 calls/hour, 500 calls/day
+    Default: --limit 20 (stay under hourly cap), --delay 3.0s between calls
+    For more games: run multiple times 1+ hour apart, or use --limit 0 carefully
 
 Schedule this to run Thursday mornings before limits increase at books.
 
@@ -60,10 +65,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Rate limit settings
-BATCH_SIZE = 20  # Games per batch (stay under 25/hour limit)
-BATCH_DELAY_SECONDS = 3600  # 1 hour between batches (if needed)
 
 
 def get_current_cfb_week() -> tuple[int, int]:
@@ -272,8 +273,8 @@ def capture_with_watchlist(
         try:
             postseason = cfbd_client.get_games(year=year, week=week, season_type="postseason")
             games.extend(postseason)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to fetch postseason games for {year} week {week}: {e}")
 
     logger.info(f"Found {len(games)} games for {year} week {week}")
 
@@ -315,6 +316,14 @@ def capture_with_watchlist(
     if limit > 0:
         logger.info(f"Rate limit: capturing max {limit} forecasts (use --limit 0 for all)")
 
+    # Log current hourly API usage
+    hourly_calls = tomorrow_client.get_hourly_call_count()
+    hourly_remaining = tomorrow_client.FREE_TIER_HOURLY_LIMIT - hourly_calls
+    logger.info(
+        f"Tomorrow.io hourly quota: {hourly_calls}/{tomorrow_client.FREE_TIER_HOURLY_LIMIT} "
+        f"used, {hourly_remaining} remaining"
+    )
+
     if dry_run:
         for game, venue in outdoor_games:
             logger.info(f"  [DRY RUN] {game.away_team} @ {game.home_team} ({venue.name})")
@@ -328,120 +337,138 @@ def capture_with_watchlist(
             logger.info(f"Reached limit of {limit} forecasts. {remaining} games remaining.")
             logger.info("Run again in 1 hour to capture remaining games.")
             break
-        # Parse game time
-        start_date = getattr(game, "start_date", None)
-        if start_date:
-            if isinstance(start_date, str):
-                try:
-                    game_time = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-                    game_time = game_time.replace(tzinfo=None)
-                except ValueError:
-                    game_time = datetime.now()
+
+        matchup = f"{game.away_team} @ {game.home_team}"
+        try:
+            # Parse game time
+            start_date = getattr(game, "start_date", None)
+            if start_date:
+                if isinstance(start_date, str):
+                    try:
+                        game_time = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+                        game_time = game_time.replace(tzinfo=None)
+                    except ValueError:
+                        game_time = datetime.now()
+                else:
+                    game_time = start_date
+                    if hasattr(game_time, "tzinfo") and game_time.tzinfo:
+                        game_time = game_time.replace(tzinfo=None)
             else:
-                game_time = start_date
-                if hasattr(game_time, "tzinfo") and game_time.tzinfo:
-                    game_time = game_time.replace(tzinfo=None)
-        else:
-            game_time = datetime.now()
+                game_time = datetime.now()
 
-        # Fetch forecast
-        forecast = tomorrow_client.get_forecast(
-            latitude=venue.latitude,
-            longitude=venue.longitude,
-            game_time=game_time,
-            venue_id=venue.venue_id,
-            venue_name=venue.name,
-        )
+            # Fetch forecast
+            forecast = tomorrow_client.get_forecast(
+                latitude=venue.latitude,
+                longitude=venue.longitude,
+                game_time=game_time,
+                venue_id=venue.venue_id,
+                venue_name=venue.name,
+            )
 
-        if forecast:
-            forecast.is_indoor = False
-            tomorrow_client.save_forecast(forecast, game.id)
-            stats["forecasts_captured"] += 1
+            if forecast:
+                forecast.is_indoor = False
+                tomorrow_client.save_forecast(forecast, game.id)
+                stats["forecasts_captured"] += 1
 
-            # Check if this is a watchlist game
-            if tomorrow_client.is_weather_concern(forecast):
-                # Calculate the adjustment with pass rate scaling
-                conditions = tomorrow_client.forecast_to_weather_conditions(forecast, game.id)
+                # Check if this is a watchlist game
+                if tomorrow_client.is_weather_concern(forecast):
+                    # Calculate the adjustment with pass rate scaling
+                    conditions = tomorrow_client.forecast_to_weather_conditions(forecast, game.id)
 
-                # Calculate combined pass rate for pass-rate multiplier
-                home_pass_rate = team_pass_rates.get(game.home_team)
-                away_pass_rate = team_pass_rates.get(game.away_team)
-                combined_pass_rate = None
-                if home_pass_rate is not None and away_pass_rate is not None:
-                    combined_pass_rate = (home_pass_rate + away_pass_rate) / 2
+                    # Calculate combined pass rate for pass-rate multiplier
+                    home_pass_rate = team_pass_rates.get(game.home_team)
+                    away_pass_rate = team_pass_rates.get(game.away_team)
+                    combined_pass_rate = None
+                    if home_pass_rate is not None and away_pass_rate is not None:
+                        combined_pass_rate = (home_pass_rate + away_pass_rate) / 2
 
-                adjustment = weather_adjuster.calculate_adjustment(
-                    conditions,
-                    combined_pass_rate=combined_pass_rate,
-                    confidence_factor=forecast.confidence_factor,
-                )
-
-                # Get JP+ predicted total and Vegas total
-                jp_total = None
-                jp_weather_adjusted = None
-                vegas_total = betting_lines.get(game.id)
-                edge = None
-
-                if totals_model and totals_model._trained:
-                    pred = totals_model.predict_total(
-                        game.home_team,
-                        game.away_team,
-                        year=year,
+                    adjustment = weather_adjuster.calculate_adjustment(
+                        conditions,
+                        combined_pass_rate=combined_pass_rate,
+                        confidence_factor=forecast.confidence_factor,
                     )
-                    if pred:
-                        jp_total = pred.predicted_total
-                        jp_weather_adjusted = jp_total + adjustment.total_adjustment
 
-                        # Edge: JP+ weather-adjusted vs Vegas
-                        # Negative edge = JP+ says UNDER (we want this for weather games)
-                        if vegas_total is not None:
-                            edge = jp_weather_adjusted - vegas_total
+                    # Get JP+ predicted total and Vegas total
+                    jp_total = None
+                    jp_weather_adjusted = None
+                    vegas_total = betting_lines.get(game.id)
+                    edge = None
 
-                watchlist_entry = {
-                    "game_id": game.id,
-                    "matchup": f"{game.away_team} @ {game.home_team}",
-                    "home_team": game.home_team,
-                    "away_team": game.away_team,
-                    "venue": venue.name,
-                    "game_time": game_time.isoformat(),
-                    "temperature": forecast.temperature,
-                    "wind_speed": forecast.wind_speed,
-                    "wind_gust": forecast.wind_gust,
-                    "effective_wind": (
-                        (forecast.wind_speed + forecast.wind_gust) / 2
-                        if forecast.wind_gust else forecast.wind_speed
-                    ),
-                    "precip_prob": forecast.precipitation_probability,
-                    "weather_code": forecast.weather_code,
-                    "combined_pass_rate": combined_pass_rate,
-                    "jp_total": jp_total,
-                    "jp_weather_adjusted": jp_weather_adjusted,
-                    "vegas_total": vegas_total,
-                    "edge": edge,
-                    "weather_adjustment": adjustment.total_adjustment,
-                    "wind_adjustment": adjustment.wind_adjustment,
-                    "temp_adjustment": adjustment.temperature_adjustment,
-                    "precip_adjustment": adjustment.precipitation_adjustment,
-                    "confidence": forecast.confidence_factor,
-                    "hours_until_game": forecast.hours_until_game,
-                }
-                stats["watchlist"].append(watchlist_entry)
+                    if totals_model and totals_model._trained:
+                        pred = totals_model.predict_total(
+                            game.home_team,
+                            game.away_team,
+                            year=year,
+                        )
+                        if pred:
+                            jp_total = pred.predicted_total
+                            jp_weather_adjusted = jp_total + adjustment.total_adjustment
 
-                edge_str = f"Edge: {edge:+.1f}" if edge is not None else "Edge: N/A"
-                logger.info(
-                    f"  🚨 WATCHLIST: {game.away_team} @ {game.home_team} | "
-                    f"Wind: {forecast.wind_speed:.0f}/{forecast.wind_gust or 0:.0f} mph, "
-                    f"Temp: {forecast.temperature:.0f}°F | "
-                    f"Weather: {adjustment.total_adjustment:+.1f} pts | {edge_str}"
-                )
+                            # Edge: JP+ weather-adjusted vs Vegas
+                            # Negative edge = JP+ says UNDER (we want this for weather games)
+                            if vegas_total is not None:
+                                edge = jp_weather_adjusted - vegas_total
+
+                    watchlist_entry = {
+                        "game_id": game.id,
+                        "matchup": matchup,
+                        "home_team": game.home_team,
+                        "away_team": game.away_team,
+                        "venue": venue.name,
+                        "game_time": game_time.isoformat(),
+                        "temperature": forecast.temperature,
+                        "wind_speed": forecast.wind_speed,
+                        "wind_gust": forecast.wind_gust,
+                        "effective_wind": (
+                            (forecast.wind_speed + forecast.wind_gust) / 2
+                            if forecast.wind_gust else forecast.wind_speed
+                        ),
+                        "precip_prob": forecast.precipitation_probability,
+                        "weather_code": forecast.weather_code,
+                        "combined_pass_rate": combined_pass_rate,
+                        "jp_total": jp_total,
+                        "jp_weather_adjusted": jp_weather_adjusted,
+                        "vegas_total": vegas_total,
+                        "edge": edge,
+                        "weather_adjustment": adjustment.total_adjustment,
+                        "wind_adjustment": adjustment.wind_adjustment,
+                        "temp_adjustment": adjustment.temperature_adjustment,
+                        "precip_adjustment": adjustment.precipitation_adjustment,
+                        "confidence": forecast.confidence_factor,
+                        "hours_until_game": forecast.hours_until_game,
+                    }
+                    stats["watchlist"].append(watchlist_entry)
+
+                    edge_str = f"Edge: {edge:+.1f}" if edge is not None else "Edge: N/A"
+                    logger.info(
+                        f"  🚨 WATCHLIST: {matchup} | "
+                        f"Wind: {forecast.wind_speed:.0f}/{forecast.wind_gust or 0:.0f} mph, "
+                        f"Temp: {forecast.temperature:.0f}°F | "
+                        f"Weather: {adjustment.total_adjustment:+.1f} pts | {edge_str}"
+                    )
+                else:
+                    logger.info(
+                        f"  ✓ {matchup}: "
+                        f"{forecast.temperature:.0f}°F, {forecast.wind_speed:.0f} mph wind"
+                    )
             else:
-                logger.info(
-                    f"  ✓ {game.away_team} @ {game.home_team}: "
-                    f"{forecast.temperature:.0f}°F, {forecast.wind_speed:.0f} mph wind"
-                )
-        else:
+                stats["forecasts_failed"] += 1
+                logger.warning(f"  ✗ {matchup}: Forecast API returned no data")
+
+        except Exception as e:
             stats["forecasts_failed"] += 1
-            logger.warning(f"  ✗ {game.away_team} @ {game.home_team}: Failed to fetch")
+            logger.error(
+                f"  ✗ {matchup} (game_id={game.id}, venue={venue.name}): "
+                f"Exception during processing: {type(e).__name__}: {e}"
+            )
+            continue
+
+    # Log final hourly API usage
+    final_hourly_calls = tomorrow_client.get_hourly_call_count()
+    logger.info(
+        f"Tomorrow.io hourly quota after capture: "
+        f"{final_hourly_calls}/{tomorrow_client.FREE_TIER_HOURLY_LIMIT} used"
+    )
 
     return stats
 
