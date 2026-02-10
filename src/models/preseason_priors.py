@@ -1631,7 +1631,8 @@ class PreseasonPriors:
         # Non-linear fade curve matching SP+ methodology
         # Uses sigmoid-like curve: slower fade early, faster in middle, levels off
         if games_played <= 0:
-            prior_weight = 0.95 - effective_talent_weight  # Adjust for talent floor
+            # Week 0: 100% preseason (prior + talent), 0% in-season
+            prior_weight = 1.0 - effective_talent_weight
             inseason_weight = 0.0
         elif games_played >= games_for_full_weight:
             prior_weight = 0.05  # Small residual prior weight even late
@@ -1644,6 +1645,14 @@ class PreseasonPriors:
             prior_weight = 0.92 * (1.0 - t ** 1.5) ** 1.2
             prior_weight = max(prior_weight, 0.05)
             inseason_weight = 1.0 - prior_weight - effective_talent_weight
+
+        # Invariant: weights must sum to 1.0 for proper blending
+        weight_sum = prior_weight + inseason_weight + effective_talent_weight
+        assert abs(weight_sum - 1.0) < 1e-9, (
+            f"Blend weights must sum to 1.0, got {weight_sum:.6f} "
+            f"(prior={prior_weight:.4f}, inseason={inseason_weight:.4f}, "
+            f"talent={effective_talent_weight:.4f})"
+        )
 
         logger.debug(
             f"Blending week {games_played}: prior={prior_weight:.1%}, "
