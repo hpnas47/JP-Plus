@@ -106,6 +106,7 @@ class AggregatedAdjustments:
     net_adjustment: float = 0.0  # Total adjustment favoring home team
 
     # Bucket breakdowns (for diagnostics)
+    raw_venue_stack: float = 0.0  # Raw linear sum: HFA + travel + altitude (venue-only, for smoothing)
     raw_env_stack: float = 0.0  # Raw linear sum: HFA + travel + altitude + rest + consecutive_road
     env_score: float = 0.0  # Environmental stack after soft cap
     mental_bucket: float = 0.0  # letdown + lookahead + sandwich (smoothed)
@@ -119,8 +120,11 @@ class AggregatedAdjustments:
     raw_consecutive_road: float = 0.0
 
     # Pro-rata smoothing support (for accurate per-bucket reporting)
-    env_smoothing_factor: float = 1.0  # env_score / raw_env_stack (for pro-rata allocation)
-    situational_score: float = 0.0  # Pure situational: smoothed rest/consec + mental + boosts
+    # venue_smoothing_factor: Applied to HFA, travel, altitude only (the correlated venue stack)
+    # Rest and consecutive_road are added linearly after venue smoothing
+    venue_smoothing_factor: float = 1.0  # venue_score / raw_venue_stack (for HFA/travel/altitude)
+    env_smoothing_factor: float = 1.0  # Deprecated: use venue_smoothing_factor for components
+    situational_score: float = 0.0  # Pure situational: rest + consec + mental + boosts (no venue smoothing)
 
     # Diagnostic totals showing smoothing progression:
     # 1. raw_sum_all: Linear sum of ALL raw values (zero smoothing applied)
@@ -137,9 +141,10 @@ class AggregatedAdjustments:
         """Convert to dictionary for DataFrame creation."""
         return {
             "net_adjustment": self.net_adjustment,
+            "raw_venue_stack": self.raw_venue_stack,
             "raw_env_stack": self.raw_env_stack,
             "env_score": self.env_score,
-            "env_smoothing_factor": self.env_smoothing_factor,
+            "venue_smoothing_factor": self.venue_smoothing_factor,
             "situational_score": self.situational_score,
             "mental_bucket": self.mental_bucket,
             "boosts_bucket": self.boosts_bucket,
@@ -331,68 +336,75 @@ class AdjustmentAggregator:
         result.raw_consecutive_road = consecutive_away - consecutive_home
 
         # =====================================================================
-        # STEP 2: Calculate Raw Environmental Stack (Linear Sum)
+        # STEP 2: Calculate Raw Venue Stack and Raw Environmental Stack
+        # Venue stack = HFA + travel + altitude (correlated venue factors, subject to soft cap)
+        # Env stack = Venue + rest + consecutive_road (full environmental, for diagnostics)
         # =====================================================================
-        result.raw_env_stack = (
+        result.raw_venue_stack = (
             result.raw_hfa
             + result.raw_travel
             + result.raw_altitude
+        )
+        result.raw_env_stack = (
+            result.raw_venue_stack
             + result.raw_rest
             + result.raw_consecutive_road
         )
 
         # =====================================================================
-        # STEP 3: Apply Single-Layer Soft Cap to Environmental Stack
-        # This is the ONLY smoothing applied to environmental factors
+        # STEP 3: Apply Single-Layer Soft Cap to VENUE Stack Only
+        # Venue = HFA + travel + altitude (the correlated components)
+        # Rest and consecutive_road are added linearly AFTER venue smoothing
         #
-        # DESIGN DECISION: Symmetric Cap for Positive and Negative Stacks
+        # DESIGN DECISION: Soft cap on venue stack, not full env stack
         # ---------------------------------------------------------------
-        # The cap uses the same threshold (5.0) and excess weight (0.60) for
-        # both positive and negative env stacks. This is acceptable because:
+        # The soft cap exists to prevent extreme venue stacking (e.g., altitude
+        # game after cross-country flight). Rest and consecutive_road are
+        # situational factors that should NOT trigger venue smoothing.
+        #
+        # Example of the bug this fixes:
+        #   HFA=3.5, travel=2.0, altitude=1.5, rest=-2.0 → raw_env=5.0, factor=1.0
+        #   HFA=3.5, travel=2.0, altitude=1.5, rest=+0.5 → raw_env=7.5, factor=0.67
+        # The rest value changing shouldn't affect HFA/travel/altitude smoothing.
         #
         # Empirical analysis (2023-2025, 1,824 games):
-        #   - Positive cap (>5.0): 238 games (13.0%) - regular occurrence
-        #   - Negative cap (<-5.0): 0 games (0.00%) - NEVER TRIGGERED
-        #   - Most negative stack observed: -1.50 pts
-        #   - Ratio: 238:0
-        #
-        # Why negative extremes are so rare:
-        #   - HFA is always positive (+2.5 to +4.5)
-        #   - Travel is always positive (away team traveled)
-        #   - Altitude is always positive or zero
-        #   - Only rest_advantage can be negative (home on short week)
-        #   - Even worst case (neutral + short week + opponent bye) ~ -3.0 pts
-        #
-        # The negative cap threshold is effectively dead code, so adding
-        # asymmetric logic would add complexity for zero practical benefit.
+        #   - Venue stack cap trigger (>5.0): ~13% of games
+        #   - Negative venue stack (<0): Never occurs (all three are always positive)
         # =====================================================================
-        raw_stack = result.raw_env_stack
+        venue_stack = result.raw_venue_stack
 
-        if abs(raw_stack) <= self.env_soft_cap:
+        if abs(venue_stack) <= self.env_soft_cap:
             # Standard game - use linear sum as-is (no damping)
-            result.env_score = raw_stack
+            venue_score = venue_stack
             result.env_was_capped = False
         else:
-            # Extreme stack - apply soft cap
-            # env_score = (cap + excess * weight) * sign
-            sign = 1 if raw_stack > 0 else -1
-            excess = abs(raw_stack) - self.env_soft_cap
-            result.env_score = (
+            # Extreme venue stack - apply soft cap
+            # venue_score = (cap + excess * weight) * sign
+            sign = 1 if venue_stack > 0 else -1
+            excess = abs(venue_stack) - self.env_soft_cap
+            venue_score = (
                 self.env_soft_cap + excess * self.env_excess_weight
             ) * sign
             result.env_was_capped = True
 
             logger.debug(
-                f"Env soft cap: raw={raw_stack:.2f} -> capped={result.env_score:.2f} "
+                f"Venue soft cap: raw={venue_stack:.2f} -> capped={venue_score:.2f} "
                 f"(threshold={self.env_soft_cap}, excess={excess:.2f})"
             )
 
-        # Calculate pro-rata smoothing factor for per-component allocation
+        # Calculate venue smoothing factor for HFA/travel/altitude allocation
         # This allows SpreadGenerator to report accurate post-smoothing values
-        if abs(raw_stack) > 0.001:
-            result.env_smoothing_factor = result.env_score / raw_stack
+        if abs(venue_stack) > 0.001:
+            result.venue_smoothing_factor = venue_score / venue_stack
         else:
-            result.env_smoothing_factor = 1.0
+            result.venue_smoothing_factor = 1.0
+
+        # env_score = smoothed venue + linear rest + linear consecutive_road
+        result.env_score = venue_score + result.raw_rest + result.raw_consecutive_road
+
+        # Deprecated: env_smoothing_factor kept for backward compatibility
+        # Use venue_smoothing_factor for HFA/travel/altitude components
+        result.env_smoothing_factor = result.venue_smoothing_factor
 
         # =====================================================================
         # STEP 4: Mental Bucket (Standard Smoothing)
@@ -470,14 +482,15 @@ class AdjustmentAggregator:
         # =====================================================================
         # STEP 5.5: Calculate Pure Situational Score
         # This is what SpreadGenerator should report as "situational"
-        # Includes: rest, consecutive_road (both pro-rata smoothed), mental, boosts
+        # Includes: rest, consecutive_road (linear), mental (smoothed), boosts (linear)
         # Excludes: HFA, travel, altitude (those are separate components)
+        #
+        # NOTE: Rest and consecutive_road are NOT smoothed by venue factor.
+        # They're situational factors independent of venue stacking.
         # =====================================================================
-        smoothed_rest = result.raw_rest * result.env_smoothing_factor
-        smoothed_consec = result.raw_consecutive_road * result.env_smoothing_factor
         result.situational_score = (
-            smoothed_rest
-            + smoothed_consec
+            result.raw_rest
+            + result.raw_consecutive_road
             + result.mental_bucket
             + result.boosts_bucket
         )

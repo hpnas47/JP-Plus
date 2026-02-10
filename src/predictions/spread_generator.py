@@ -522,9 +522,9 @@ class SpreadGenerator:
         )
 
         # Store components with pro-rata smoothing applied
-        # The aggregator applies soft-cap to env stack; we use env_smoothing_factor
-        # to allocate the reduction proportionally across HFA, travel, altitude
-        factor = aggregated.env_smoothing_factor
+        # The aggregator applies soft-cap to VENUE stack only (HFA + travel + altitude)
+        # Rest and consecutive_road are added linearly, not smoothed
+        factor = aggregated.venue_smoothing_factor
         components.home_field = aggregated.raw_hfa * factor
         components.travel = aggregated.raw_travel * factor
         components.altitude = aggregated.raw_altitude * factor
