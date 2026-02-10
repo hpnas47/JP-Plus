@@ -335,12 +335,12 @@ class HomeFieldAdvantage:
             if n_games < min_games:
                 # Not enough data, use conference prior
                 conf = team_conferences.get(team, "default")
-                calculated_hfa[team] = CONFERENCE_HFA_PRIORS.get(conf, CONFERENCE_HFA_PRIORS["default"])
+                calculated_hfa[team] = CONFERENCE_HFA_DEFAULTS.get(conf, CONFERENCE_HFA_DEFAULTS["default"])
                 continue
 
             # Get conference prior for regression
             conf = team_conferences.get(team, "default")
-            prior = CONFERENCE_HFA_PRIORS.get(conf, CONFERENCE_HFA_PRIORS["default"])
+            prior = CONFERENCE_HFA_DEFAULTS.get(conf, CONFERENCE_HFA_DEFAULTS["default"])
 
             # Bayesian regression: more games = trust data more
             # At regress_games, we weight data ~70%, prior ~30%
