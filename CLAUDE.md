@@ -53,16 +53,16 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-08)
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-10)
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,273 | 12.97 | 16.43 | 51.0% | 52.3% |
-| Phase 1 (Calibration) | 1–3 | 608 | 14.77 | — | 47.1% | 48.6% |
-| **Phase 2 (Core)** | **4–15** | **2,489** | **12.50** | **15.82** | **52.2%** | **53.5%** |
+| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.17 | 16.67 | 50.8% | 52.1% |
+| Phase 1 (Calibration) | 1–3 | 960 | 14.82 | — | 47.9% | 49.1% |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.50** | **15.82** | **52.1%** | **53.4%** |
 | Phase 3 (Postseason) | 16+ | 176 | 13.41 | — | 47.4% | 48.3% |
-| 3+ Edge (Core) | 4–15 | 1,441 | — | — | 54.0% (764-650) | 55.6% (810-648) |
-| 5+ Edge (Core) | 4–15 | 882 | — | — | 54.7% (473-391) | 57.8% (525-384) |
+| 3+ Edge (Core) | 4–15 | 1,416 | — | — | 53.9% (763-653) | 55.4% (805-648) |
+| 5+ Edge (Core) | 4–15 | 867 | — | — | 54.4% (472-395) | 57.5% (520-384) |
 
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
@@ -137,4 +137,4 @@
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
 
-<!-- Last validated: 2026-02-08 by generate_docs.py -->
+<!-- Last validated: 2026-02-10 by generate_docs.py -->

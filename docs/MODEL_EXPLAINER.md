@@ -74,30 +74,30 @@ Before diving into the numbers, here's what each metric means:
 
 ### Multi-Year Backtest (2022-2025)
 
-Walk-forward backtest across 4 seasons (3,273 games). Model trained only on data available at prediction time — no future leakage.
+Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data available at prediction time — no future leakage.
 
-*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-08.*
+*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-10.*
 
 #### Performance by Season Phase
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1–3 | 608 | 14.77 | 18.61 | 47.1% | 48.6% | 47.6% | 48.6% | 49.8% |
-| **Core** | **4–15** | **2,489** | **12.50** | **15.82** | **52.2%** | **53.5%** | **54.0%** | **54.7%** | **57.8%** |
-| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 46.7% | 46.7% | 46.8% |
-| **Full** | **All** | **3,273** | **12.97** | **16.43** | **51.0%** | **52.3%** | **52.2%** | **52.7%** | **55.2%** |
+| Calibration | 1–3 | 960 | 14.82 | 18.75 | 47.9% | 49.1% | 48.1% | 48.9% | 50.2% |
+| **Core** | **4–15** | **2,485** | **12.50** | **15.82** | **52.2%** | **53.5%** | **53.9%** | **54.4%** | **57.3%** |
+| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 47.2% | 46.7% | 46.8% |
+| **Full** | **All** | **3,657** | **13.17** | **16.67** | **50.8%** | **52.1%** | **51.7%** | **52.1%** | **54.8%** |
 
 **The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
 
-#### Core Season ATS by Edge (Weeks 4–15, 2,489 games)
+#### Core Season ATS by Edge (Weeks 4–15, 2,485 games)
 
 | Edge | vs Closing Line | vs Opening Line |
 |------|-----------------|-----------------|
-| All picks | 1,272-1,165 (52.2%) | 1,311-1,139 (53.5%) |
-| 3+ pts | 764-650 (54.0%) | 810-648 (55.6%) |
-| **5+ pts** | **473-391 (54.7%)** | **525-384 (57.8%)** |
+| All picks | 1,268-1,165 (52.1%) | 1,305-1,139 (53.4%) |
+| 3+ pts | 763-653 (53.9%) | 805-648 (55.4%) |
+| **5+ pts** | **472-395 (54.4%)** | **520-384 (57.5%)** |
 
-**Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.7% vs closing lines and 57.8% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%).
+**Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.4% vs closing lines and 57.5% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%).
 
 ### ATS by Season and Phase (vs Closing Line)
 
@@ -137,14 +137,14 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 *CLV measures how the market moves after we identify an edge. Positive CLV = the closing line moved toward our prediction, meaning sharp money agrees with us.*
 
-#### Full Season (Weeks 1+, 3,258 games with lines)
+#### Full Season (Weeks 1+, 3,621 games with lines)
 
 | Edge Filter | N | Mean CLV (vs Close) | CLV > 0 | ATS % (Close) |
 |-------------|---|-------------------|---------|---------------|
-| All picks | 3,258 | -0.32 | 29.0% | 51.1% |
-| 3+ pt edge | 1,997 | -0.43 | 26.2% | 51.8% |
-| 5+ pt edge | 1,294 | -0.50 | 23.3% | 52.3% |
-| 7+ pt edge | 779 | -0.51 | 21.2% | 53.0% |
+| All picks | 3,621 | -0.29 | 28.7% | 50.8% |
+| 3+ pt edge | 2,254 | -0.42 | 25.6% | 51.7% |
+| 5+ pt edge | 1,491 | -0.47 | 24.8% | 52.1% |
+| 7+ pt edge | 924 | -0.49 | 22.7% | 51.7% |
 
 #### Core Season (Weeks 4-15, 2,489 games)
 

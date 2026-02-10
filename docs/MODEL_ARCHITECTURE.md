@@ -15,7 +15,7 @@
 
 ## Backtest Performance (2022-2025)
 
-Walk-forward backtest across 4 seasons covering the full CFB calendar (3,273 games). Model trained on data available at prediction time — no future leakage.
+Walk-forward backtest across 4 seasons covering the full CFB calendar (3,657 games). Model trained on data available at prediction time — no future leakage.
 
 *All metrics verified 2026-02-10.*
 
@@ -30,27 +30,27 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,273 gam
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1-3 | 608 | 14.77 | 18.61 | 47.1% | 48.6% | 47.6% | 48.6% | 49.8% |
-| **Core** | **4-15** | **2,489** | **12.50** | **15.82** | **52.2%** | **53.5%** | **54.0%** | **54.7%** | **57.8%** |
-| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 46.7% | 46.7% | 46.8% |
-| **Full Season** | All | 3,273 | 12.97 | 16.43 | 51.0% | 52.3% | 52.2% | 52.7% | 55.2% |
+| Calibration | 1-3 | 960 | 14.82 | 18.75 | 47.9% | 49.1% | 48.1% | 48.9% | 50.2% |
+| **Core** | **4-15** | **2,485** | **12.50** | **15.82** | **52.1%** | **53.4%** | **53.9%** | **54.4%** | **57.5%** |
+| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 47.2% | 46.7% | 46.8% |
+| **Full Season** | All | 3,657 | 13.17 | 16.67 | 50.8% | 52.1% | 51.7% | 52.1% | 54.8% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone — 54.7% ATS at 5+ edge vs closing, 57.8% vs opening
+- **Core (Weeks 4-15)**: Profitable zone — 54.4% ATS at 5+ edge vs closing, 57.3% vs opening
 - **Postseason (Weeks 16+)**: Bowl games struggle due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 ### Core Season Detail (Weeks 4-15)
 
-The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,489-game sample.
+The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,485-game sample.
 
 #### Against The Spread (ATS)
 
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
-| **All picks** | 1272-1165 (52.2%) | 1311-1139 (53.5%) |
-| **3+ pt edge** | 764-650 (54.0%) | 810-648 (55.6%) |
-| **5+ pt edge** | 473-391 (54.7%) | 525-384 (57.8%) |
+| **All picks** | 1268-1165 (52.1%) | 1305-1139 (53.4%) |
+| **3+ pt edge** | 763-653 (53.9%) | 805-648 (55.4%) |
+| **5+ pt edge** | 472-395 (54.4%) | 520-384 (57.5%) |
 
 Opening line performance exceeds closing line by ~2%, indicating the model captures value that the market prices out by game time.
 
@@ -78,14 +78,14 @@ Opening line performance exceeds closing line by ~2%, indicating the model captu
 
 CLV measures how the market moves after we identify an edge. Positive CLV = sharp money agrees with us.
 
-**Full Season (Weeks 1+, 3,258 games with lines):**
+**Full Season (Weeks 1+, 3,621 games with lines):**
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 3,258 | -0.32 | 29.0% | 51.1% |
-| 3+ pt edge | 1,997 | -0.43 | 26.2% | 51.8% |
-| **5+ pt edge** | **1,294** | **-0.50** | **23.3%** | **52.3%** |
-| 7+ pt edge | 779 | -0.51 | 21.2% | 53.0% |
+| All picks | 3,621 | -0.29 | 28.7% | 50.8% |
+| 3+ pt edge | 2,254 | -0.42 | 25.6% | 51.7% |
+| **5+ pt edge** | **1,491** | **-0.47** | **24.8%** | **52.1%** |
+| 7+ pt edge | 924 | -0.49 | 22.7% | 51.7% |
 
 **CLV vs Opening Line (value available at bet time):**
 
