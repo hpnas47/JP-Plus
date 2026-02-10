@@ -640,7 +640,8 @@ def generate_ratings(year: int, top_n: int = 25) -> list[dict]:
     games_pd = sd.games_df.to_pandas()
 
     # Calculate EFM ratings (games_df used for turnover stats internally)
-    efm = EfficiencyFoundationModel(ridge_alpha=10.0)
+    # ridge_alpha=50.0 matches backtest default for consistent ratings
+    efm = EfficiencyFoundationModel(ridge_alpha=50.0)
     efm.calculate_ratings(plays_pd, games_pd, fbs_teams=sd.fbs_teams)
     efm_df = efm.get_ratings_df()
 

@@ -206,35 +206,35 @@ End-of-season power ratings including all postseason (bowls + CFP through Nation
 
 | Rank | Team | Overall | Off (rank) | Def (rank) | ST (rank) |
 |------|------|---------|------------|------------|-----------|
-| 1 | **Ohio State** | +30.0 | +12.1 (9) | +15.9 (2) | +2.00 (13) |
-| 2 | Indiana | +28.7 | +16.5 (2) | +10.7 (7) | +1.54 (19) |
-| 3 | Notre Dame | +26.5 | +12.9 (6) | +12.6 (5) | +0.97 (33) |
-| 4 | Miami | +25.8 | +10.2 (14) | +13.1 (4) | +2.49 (8) |
-| 5 | Texas Tech | +25.1 | +4.9 (36) | +17.3 (1) | +2.87 (5) |
-| 6 | Oregon | +23.5 | +12.6 (7) | +10.1 (10) | +0.82 (44) |
-| 7 | Alabama | +22.1 | +9.8 (15) | +11.8 (6) | +0.39 (61) |
-| 8 | Utah | +21.6 | +13.0 (5) | +7.7 (20) | +0.87 (39) |
-| 9 | Vanderbilt | +20.5 | +18.0 (1) | -0.3 (66) | +2.84 (6) |
-| 10 | Georgia | +19.8 | +8.0 (20) | +8.8 (15) | +3.04 (4) |
-| 11 | Oklahoma | +19.3 | +2.8 (48) | +15.3 (3) | +1.20 (27) |
-| 12 | Ole Miss | +17.8 | +11.8 (11) | +2.5 (44) | +3.49 (2) |
-| 13 | Tennessee | +17.4 | +10.6 (12) | +2.7 (43) | +4.09 (1) |
-| 14 | Louisville | +17.2 | +6.4 (29) | +8.4 (17) | +2.48 (9) |
-| 15 | Washington | +16.6 | +10.6 (13) | +6.6 (26) | -0.57 (91) |
-| 16 | Florida State | +16.4 | +12.0 (10) | +2.3 (46) | +2.06 (12) |
-| 17 | Texas A&M | +15.5 | +7.7 (21) | +7.3 (23) | +0.52 (56) |
-| 18 | BYU | +15.2 | +7.6 (22) | +6.9 (24) | +0.58 (53) |
-| 19 | Missouri | +14.5 | +4.7 (38) | +10.4 (9) | -0.56 (90) |
-| 20 | South Florida | +14.1 | +7.0 (25) | +6.2 (27) | +0.94 (34) |
-| 21 | USC | +13.3 | +12.4 (8) | +0.3 (60) | +0.59 (52) |
-| 22 | Penn State | +12.9 | +8.5 (18) | +3.9 (37) | +0.40 (60) |
-| 23 | SMU | +12.9 | +7.4 (24) | +5.4 (30) | +0.09 (71) |
-| 24 | James Madison | +12.5 | +4.1 (41) | +7.5 (22) | +0.89 (38) |
-| 25 | Virginia | +12.3 | +1.3 (56) | +9.8 (11) | +1.25 (26) |
+| 1 | **Ohio State** | +30.3 | +12.7 (8) | +15.6 (3) | +2.00 (13) |
+| 2 | Indiana | +29.5 | +17.1 (2) | +11.0 (8) | +1.54 (19) |
+| 3 | Miami | +26.5 | +10.5 (14) | +13.4 (4) | +2.49 (8) |
+| 4 | Notre Dame | +26.3 | +12.9 (7) | +12.4 (5) | +0.97 (33) |
+| 5 | Texas Tech | +25.3 | +4.9 (36) | +17.5 (1) | +2.87 (5) |
+| 6 | Oregon | +24.0 | +13.0 (6) | +10.2 (10) | +0.82 (44) |
+| 7 | Alabama | +22.0 | +9.8 (16) | +11.8 (6) | +0.39 (61) |
+| 8 | Utah | +21.9 | +13.5 (4) | +7.5 (22) | +0.87 (39) |
+| 9 | Vanderbilt | +20.3 | +18.6 (1) | -1.0 (71) | +2.84 (6) |
+| 10 | Georgia | +19.7 | +8.1 (19) | +8.6 (18) | +3.04 (4) |
+| 11 | Oklahoma | +19.0 | +2.1 (51) | +15.8 (2) | +1.20 (27) |
+| 12 | Ole Miss | +17.7 | +12.2 (11) | +2.0 (47) | +3.49 (2) |
+| 13 | Louisville | +17.4 | +6.4 (29) | +8.5 (19) | +2.48 (9) |
+| 14 | Tennessee | +17.1 | +11.1 (12) | +1.9 (49) | +4.09 (1) |
+| 15 | Washington | +16.7 | +10.9 (13) | +6.4 (28) | -0.57 (91) |
+| 16 | South Florida | +16.1 | +8.0 (21) | +7.2 (23) | +0.94 (34) |
+| 17 | Florida State | +16.1 | +12.3 (10) | +1.7 (50) | +2.06 (12) |
+| 18 | Texas A&M | +15.2 | +7.5 (23) | +7.2 (24) | +0.52 (56) |
+| 19 | BYU | +15.1 | +7.5 (24) | +7.0 (25) | +0.58 (53) |
+| 20 | James Madison | +14.7 | +4.8 (37) | +9.0 (16) | +0.89 (38) |
+| 21 | Missouri | +14.2 | +4.5 (40) | +10.3 (9) | -0.56 (90) |
+| 22 | SMU | +12.9 | +7.3 (25) | +5.5 (31) | +0.09 (71) |
+| 23 | Penn State | +12.5 | +8.6 (18) | +3.5 (39) | +0.40 (60) |
+| 24 | USC | +12.4 | +12.4 (9) | -0.6 (67) | +0.59 (52) |
+| 25 | Virginia | +12.1 | +1.0 (55) | +9.9 (12) | +1.25 (26) |
 
-**Ohio State** — JP+ #1 despite losing to Indiana in CFP semifinal. Best combination of offense (#9) and elite defense (#2). The model values consistent efficiency over tournament results.
+**Ohio State** — JP+ #1 despite losing to Indiana in CFP semifinal. Best combination of offense (#8) and elite defense (#3). The model values consistent efficiency over tournament results.
 
-**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP. JP+ #2 overall with the #2 offense in the country. Their championship run validates the explosive offense (18.0 IsoPPP) that JP+ identified all season.
+**Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP. JP+ #2 overall with the #2 offense in the country. Their championship run validates the explosive offense that JP+ identified all season.
 
 **Spread Calculation:** Team A rating - Team B rating = expected point spread (before game-specific adjustments).
 
