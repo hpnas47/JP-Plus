@@ -677,28 +677,21 @@ def walk_forward_predict(
             pl.col("defense").is_in(fbs_teams_list)
         )
 
+        # Check if we have enough training data
+        use_pure_priors = False
         if len(train_plays_pl) < 5000:
-            logger.warning(f"Week {pred_week}: insufficient play data ({len(train_plays_pl)}), skipping")
-            continue
-
-        # Convert to pandas for EFM (sklearn needs pandas/numpy)
-        # P3.4: Apply optimized dtypes for memory efficiency
-        train_plays_pd = optimize_dtypes(train_plays_pl.to_pandas())
-        train_games_pd = optimize_dtypes(train_games_pl.to_pandas())
-
-        # DATA LEAKAGE GUARD: Verify no future data in training set
-        if "week" in train_plays_pd.columns:
-            max_train_week = train_plays_pd["week"].max()
-            assert max_train_week < pred_week, (
-                f"DATA LEAKAGE: Training plays include week {max_train_week} "
-                f"but predicting week {pred_week}. Training data must be < pred_week."
-            )
-        if "week" in train_games_pd.columns:
-            max_train_game_week = train_games_pd["week"].max()
-            assert max_train_game_week < pred_week, (
-                f"DATA LEAKAGE: Training games include week {max_train_game_week} "
-                f"but predicting week {pred_week}. Training data must be < pred_week."
-            )
+            # Not enough plays to train EFM - can we use pure preseason priors?
+            if preseason_priors is not None and preseason_priors.preseason_ratings:
+                use_pure_priors = True
+                logger.info(
+                    f"Week {pred_week}: no training data, using 100% preseason priors"
+                )
+            else:
+                logger.warning(
+                    f"Week {pred_week}: insufficient play data ({len(train_plays_pl)}) "
+                    f"and no preseason priors, skipping"
+                )
+                continue
 
         # Initialize HFA with team-specific values and trajectory modifiers
         hfa = HomeFieldAdvantage(base_hfa=hfa_value, global_offset=hfa_global_offset)
@@ -706,55 +699,83 @@ def walk_forward_predict(
         if team_records:
             hfa.calculate_trajectory_modifiers(team_records, year)
 
-        # Build team-specific HFA lookup for EFM fraud tax (uses full priority chain)
-        hfa_lookup = {
-            team: hfa.get_hfa_value(team)
-            for team in fbs_teams
-        }
+        if use_pure_priors:
+            # Week 1 (or any week with no training data): use 100% preseason priors
+            team_ratings = {
+                team: rating.combined_rating
+                for team, rating in preseason_priors.preseason_ratings.items()
+            }
+            logger.debug(f"Week {pred_week}: using {len(team_ratings)} preseason ratings")
+        else:
+            # Normal case: train EFM on available data
+            # Convert to pandas for EFM (sklearn needs pandas/numpy)
+            # P3.4: Apply optimized dtypes for memory efficiency
+            train_plays_pd = optimize_dtypes(train_plays_pl.to_pandas())
+            train_games_pd = optimize_dtypes(train_games_pl.to_pandas())
 
-        # Build EFM model
-        efm = EfficiencyFoundationModel(
-            ridge_alpha=ridge_alpha,
-            efficiency_weight=efficiency_weight,
-            explosiveness_weight=explosiveness_weight,
-            turnover_weight=turnover_weight,
-            garbage_time_weight=garbage_time_weight,
-            asymmetric_garbage=asymmetric_garbage,
-            ooc_credibility_weight=ooc_credibility_weight,
-        )
+            # DATA LEAKAGE GUARD: Verify no future data in training set
+            if "week" in train_plays_pd.columns:
+                max_train_week = train_plays_pd["week"].max()
+                assert max_train_week < pred_week, (
+                    f"DATA LEAKAGE: Training plays include week {max_train_week} "
+                    f"but predicting week {pred_week}. Training data must be < pred_week."
+                )
+            if "week" in train_games_pd.columns:
+                max_train_game_week = train_games_pd["week"].max()
+                assert max_train_game_week < pred_week, (
+                    f"DATA LEAKAGE: Training games include week {max_train_game_week} "
+                    f"but predicting week {pred_week}. Training data must be < pred_week."
+                )
 
-        efm.calculate_ratings(
-            train_plays_pd, train_games_pd,
-            max_week=pred_week - 1, season=year,
-            team_conferences=team_conferences,
-            hfa_lookup=hfa_lookup,
-            fbs_teams=fbs_teams,  # P0: Exclude FCS teams from normalization
-        )
+            # Build team-specific HFA lookup for EFM fraud tax (uses full priority chain)
+            hfa_lookup = {
+                team: hfa.get_hfa_value(team)
+                for team in fbs_teams
+            }
 
-        # Get ratings directly from EFM (full precision, already normalized to std=12)
-        # IMPORTANT: Do NOT use get_ratings_df() here - it rounds to 1 decimal place
-        # EFM._normalize_ratings() already scales to rating_std (default 12.0)
-        # No second normalization needed - use ratings as-is
-        team_ratings = {
-            team: efm.get_rating(team)
-            for team in fbs_teams
-            if team in efm.team_ratings
-        }
-
-        # Blend with preseason priors if available
-        if preseason_priors is not None and preseason_priors.preseason_ratings:
-            games_played = pred_week - 1
-            blended = preseason_priors.blend_with_inseason(
-                team_ratings,
-                games_played=games_played,
-                games_for_full_weight=prior_weight,
-                talent_floor_weight=0.08,
+            # Build EFM model
+            efm = EfficiencyFoundationModel(
+                ridge_alpha=ridge_alpha,
+                efficiency_weight=efficiency_weight,
+                explosiveness_weight=explosiveness_weight,
+                turnover_weight=turnover_weight,
+                garbage_time_weight=garbage_time_weight,
+                asymmetric_garbage=asymmetric_garbage,
+                ooc_credibility_weight=ooc_credibility_weight,
             )
-            team_ratings = blended
-            logger.debug(
-                f"Week {pred_week}: blended preseason "
-                f"(preseason weight={1 - min(games_played/prior_weight, 1.0):.0%})"
+
+            efm.calculate_ratings(
+                train_plays_pd, train_games_pd,
+                max_week=pred_week - 1, season=year,
+                team_conferences=team_conferences,
+                hfa_lookup=hfa_lookup,
+                fbs_teams=fbs_teams,  # P0: Exclude FCS teams from normalization
             )
+
+            # Get ratings directly from EFM (full precision, already normalized to std=12)
+            # IMPORTANT: Do NOT use get_ratings_df() here - it rounds to 1 decimal place
+            # EFM._normalize_ratings() already scales to rating_std (default 12.0)
+            # No second normalization needed - use ratings as-is
+            team_ratings = {
+                team: efm.get_rating(team)
+                for team in fbs_teams
+                if team in efm.team_ratings
+            }
+
+            # Blend with preseason priors if available
+            if preseason_priors is not None and preseason_priors.preseason_ratings:
+                games_played = pred_week - 1
+                blended = preseason_priors.blend_with_inseason(
+                    team_ratings,
+                    games_played=games_played,
+                    games_for_full_weight=prior_weight,
+                    talent_floor_weight=0.08,
+                )
+                team_ratings = blended
+                logger.debug(
+                    f"Week {pred_week}: blended preseason "
+                    f"(preseason weight={1 - min(games_played/prior_weight, 1.0):.0%})"
+                )
 
         # Log HFA sources for this week's teams (first week only to avoid spam)
         if pred_week == start_week:
