@@ -7,7 +7,8 @@ TRIPLE_OPTION_TEAMS: frozenset[str] = frozenset({
     "Army",
     "Navy",
     "Air Force",
-    "Kennesaw State",
+    # Note: Kennesaw State ran triple option in FCS but transitioned
+    # to conventional offense when moving to FBS in 2024
 })
 
 # High altitude venues with elevation (feet) and point adjustment for visiting sea-level teams

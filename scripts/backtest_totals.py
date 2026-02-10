@@ -225,6 +225,8 @@ def main():
                         help='Ridge alpha (default: 10.0)')
     parser.add_argument('--decay', type=float, default=1.0,
                         help='Within-season recency decay factor (default: 1.0 = no decay)')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Output CSV file path for game-level predictions')
     args = parser.parse_args()
 
     client = CFBDClient()
@@ -245,6 +247,34 @@ def main():
         return
 
     preds_df = pd.DataFrame(all_predictions)
+
+    # Export to CSV if requested
+    if args.output:
+        # Add edge columns for convenience
+        preds_df['edge_close'] = preds_df['predicted_total'] - preds_df['vegas_total_close']
+        preds_df['edge_open'] = preds_df['predicted_total'] - preds_df['vegas_total_open']
+
+        # Add play column (OVER/UNDER based on edge)
+        preds_df['play'] = preds_df['edge_close'].apply(
+            lambda x: 'OVER' if x > 0 else ('UNDER' if x < 0 else 'PASS')
+        )
+
+        # Add result column
+        def get_result(row):
+            if pd.isna(row['vegas_total_close']):
+                return 'NO_LINE'
+            if row['actual_total'] == row['vegas_total_close']:
+                return 'PUSH'
+            if row['edge_close'] > 0:  # JP+ says OVER
+                return 'WIN' if row['actual_total'] > row['vegas_total_close'] else 'LOSS'
+            elif row['edge_close'] < 0:  # JP+ says UNDER
+                return 'WIN' if row['actual_total'] < row['vegas_total_close'] else 'LOSS'
+            return 'PASS'
+
+        preds_df['result'] = preds_df.apply(get_result, axis=1)
+
+        preds_df.to_csv(args.output, index=False)
+        logger.info(f"Saved {len(preds_df)} predictions to {args.output}")
 
     # Print results
     print("\n" + "=" * 80)
