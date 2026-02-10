@@ -40,7 +40,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -67,31 +67,93 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_current_cfb_week() -> tuple[int, int]:
-    """Auto-detect current CFB season year and week.
+class OffSeasonError(Exception):
+    """Raised when called during off-season (no games scheduled)."""
+    pass
+
+
+def get_current_cfb_week(cfbd_client: CFBDClient) -> tuple[int, int]:
+    """Auto-detect current CFB season year and week using CFBD calendar API.
+
+    Finds the current or next upcoming week with scheduled games.
+    Handles Week 0, regular season (1-15), and postseason (16+).
+
+    Args:
+        cfbd_client: CFBD API client
 
     Returns:
         Tuple of (year, week)
+
+    Raises:
+        OffSeasonError: If no games found within 14 days (off-season)
     """
     now = datetime.now()
+    today = now.date()
 
-    # CFB season: late August through early January
+    # Determine candidate years to check
+    # Aug-Dec: current year season
+    # Jan: previous year's postseason
+    # Feb-Jul: off-season (will fail)
     if now.month >= 8:
-        year = now.year
-        # Week 1 is usually last week of August / first week of September
-        # Rough estimate: calendar week - 34 (week 35 = CFB week 1)
-        week_of_year = now.isocalendar()[1]
-        week = max(1, min(week_of_year - 34, 15))
-    elif now.month <= 1:
-        # Bowl season - previous year's season
-        year = now.year - 1
-        week = 16  # Postseason
+        candidate_years = [now.year]
+    elif now.month == 1:
+        candidate_years = [now.year - 1, now.year]  # Check both for early Jan
     else:
-        # Off-season
-        year = now.year
-        week = 1
+        # Feb-Jul: true off-season
+        raise OffSeasonError(
+            f"Off-season detected ({now.strftime('%B %Y')}). "
+            "CFB games run late August through early January. "
+            "Use --year and --week to specify a historical period."
+        )
 
-    return year, week
+    for year in candidate_years:
+        try:
+            calendar = cfbd_client.get_calendar(year)
+            if not calendar:
+                continue
+
+            # Find current or next upcoming week
+            best_week = None
+            best_distance = float('inf')
+
+            for week_info in calendar:
+                # Parse week dates
+                try:
+                    start = datetime.strptime(
+                        week_info.first_game_start[:10], "%Y-%m-%d"
+                    ).date()
+                    end = datetime.strptime(
+                        week_info.last_game_start[:10], "%Y-%m-%d"
+                    ).date()
+                except (ValueError, TypeError, AttributeError):
+                    continue
+
+                # Check if we're currently in this week (with buffer for Sunday)
+                end_with_buffer = end + timedelta(days=2)
+                if start <= today <= end_with_buffer:
+                    return year, week_info.week
+
+                # Track nearest upcoming week (within 14 days)
+                if start > today:
+                    days_until = (start - today).days
+                    if days_until <= 14 and days_until < best_distance:
+                        best_distance = days_until
+                        best_week = week_info.week
+
+            # Return nearest upcoming week if found
+            if best_week is not None:
+                logger.info(f"Next CFB week in {best_distance} days")
+                return year, best_week
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch calendar for {year}: {e}")
+            continue
+
+    # No games found within window
+    raise OffSeasonError(
+        f"No CFB games found within 14 days of {today}. "
+        "Use --year and --week to specify a target period."
+    )
 
 
 def calculate_team_pass_rates(
@@ -287,6 +349,7 @@ def capture_with_watchlist(
         "indoor_games": 0,
         "forecasts_captured": 0,
         "forecasts_failed": 0,
+        "games_skipped_no_time": 0,
         "venue_not_found": 0,
         "watchlist": [],  # Games with weather concerns
     }
@@ -339,23 +402,41 @@ def capture_with_watchlist(
             break
 
         matchup = f"{game.away_team} @ {game.home_team}"
-        try:
-            # Parse game time
-            start_date = getattr(game, "start_date", None)
-            if start_date:
-                if isinstance(start_date, str):
-                    try:
-                        game_time = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-                        game_time = game_time.replace(tzinfo=None)
-                    except ValueError:
-                        game_time = datetime.now()
-                else:
-                    game_time = start_date
-                    if hasattr(game_time, "tzinfo") and game_time.tzinfo:
-                        game_time = game_time.replace(tzinfo=None)
-            else:
-                game_time = datetime.now()
 
+        # Parse game time - must be valid and timezone-aware (UTC)
+        start_date = getattr(game, "start_date", None)
+        game_time: datetime | None = None
+
+        if start_date:
+            if isinstance(start_date, str):
+                try:
+                    # Parse ISO format, convert "Z" suffix to proper UTC offset
+                    game_time = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+                    # Ensure timezone-aware (UTC)
+                    if game_time.tzinfo is None:
+                        game_time = game_time.replace(tzinfo=timezone.utc)
+                except ValueError as e:
+                    logger.warning(
+                        f"  ⏭ {matchup} (game_id={game.id}): "
+                        f"Invalid start_date format '{start_date}': {e}"
+                    )
+                    stats["games_skipped_no_time"] += 1
+                    continue
+            else:
+                # Already a datetime object
+                game_time = start_date
+                if game_time.tzinfo is None:
+                    # Assume UTC if naive (CFBD times are UTC)
+                    game_time = game_time.replace(tzinfo=timezone.utc)
+        else:
+            logger.warning(
+                f"  ⏭ {matchup} (game_id={game.id}): "
+                f"Missing start_date, skipping forecast capture"
+            )
+            stats["games_skipped_no_time"] += 1
+            continue
+
+        try:
             # Fetch forecast
             forecast = tomorrow_client.get_forecast(
                 latitude=venue.latitude,
@@ -481,7 +562,9 @@ def print_watchlist_report(stats: dict) -> None:
     print(f"Captured: {stats['capture_time']}")
     print(f"Week: {stats['year']} Week {stats['week']}")
     print(f"Games: {stats['outdoor_games']} outdoor, {stats['indoor_games']} indoor")
-    print(f"Forecasts: {stats['forecasts_captured']} captured, {stats['forecasts_failed']} failed")
+    skipped = stats.get('games_skipped_no_time', 0)
+    skipped_str = f", {skipped} skipped (no time)" if skipped > 0 else ""
+    print(f"Forecasts: {stats['forecasts_captured']} captured, {stats['forecasts_failed']} failed{skipped_str}")
     print("=" * 80)
 
     if not stats["watchlist"]:
@@ -683,19 +766,23 @@ def main():
         logger.error("API key required. Set TOMORROW_IO_API_KEY env var or use --api-key")
         sys.exit(1)
 
-    # Auto-detect year/week if not specified
-    if args.year is None or args.week is None:
-        auto_year, auto_week = get_current_cfb_week()
-        args.year = args.year or auto_year
-        args.week = args.week or auto_week
-        logger.info(f"Auto-detected: {args.year} Week {args.week}")
-
     # Initialize clients
     cfbd_client = CFBDClient()
     tomorrow_client = TomorrowIOClient(
         api_key=api_key,
         rate_limit_delay=args.delay,
     )
+
+    # Auto-detect year/week if not specified (requires CFBD client)
+    if args.year is None or args.week is None:
+        try:
+            auto_year, auto_week = get_current_cfb_week(cfbd_client)
+            args.year = args.year or auto_year
+            args.week = args.week or auto_week
+            logger.info(f"Auto-detected: {args.year} Week {args.week}")
+        except OffSeasonError as e:
+            logger.error(str(e))
+            sys.exit(1)
 
     # Run capture
     mode = "Saturday confirmation" if args.saturday else "Thursday"
