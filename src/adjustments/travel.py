@@ -3,8 +3,15 @@
 DST Policy (P2.12):
 Timezone offsets in config/teams.py represent effective differences during DST,
 since ~70% of CFB regular season is during DST (weeks 0-10). Arizona and Hawaii
-(which don't observe DST) use DST-era offsets. This introduces ~0.5 pt error for
-late-season games (weeks 11+, bowls) but is acceptable given the small sample.
+(which don't observe DST) use DST-era offsets by default.
+
+DST-Aware Mode:
+When game_date is provided to timezone functions, offsets are adjusted for teams
+that don't observe DST (Arizona, Arizona State, Hawaii):
+- During DST (Mar-Nov): Arizona/ASU = 3 hrs behind ET, Hawaii = 6 hrs
+- After DST ends: Arizona/ASU = 2 hrs behind ET, Hawaii = 5 hrs
+
+If game_date is not provided, the default (DST-era) offsets are used.
 """
 
 import logging
@@ -23,6 +30,24 @@ from config.teams import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Track teams we've already warned about missing location data (avoid log spam)
+_warned_missing_location: set[str] = set()
+
+
+def _warn_missing_location_once(team: str, normalized: str) -> None:
+    """Log a warning for missing location data, but only once per team."""
+    if normalized not in _warned_missing_location:
+        _warned_missing_location.add(normalized)
+        logger.warning(
+            f"Team '{team}' (normalized: '{normalized}') missing location data in TEAM_LOCATIONS. "
+            f"Distance-based travel adjustment unavailable."
+        )
+
+
+def clear_missing_location_warnings() -> None:
+    """Clear the warned teams set. Use for testing or new backtest runs."""
+    _warned_missing_location.clear()
 
 
 # Cache sizing: 136 FBS teams = 9,180 unique unordered pairs. With symmetric
@@ -44,16 +69,37 @@ def _cached_geodesic_distance_impl(team_a: str, team_b: str) -> Optional[float]:
     return geodesic(point_a, point_b).miles
 
 
-def _cached_geodesic_distance(team_a: str, team_b: str) -> Optional[float]:
+def _cached_geodesic_distance(
+    team_a: str,
+    team_b: str,
+    warn_on_missing: bool = True,
+) -> Optional[float]:
     """Cached geodesic distance between two teams' venues (miles).
 
     Normalizes team names and orders them lexicographically so (A,B) and (B,A)
     hit the same cache entry (distance is symmetric). Module-level cache ensures
     distances are computed once per team pair across the entire backtest run.
+
+    Args:
+        team_a: First team name
+        team_b: Second team name
+        warn_on_missing: If True, log warning (once per team) when location data missing
+
+    Returns:
+        Distance in miles, or None if location data unavailable for either team
     """
     # Normalize team names to handle CFBD naming variations
     norm_a = normalize_team_name(team_a)
     norm_b = normalize_team_name(team_b)
+
+    # Check for missing location data and warn (before ordering for cache)
+    if warn_on_missing:
+        loc_a = safe_get_location(norm_a)
+        loc_b = safe_get_location(norm_b)
+        if loc_a is None:
+            _warn_missing_location_once(team_a, norm_a)
+        if loc_b is None:
+            _warn_missing_location_once(team_b, norm_b)
 
     # Order lexicographically for symmetric cache hits
     if norm_a > norm_b:
@@ -121,6 +167,7 @@ class TravelAdjuster:
         self,
         away_team: str,
         home_team: str,
+        game_date=None,
     ) -> float:
         """Calculate timezone-based home advantage from away team travel fatigue.
 
@@ -129,12 +176,14 @@ class TravelAdjuster:
         Args:
             away_team: Traveling team
             home_team: Host team
+            game_date: Optional date for DST-accurate calculations. If None, assumes
+                       DST is active (accurate for ~70% of CFB season, weeks 0-10).
 
         Returns:
             Home advantage in points (positive = home benefits from away travel)
         """
         # Get directed timezone change (positive = east, negative = west)
-        directed_tz = get_directed_timezone_change(away_team, home_team)
+        directed_tz = get_directed_timezone_change(away_team, home_team, game_date)
 
         if directed_tz == 0:
             return 0.0
@@ -195,6 +244,7 @@ class TravelAdjuster:
         self,
         home_team: str,
         away_team: str,
+        game_date=None,
     ) -> tuple[float, dict]:
         """Get total travel-based home advantage for a matchup.
 
@@ -208,6 +258,8 @@ class TravelAdjuster:
         Args:
             home_team: Home team
             away_team: Away team
+            game_date: Optional date for DST-accurate timezone calculations. If None,
+                       assumes DST is active (accurate for ~70% of CFB season).
 
         Returns:
             Tuple of (total home advantage in points, breakdown dict)
@@ -216,7 +268,7 @@ class TravelAdjuster:
         distance = self.get_distance(away_team, home_team)
 
         # All sub-methods return positive = home advantage
-        tz_home_adv_raw = self.get_timezone_adjustment(away_team, home_team)
+        tz_home_adv_raw = self.get_timezone_adjustment(away_team, home_team, game_date)
         distance_home_adv = self.get_distance_adjustment(away_team, home_team, distance=distance)
 
         # Reduce timezone advantage for short distances
@@ -234,17 +286,20 @@ class TravelAdjuster:
         # All values already in home advantage convention - just sum
         total = tz_home_adv + distance_home_adv
 
-        tz_diff = get_timezone_difference(away_team, home_team)
+        tz_diff = get_timezone_difference(away_team, home_team, game_date)
 
         # Breakdown dict uses unambiguous "home_adv" suffix
         # All values positive = favors home team
+        # distance_available=False means location data missing for one/both teams
         breakdown = {
             "distance_miles": distance,
+            "distance_available": distance is not None,
             "timezone_diff": tz_diff,
             "timezone_home_adv_raw": tz_home_adv_raw,  # Before distance dampening
             "timezone_home_adv": tz_home_adv,  # After distance dampening
-            "distance_home_adv": distance_home_adv,
+            "distance_home_adv": distance_home_adv,  # 0.0 if distance unavailable
             "total_home_adv": total,
+            "game_date_provided": game_date is not None,  # False = using DST-era default
         }
 
         return total, breakdown

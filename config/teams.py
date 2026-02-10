@@ -362,6 +362,113 @@ TEAM_LOCATIONS: dict[str, dict] = {
     "Kennesaw State": {"lat": 34.0378, "lon": -84.5817, "tz_offset": 0},
 }
 
+# Teams that don't observe DST
+# Their tz_offset values in TEAM_LOCATIONS are set for DST period.
+# When DST is NOT in effect, these teams are 1 hour closer to Eastern.
+NO_DST_TEAMS: frozenset[str] = frozenset({
+    "Arizona",       # UTC-7 year-round (PT during DST, MT after DST ends)
+    "Arizona State", # UTC-7 year-round (PT during DST, MT after DST ends)
+    "Hawaii",        # UTC-10 year-round (6 hrs behind ET during DST, 5 after)
+})
+
+
+def is_dst_active(game_date) -> bool:
+    """Check if DST is active on a given date.
+
+    DST in the US:
+    - Starts: Second Sunday in March at 2:00 AM
+    - Ends: First Sunday in November at 2:00 AM
+
+    Args:
+        game_date: datetime.date or datetime.datetime object
+
+    Returns:
+        True if DST is active on that date, False otherwise
+    """
+    from datetime import date, datetime
+
+    # Handle both date and datetime
+    if isinstance(game_date, datetime):
+        d = game_date.date()
+    elif isinstance(game_date, date):
+        d = game_date
+    else:
+        # Assume it's a date-like object
+        d = game_date
+
+    year = d.year
+    month = d.month
+    day = d.day
+
+    # March: DST starts second Sunday
+    if month == 3:
+        # Find second Sunday: first day of month, find first Sunday, add 7
+        first_day_weekday = date(year, 3, 1).weekday()  # 0=Monday, 6=Sunday
+        days_to_first_sunday = (6 - first_day_weekday) % 7
+        if days_to_first_sunday == 0:
+            days_to_first_sunday = 7  # If March 1 is Sunday, first Sunday is March 1
+        first_sunday = 1 + (6 - first_day_weekday) % 7
+        if first_day_weekday == 6:  # March 1 is Sunday
+            first_sunday = 1
+        second_sunday = first_sunday + 7
+        return day >= second_sunday
+
+    # November: DST ends first Sunday
+    elif month == 11:
+        first_day_weekday = date(year, 11, 1).weekday()
+        first_sunday = 1 + (6 - first_day_weekday) % 7
+        if first_day_weekday == 6:  # Nov 1 is Sunday
+            first_sunday = 1
+        return day < first_sunday
+
+    # April through October: DST is active
+    elif 4 <= month <= 10:
+        return True
+
+    # January, February, December: DST is not active
+    else:
+        return False
+
+
+def get_dst_adjusted_offset(team: str, game_date=None) -> int | None:
+    """Get timezone offset for a team, adjusted for DST if game_date provided.
+
+    For teams that observe DST (most teams), the offset is constant since
+    both they and Eastern time shift together.
+
+    For teams that DON'T observe DST (Arizona, Arizona State, Hawaii),
+    their effective offset changes when DST ends:
+    - During DST: Use stored offset (e.g., Arizona = 3, same as Pacific)
+    - After DST ends: Reduce offset by 1 (e.g., Arizona = 2, same as Mountain)
+
+    Args:
+        team: Team name (should be normalized)
+        game_date: Optional date object. If None, assumes DST is active (default).
+
+    Returns:
+        Timezone offset in hours behind Eastern, or None if team not found
+    """
+    loc = TEAM_LOCATIONS.get(team)
+    if loc is None:
+        return None
+
+    base_offset = loc["tz_offset"]
+
+    # If no date provided, use default (DST-era) offset
+    if game_date is None:
+        return base_offset
+
+    # For teams that observe DST, offset doesn't change
+    if team not in NO_DST_TEAMS:
+        return base_offset
+
+    # For no-DST teams, adjust when DST is NOT active
+    if not is_dst_active(game_date):
+        # These teams are 1 hour closer to Eastern when DST ends
+        return base_offset - 1
+
+    return base_offset
+
 
 def get_team_location(team: str) -> dict | None:
     """Get team location data. Returns None if team not found.
@@ -371,22 +478,31 @@ def get_team_location(team: str) -> dict | None:
     return TEAM_LOCATIONS.get(team)
 
 
-def get_timezone_difference(team1: str, team2: str) -> int:
+def get_timezone_difference(team1: str, team2: str, game_date=None) -> int:
     """Get timezone difference in hours between two teams (absolute value).
 
     Note: Uses team name normalization (P2.13) to handle CFBD naming variations.
-    """
-    # Use safe_get_location for normalization (defined later in module)
-    loc1 = TEAM_LOCATIONS.get(team1)
-    loc2 = TEAM_LOCATIONS.get(team2)
 
-    if loc1 is None or loc2 is None:
+    Args:
+        team1: First team name
+        team2: Second team name
+        game_date: Optional date for DST-accurate calculations. If None, assumes
+                   DST is active (accurate for ~70% of CFB season, weeks 0-10).
+
+    Returns:
+        Absolute timezone difference in hours
+    """
+    # Get DST-adjusted offsets
+    offset1 = get_dst_adjusted_offset(team1, game_date)
+    offset2 = get_dst_adjusted_offset(team2, game_date)
+
+    if offset1 is None or offset2 is None:
         return 0
 
-    return abs(loc1["tz_offset"] - loc2["tz_offset"])
+    return abs(offset1 - offset2)
 
 
-def get_directed_timezone_change(away_team: str, home_team: str) -> int:
+def get_directed_timezone_change(away_team: str, home_team: str, game_date=None) -> int:
     """Get directed timezone change for a traveling team.
 
     Uses tz_offset (hours behind Eastern Time) to determine direction:
@@ -399,21 +515,23 @@ def get_directed_timezone_change(away_team: str, home_team: str) -> int:
     Args:
         away_team: Team that is traveling
         home_team: Team hosting the game
+        game_date: Optional date for DST-accurate calculations. If None, assumes
+                   DST is active (accurate for ~70% of CFB season, weeks 0-10).
 
     Returns:
         Signed timezone change in hours (positive = east, negative = west)
     """
-    # Use safe_get_location for normalization (defined later in module)
-    away_loc = TEAM_LOCATIONS.get(away_team)
-    home_loc = TEAM_LOCATIONS.get(home_team)
+    # Get DST-adjusted offsets
+    away_offset = get_dst_adjusted_offset(away_team, game_date)
+    home_offset = get_dst_adjusted_offset(home_team, game_date)
 
-    if away_loc is None or home_loc is None:
+    if away_offset is None or home_offset is None:
         return 0
 
     # tz_offset = hours behind ET (0=ET, 1=CT, 2=MT, 3=PT, 5=Hawaii)
     # If away has higher offset, they're further west → traveling east (positive)
     # If away has lower offset, they're further east → traveling west (negative)
-    return away_loc["tz_offset"] - home_loc["tz_offset"]
+    return away_offset - home_offset
 
 
 # =============================================================================
