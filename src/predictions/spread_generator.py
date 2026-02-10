@@ -544,10 +544,7 @@ class SpreadGenerator:
         # Reactivation path: residualize against EFM or integrate RZ metric as EFM feature.
         components.finishing_drives = 0.0  # self.finishing_drives.get_matchup_differential(home_team, away_team)
 
-        # FCS adjustment (when FBS plays FCS)
-        components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
-
-        # Calculate total spread (positive = home favored)
+        # Calculate efficiency-derived spread (positive = home favored)
         # Note: aggregated.net_adjustment already includes HFA+travel+altitude+situational
         # So we add the non-aggregated components
         spread = (
@@ -555,7 +552,6 @@ class SpreadGenerator:
             + aggregated.net_adjustment  # All game-context adjustments (smoothed)
             + components.special_teams
             + components.finishing_drives
-            + components.fcs_adjustment
         )
 
         # QB injury adjustment (when starter is flagged as out)
@@ -568,11 +564,17 @@ class SpreadGenerator:
             spread += components.qb_adjustment
 
         # Pace adjustment for triple-option teams (compress toward 0)
-        # Applied last: compresses the ENTIRE spread including QB adjustment
+        # Applied to efficiency-derived spread only (before FCS penalty)
+        # FCS penalty represents talent gap, not pace-driven quantity
         components.pace_adjustment = self._get_pace_adjustment(
             home_team, away_team, spread
         )
         spread += components.pace_adjustment
+
+        # FCS adjustment (when FBS plays FCS)
+        # Applied AFTER pace adjustment - talent gap shouldn't be compressed
+        components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
+        spread += components.fcs_adjustment
 
         # Convert to win probability
         win_prob = self._spread_to_probability(spread)
