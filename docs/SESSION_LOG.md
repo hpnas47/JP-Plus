@@ -96,6 +96,46 @@ Cleanup:
 
 ---
 
+#### Optimize TravelAdjuster: Compute Distance Once — COMMITTED
+**Commit**: `b9ea81d`
+
+In `get_total_travel_adjustment()`, `self.get_distance()` was called twice:
+1. Once explicitly to get distance
+2. Once again inside `get_distance_adjustment()`
+
+**The Fix:**
+- Add optional `distance` parameter to `get_distance_adjustment()`
+- Compute distance once in `get_total_travel_adjustment()` and pass through
+- Reuse distance value in breakdown dict
+
+Also cleaned up sign conventions with unambiguous `home_adv` suffix in breakdown dict.
+
+---
+
+#### Add DST-Aware Timezone Calculations — COMMITTED
+**Commit**: `36a1da7`
+
+The module docstring acknowledged ~0.5 pt error for late-season games involving Arizona/Hawaii (which don't observe DST), but nothing in the code checked game timing.
+
+**Added to `config/teams.py`:**
+- `NO_DST_TEAMS` frozenset: Arizona, Arizona State, Hawaii
+- `is_dst_active(game_date)`: Detects if DST is active on a given date
+- `get_dst_adjusted_offset(team, game_date)`: Returns corrected offset for no-DST teams
+
+**Updated functions with optional `game_date` parameter:**
+- `get_timezone_difference(team1, team2, game_date=None)`
+- `get_directed_timezone_change(away_team, home_team, game_date=None)`
+- `TravelAdjuster.get_timezone_adjustment(away_team, home_team, game_date=None)`
+- `TravelAdjuster.get_total_travel_adjustment(home_team, away_team, game_date=None)`
+
+**Offset adjustments when DST is NOT active:**
+- Arizona/ASU: 3 → 2 hrs behind ET
+- Hawaii: 6 → 5 hrs behind ET
+
+Default behavior (no `game_date`) unchanged — assumes DST is active.
+
+---
+
 ## Session: February 9, 2026
 
 ### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening + Infrastructure Hardening + Vectorization Sweep
