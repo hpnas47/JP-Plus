@@ -1,11 +1,13 @@
 """Model components package.
 
 Active models (EFM pipeline):
-- EfficiencyFoundationModel: Core rating engine using success rate, IsoPPP, and turnover margin
-- FinishingDrivesModel: Red zone efficiency
+- EfficiencyFoundationModel: Core rating engine using success rate, IsoPPP, turnover margin, and RZ Leverage
 - SpecialTeamsModel: Field goal, punt, and kickoff efficiency
 - PreseasonPriors: Preseason ratings and blending
 - TotalsModel: Opponent-adjusted scoring for over/under betting
+
+Shelved models (kept for backward compatibility):
+- FinishingDrivesModel: Replaced by RZ Leverage weighting in EFM (4 backtest rejections)
 """
 
 from .efficiency_foundation_model import EfficiencyFoundationModel

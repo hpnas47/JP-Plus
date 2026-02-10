@@ -11,7 +11,7 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 | `efficiency_foundation_model.py` | **EFM** - Ridge regression on opponent-adjusted success rate + IsoPPP. Produces team offensive/defensive ratings. Primary engine for spread prediction. |
 | `preseason_priors.py` | Preseason rating engine. Blends prior-year SP+, talent composite, returning production, transfer portal impact, and coaching change adjustments. |
 | `special_teams.py` | Special teams model (FG, punt, kickoff). All outputs are PBTA points per game. |
-| `finishing_drives.py` | Red zone / finishing drives model. Bayesian regression on drive-level RZ trip outcomes. |
+| `finishing_drives.py` | **[SHELVED]** RZ model (4 rejections, 70-80% overlap with IsoPPP). Replaced by RZ Leverage weighting in EFM. |
 | `totals_model.py` | **Totals Model** - Opponent-adjusted scoring for over/under prediction. Ridge regression on points scored/allowed. Separate from EFM (uses game outcomes, not play-level efficiency). |
 
 ---

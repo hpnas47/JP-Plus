@@ -225,7 +225,7 @@ The core engine of JP+. Built on play-level efficiency metrics rather than game 
 | **Success Rate** | 45% | Opponent-adjusted success rate via ridge regression |
 | **Explosiveness (IsoPPP)** | 45% | Average EPA on successful plays only |
 | **Turnover Margin** | 10% | Per-game turnover differential (see below) |
-| **Finishing Drives** | Adjustment | Red zone efficiency regressed toward mean (see below) |
+| **Red Zone Leverage** | Play weighting | Up-weight plays near goal line (see below) |
 
 #### Success Rate Definition
 - **1st down:** Gain ≥50% of yards needed
@@ -244,18 +244,20 @@ Garbage time thresholds:
 
 This preserves signal from dominant teams (Indiana: 56% SR in garbage time) while filtering noise from trailing teams.
 
-#### Red Zone Regression (Finishing Drives)
+#### Red Zone Leverage (Play-Level Weighting)
 
-Red zone TD rate has high variance - a team at 80% will regress toward the mean (~58%). We apply Bayesian regression:
+Plays near the goal line are more predictive of scoring ability than plays in the middle of the field. We apply field-position-based weights at the play level:
 
-```
-regressed_rate = (observed_TDs + prior_TDs) / (total_trips + prior_strength)
-```
+| Field Position | Weight | Rationale |
+|----------------|--------|-----------|
+| Inside 10-yard line | 2.0x | Goal-to-go efficiency is critical |
+| Inside 20-yard line | 1.5x | Red zone execution matters more |
+| Between opp 40-20 | 0.7x | "Empty yards" — successful but didn't threaten |
+| Elsewhere | 1.0x | Standard weight |
 
-With `prior_strength = 10` (equivalent to 10 RZ trips of league-average data), this:
-- Pulls extreme rates toward 58% expected
-- Has more effect on small samples (early season)
-- Trusts actual performance more by late season (150+ RZ plays)
+This integrates red zone efficiency directly into the EFM ridge regression rather than as a post-hoc adjustment. The weighting is applied in `_prepare_plays()` before calculating success rate and IsoPPP.
+
+**Note:** A separate Finishing Drives model (Bayesian regression on drive-level RZ outcomes) was tested but shelved after 4 backtest rejections due to 70-80% signal overlap with IsoPPP. Play-level weighting captures the signal without redundancy.
 
 **Why this matters:** Getting TO the red zone is sustainable skill (captured by Success Rate). Scoring TDs IN the red zone has some variance early in the season, but over 15 games becomes a reliable signal of scheme and talent. The prior_strength was reduced from 20 to 10 to better credit elite red zone teams at end of season.
 
@@ -325,8 +327,7 @@ The special teams model calculates marginal point contribution (PBTA - Points Be
 **Integration:** ST ratings are displayed separately from the O/D total. In spread prediction, the ST differential between teams is applied as an adjustment.
 
 #### Key Files
-- `src/models/efficiency_foundation_model.py` - Core EFM implementation
-- `src/models/finishing_drives.py` - Red zone efficiency with Bayesian regression
+- `src/models/efficiency_foundation_model.py` - Core EFM implementation (includes RZ Leverage weighting)
 - `src/models/special_teams.py` - Complete ST model (FG + Punt + Kickoff)
 - Ridge regression on Success Rate (Y=0/1 success, X=sparse team/opponent IDs)
 - Converts efficiency metrics to point equivalents for spread prediction
@@ -882,10 +883,10 @@ CFB Power Ratings Model/
 │   ├── data/
 │   │   └── processors.py        # Data processing
 │   ├── models/
-│   │   ├── efficiency_foundation_model.py  # Core EFM engine
+│   │   ├── efficiency_foundation_model.py  # Core EFM engine (includes RZ Leverage)
 │   │   ├── preseason_priors.py  # Preseason ratings & coaching regression
-│   │   ├── special_teams.py     # FG efficiency model
-│   │   └── finishing_drives.py  # Red zone efficiency
+│   │   ├── special_teams.py     # FG + punt + kickoff efficiency
+│   │   └── finishing_drives.py  # [SHELVED] RZ model (replaced by RZ Leverage in EFM)
 │   ├── adjustments/
 │   │   ├── home_field.py        # Team-specific HFA & trajectory
 │   │   ├── travel.py            # Travel adjustments

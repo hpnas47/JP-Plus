@@ -48,7 +48,7 @@
 ## 📁 Key File Map (Source of Truth)
 - **Priors Engine:** `src/models/preseason_priors.py` (Talent, Portal, Recruiting Offsets)
 - **Core EFM Logic:** `src/models/efficiency_foundation_model.py` (Ridge Regression, HFA, SOS)
-- **Sub-Models:** `src/models/finishing_drives.py`, `src/models/special_teams.py`
+- **Sub-Models:** `src/models/special_teams.py` (FG + punt + kickoff)
 - **Backtest Engine:** `scripts/backtest.py` (The Validator)
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
@@ -67,7 +67,7 @@
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
 - **HFA Global Offset:** -0.50 pts applied to all HFA values (calibrated Feb 2026). Reduces systematic home bias from +0.90 to +0.46.
-- **Finishing Drives:** Shelved as post-hoc component (4 rejections). RZ efficiency integrated as EFM Ridge feature (2.2% of variance).
+- **RZ Leverage:** Play-level weighting in EFM (2.0x inside 10, 1.5x inside 20). Replaces shelved Finishing Drives model (4 rejections, 70-80% overlap with IsoPPP).
 - **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 
 ## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
