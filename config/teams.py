@@ -360,6 +360,7 @@ TEAM_LOCATIONS: dict[str, dict] = {
     "Jacksonville State": {"lat": 33.8236, "lon": -85.7661, "tz_offset": 1},
     "Sam Houston": {"lat": 30.7133, "lon": -95.5497, "tz_offset": 1},
     "Kennesaw State": {"lat": 34.0378, "lon": -84.5817, "tz_offset": 0},
+    "Southern Miss": {"lat": 31.3289, "lon": -89.3331, "tz_offset": 1},  # Hattiesburg, MS
 }
 
 # Teams that don't observe DST
@@ -548,6 +549,12 @@ _unknown_teams: set[str] = set()
 
 # Aliases mapping CFBD/variant names → canonical names used in our metadata
 # Format: "variant_name": "canonical_name"
+#
+# IMPORTANT: Aliases must NEVER form cycles. Every value must be a canonical name
+# that exists in TEAM_LOCATIONS (or other metadata dicts), never another alias key.
+# Cycles would cause games to split across two "canonical" names, corrupting ratings.
+# Example of BAD cycle: "A" -> "B" and "B" -> "A"
+# validate_aliases() checks for this on module load.
 TEAM_NAME_ALIASES: dict[str, str] = {
     # CFBD uses these; we use the value
     "Miami (FL)": "Miami",
@@ -568,8 +575,7 @@ TEAM_NAME_ALIASES: dict[str, str] = {
     "Massachusetts": "UMass",
     "Connecticut": "UConn",
     "Brigham Young": "BYU",
-    "Southern Miss": "Southern Mississippi",
-    "Southern Mississippi": "Southern Miss",
+    "Southern Mississippi": "Southern Miss",  # Canonical is "Southern Miss" (CFBD primary, in TEAM_LOCATIONS)
     "North Carolina State": "NC State",
     "California": "Cal",
     "UC Berkeley": "Cal",
@@ -610,6 +616,36 @@ _CANONICAL_NAMES: set[str] = (
     set(ALTITUDE_VENUES.keys()) |
     {team for pair in RIVALRIES for team in pair}
 )
+
+
+def validate_aliases() -> bool:
+    """Validate alias dict has no cycles or self-references.
+
+    Runs on import to catch issues early. Cycles would cause games to split
+    across two "canonical" names, corrupting ratings and SOS calculations.
+
+    Raises:
+        AssertionError: If cycles or self-references are found
+    """
+    alias_keys = set(TEAM_NAME_ALIASES.keys())
+
+    for variant, canonical in TEAM_NAME_ALIASES.items():
+        # Check for self-alias (data error)
+        assert variant != canonical, f"Self-alias found: {variant} -> {canonical}"
+
+        # Check for cycles: canonical name must NOT be an alias key
+        # (it should be a true canonical name in TEAM_LOCATIONS or similar)
+        assert canonical not in alias_keys, (
+            f"Alias cycle detected: '{variant}' -> '{canonical}', "
+            f"but '{canonical}' is also an alias key. "
+            f"Canonical names must exist in metadata dicts, not in TEAM_NAME_ALIASES keys."
+        )
+
+    return True
+
+
+# Validate on import
+validate_aliases()
 
 
 def normalize_team_name(team: str) -> str:
