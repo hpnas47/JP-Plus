@@ -25,13 +25,13 @@ from config.teams import (
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=None)
-def _cached_geodesic_distance(team_a: str, team_b: str) -> Optional[float]:
-    """Cached geodesic distance between two teams' venues (miles).
-
-    Module-level cache ensures distances are computed once per team pair
-    across the entire backtest run, eliminating repeated geodesic calls.
-    """
+# Cache sizing: 136 FBS teams = 9,180 unique unordered pairs. With symmetric
+# key ordering, we need at most ~10K entries (including FCS opponents). Using
+# 8192 (power of 2) covers nearly all pairs while bounding memory in long-running
+# processes. LRU eviction handles overflow gracefully.
+@lru_cache(maxsize=8192)
+def _cached_geodesic_distance_impl(team_a: str, team_b: str) -> Optional[float]:
+    """Internal implementation with normalized, ordered keys. Use wrapper below."""
     loc_a = safe_get_location(team_a)
     loc_b = safe_get_location(team_b)
 
@@ -42,6 +42,29 @@ def _cached_geodesic_distance(team_a: str, team_b: str) -> Optional[float]:
     point_b = (loc_b["lat"], loc_b["lon"])
 
     return geodesic(point_a, point_b).miles
+
+
+def _cached_geodesic_distance(team_a: str, team_b: str) -> Optional[float]:
+    """Cached geodesic distance between two teams' venues (miles).
+
+    Normalizes team names and orders them lexicographically so (A,B) and (B,A)
+    hit the same cache entry (distance is symmetric). Module-level cache ensures
+    distances are computed once per team pair across the entire backtest run.
+    """
+    # Normalize team names to handle CFBD naming variations
+    norm_a = normalize_team_name(team_a)
+    norm_b = normalize_team_name(team_b)
+
+    # Order lexicographically for symmetric cache hits
+    if norm_a > norm_b:
+        norm_a, norm_b = norm_b, norm_a
+
+    return _cached_geodesic_distance_impl(norm_a, norm_b)
+
+
+def clear_geodesic_cache() -> None:
+    """Clear the geodesic distance cache. Use for long-running processes or testing."""
+    _cached_geodesic_distance_impl.cache_clear()
 
 
 class TravelAdjuster:
@@ -99,14 +122,16 @@ class TravelAdjuster:
         away_team: str,
         home_team: str,
     ) -> float:
-        """Calculate timezone adjustment for away team traveling.
+        """Calculate timezone-based home advantage from away team travel fatigue.
+
+        Convention: Positive = favors home team (consistent with all adjusters).
 
         Args:
             away_team: Traveling team
             home_team: Host team
 
         Returns:
-            Points adjustment (negative = penalty for away team)
+            Home advantage in points (positive = home benefits from away travel)
         """
         # Get directed timezone change (positive = east, negative = west)
         directed_tz = get_directed_timezone_change(away_team, home_team)
@@ -118,30 +143,35 @@ class TravelAdjuster:
         base_adj = abs(directed_tz) * self.timezone_adjustment
 
         # Direction affects severity:
-        # - Traveling EAST (positive directed_tz): harder, losing time → full penalty
-        # - Traveling WEST (negative directed_tz): easier, gaining time → 0.8x penalty
+        # - Traveling EAST (positive directed_tz): harder, losing time → full advantage
+        # - Traveling WEST (negative directed_tz): easier, gaining time → 0.8x advantage
         if directed_tz > 0:
-            # Traveling east (harder)
-            return -base_adj
+            # Away traveling east (harder) → home gains full advantage
+            return base_adj
         else:
-            # Traveling west (easier)
-            return -base_adj * 0.8
+            # Away traveling west (easier) → home gains reduced advantage
+            return base_adj * 0.8
 
     def get_distance_adjustment(
         self,
         away_team: str,
         home_team: str,
+        distance: float | None = None,
     ) -> float:
-        """Calculate adjustment based on travel distance.
+        """Calculate distance-based home advantage from away team travel fatigue.
+
+        Convention: Positive = favors home team (consistent with all adjusters).
 
         Args:
             away_team: Traveling team
             home_team: Host team
+            distance: Pre-computed distance in miles (optional, avoids duplicate lookup)
 
         Returns:
-            Points adjustment (negative = penalty for away team)
+            Home advantage in points (positive = home benefits from away travel)
         """
-        distance = self.get_distance(away_team, home_team)
+        if distance is None:
+            distance = self.get_distance(away_team, home_team)
 
         if distance is None:
             return 0.0
@@ -152,27 +182,27 @@ class TravelAdjuster:
 
         # Small adjustment for medium trips
         if distance < self.MEDIUM_TRIP:
-            return -0.25
+            return 0.25
 
         # Moderate adjustment for long trips
         if distance < self.LONG_TRIP:
-            return -0.5
+            return 0.5
 
         # Larger adjustment for very long trips (Hawaii, cross-country)
-        return -1.0
+        return 1.0
 
     def get_total_travel_adjustment(
         self,
         home_team: str,
         away_team: str,
     ) -> tuple[float, dict]:
-        """Get total travel adjustment for a matchup.
+        """Get total travel-based home advantage for a matchup.
 
-        The adjustment is from the home team's perspective (positive = favors home).
+        Convention: Positive = favors home team (consistent with all adjusters).
 
-        Note: Timezone penalty is reduced for short distances (<700 miles) because
+        Note: Timezone advantage is reduced for short distances (<700 miles) because
         analysis shows these "regional" games with timezone differences (e.g., due to
-        DST quirks or CT/ET border) are over-predicted when given full TZ penalty.
+        DST quirks or CT/ET border) are over-predicted when given full TZ advantage.
         The 500-800mi TZ games showed +3.83 pts mean error vs -0.87 for no-TZ games.
 
         Args:
@@ -180,37 +210,41 @@ class TravelAdjuster:
             away_team: Away team
 
         Returns:
-            Tuple of (total adjustment favoring home, breakdown dict)
+            Tuple of (total home advantage in points, breakdown dict)
         """
-        tz_adj_raw = self.get_timezone_adjustment(away_team, home_team)
-        dist_adj = self.get_distance_adjustment(away_team, home_team)
-
+        # Compute distance once and reuse
         distance = self.get_distance(away_team, home_team)
 
-        # Reduce timezone penalty for short distances
-        # Rationale: DST quirks and CT/ET border crossings shouldn't penalize
-        # truly regional games where travel fatigue is minimal
-        tz_adj = tz_adj_raw
-        if distance is not None and abs(tz_adj_raw) > 0:
-            if distance < 400:
-                # Very short trips: eliminate TZ penalty entirely
-                tz_adj = 0.0
-            elif distance < 700:
-                # Short-medium trips: reduce TZ penalty by 50%
-                tz_adj = tz_adj_raw * 0.5
+        # All sub-methods return positive = home advantage
+        tz_home_adv_raw = self.get_timezone_adjustment(away_team, home_team)
+        distance_home_adv = self.get_distance_adjustment(away_team, home_team, distance=distance)
 
-        # These are penalties on away team, so flip sign for home perspective
-        total = -(tz_adj + dist_adj)
+        # Reduce timezone advantage for short distances
+        # Rationale: DST quirks and CT/ET border crossings shouldn't inflate
+        # home advantage for truly regional games where travel fatigue is minimal
+        tz_home_adv = tz_home_adv_raw
+        if distance is not None and tz_home_adv_raw > 0:
+            if distance < 400:
+                # Very short trips: eliminate TZ advantage entirely
+                tz_home_adv = 0.0
+            elif distance < 700:
+                # Short-medium trips: reduce TZ advantage by 50%
+                tz_home_adv = tz_home_adv_raw * 0.5
+
+        # All values already in home advantage convention - just sum
+        total = tz_home_adv + distance_home_adv
 
         tz_diff = get_timezone_difference(away_team, home_team)
 
+        # Breakdown dict uses unambiguous "home_adv" suffix
+        # All values positive = favors home team
         breakdown = {
             "distance_miles": distance,
             "timezone_diff": tz_diff,
-            "timezone_penalty_raw": -tz_adj_raw,  # Before distance dampening
-            "timezone_penalty": -tz_adj,  # After distance dampening (as home advantage)
-            "distance_penalty": -dist_adj,  # As home team advantage
-            "total_home_advantage": total,
+            "timezone_home_adv_raw": tz_home_adv_raw,  # Before distance dampening
+            "timezone_home_adv": tz_home_adv,  # After distance dampening
+            "distance_home_adv": distance_home_adv,
+            "total_home_adv": total,
         }
 
         return total, breakdown
