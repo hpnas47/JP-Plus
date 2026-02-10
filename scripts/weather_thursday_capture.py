@@ -51,6 +51,7 @@ from src.api.tomorrow_io import TomorrowIOClient, VenueLocation, is_dome_venue
 from src.adjustments.weather import WeatherAdjuster, WeatherConditions
 from src.models.totals_model import TotalsModel
 from scripts.backtest import fetch_season_data
+from config.teams import normalize_team_name
 
 # Configure logging
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -196,10 +197,13 @@ def calculate_team_pass_rates(
         plays['is_scrimmage'] = plays['is_pass'] | plays['is_rush']
 
         # Filter to scrimmage plays only
-        scrimmage = plays[plays['is_scrimmage']]
+        scrimmage = plays[plays['is_scrimmage']].copy()
 
-        # Calculate pass rate by team
-        team_stats = scrimmage.groupby('offense').agg(
+        # Normalize team names to match game.home_team/away_team from games endpoint
+        scrimmage['offense_normalized'] = scrimmage['offense'].apply(normalize_team_name)
+
+        # Calculate pass rate by team (using normalized names)
+        team_stats = scrimmage.groupby('offense_normalized').agg(
             passes=('is_pass', 'sum'),
             total=('is_scrimmage', 'sum')
         ).reset_index()
@@ -207,8 +211,8 @@ def calculate_team_pass_rates(
         # Avoid division by zero
         team_stats['pass_rate'] = team_stats['passes'] / team_stats['total'].clip(lower=1)
 
-        pass_rates = dict(zip(team_stats['offense'], team_stats['pass_rate']))
-        logger.info(f"  Calculated pass rates for {len(pass_rates)} teams")
+        pass_rates = dict(zip(team_stats['offense_normalized'], team_stats['pass_rate']))
+        logger.info(f"  Calculated pass rates for {len(pass_rates)} teams (normalized)")
 
         # Log some examples
         if pass_rates:
@@ -282,6 +286,35 @@ def train_totals_model(
     return model, pass_rates
 
 
+def fetch_week_games(
+    cfbd_client: CFBDClient,
+    year: int,
+    week: int,
+) -> list:
+    """Fetch all games for a week (regular + postseason if applicable).
+
+    Args:
+        cfbd_client: CFBD API client
+        year: Season year
+        week: Week number
+
+    Returns:
+        List of game objects
+    """
+    games = cfbd_client.get_games(year=year, week=week, season_type="regular")
+
+    # Also check postseason if week > 15
+    if week > 15:
+        try:
+            postseason = cfbd_client.get_games(year=year, week=week, season_type="postseason")
+            games.extend(postseason)
+            logger.info(f"Included {len(postseason)} postseason games")
+        except Exception as e:
+            logger.warning(f"Failed to fetch postseason games for {year} week {week}: {e}")
+
+    return games
+
+
 def capture_with_watchlist(
     cfbd_client: CFBDClient,
     tomorrow_client: TomorrowIOClient,
@@ -289,6 +322,7 @@ def capture_with_watchlist(
     week: int,
     dry_run: bool = False,
     limit: int = 0,
+    games: list | None = None,
 ) -> dict:
     """Capture forecasts and build watchlist of weather-impacted games.
 
@@ -299,12 +333,14 @@ def capture_with_watchlist(
         week: Week number
         dry_run: If True, show games but don't fetch forecasts
         limit: Max forecasts to fetch (0 = no limit, recommended: 20 per hour)
+        games: Optional pre-fetched games list (avoids duplicate API calls)
 
     Returns:
         Dict with capture stats and watchlist
     """
-    # Get games for the week
-    games = cfbd_client.get_games(year=year, week=week, season_type="regular")
+    # Use provided games or fetch them
+    if games is None:
+        games = fetch_week_games(cfbd_client, year, week)
 
     # Get betting lines for over/under totals
     betting_lines = {}
@@ -330,14 +366,6 @@ def capture_with_watchlist(
         except Exception as e:
             logger.warning(f"Could not train TotalsModel: {e}")
 
-    # Also check postseason if week > 15
-    if week > 15:
-        try:
-            postseason = cfbd_client.get_games(year=year, week=week, season_type="postseason")
-            games.extend(postseason)
-        except Exception as e:
-            logger.warning(f"Failed to fetch postseason games for {year} week {week}: {e}")
-
     logger.info(f"Found {len(games)} games for {year} week {week}")
 
     stats = {
@@ -357,10 +385,21 @@ def capture_with_watchlist(
     weather_adjuster = WeatherAdjuster()
     outdoor_games = []
 
+    # Cache venue lookups - multiple games can share a venue (neutral sites, etc.)
+    venue_cache: dict[int, object] = {}
+
     # First pass: identify outdoor games
     for game in games:
         venue_id = getattr(game, "venue_id", None)
-        venue = tomorrow_client.get_venue(venue_id) if venue_id else None
+
+        # Check cache first, then fetch if needed
+        if venue_id is None:
+            venue = None
+        elif venue_id in venue_cache:
+            venue = venue_cache[venue_id]
+        else:
+            venue = tomorrow_client.get_venue(venue_id)
+            venue_cache[venue_id] = venue
 
         if venue is None:
             stats["venue_not_found"] += 1
@@ -457,11 +496,23 @@ def capture_with_watchlist(
                     conditions = tomorrow_client.forecast_to_weather_conditions(forecast, game.id)
 
                     # Calculate combined pass rate for pass-rate multiplier
+                    # Default to 0.5 (neutral) if pass rate data unavailable
                     home_pass_rate = team_pass_rates.get(game.home_team)
                     away_pass_rate = team_pass_rates.get(game.away_team)
-                    combined_pass_rate = None
-                    if home_pass_rate is not None and away_pass_rate is not None:
+                    pass_rate_available = (
+                        home_pass_rate is not None and away_pass_rate is not None
+                    )
+                    if pass_rate_available:
                         combined_pass_rate = (home_pass_rate + away_pass_rate) / 2
+                    else:
+                        combined_pass_rate = 0.5  # Neutral default
+                        missing_team = (
+                            game.home_team if home_pass_rate is None else game.away_team
+                        )
+                        logger.debug(
+                            f"  {matchup}: Pass-rate scaling inactive "
+                            f"(missing data for {missing_team})"
+                        )
 
                     adjustment = weather_adjuster.calculate_adjustment(
                         conditions,
@@ -507,6 +558,7 @@ def capture_with_watchlist(
                         "precip_prob": forecast.precipitation_probability,
                         "weather_code": forecast.weather_code,
                         "combined_pass_rate": combined_pass_rate,
+                        "pass_rate_available": pass_rate_available,
                         "jp_total": jp_total,
                         "jp_weather_adjusted": jp_weather_adjusted,
                         "vegas_total": vegas_total,
@@ -574,9 +626,14 @@ def print_watchlist_report(stats: dict) -> None:
 
         # Sort by edge (most negative = strongest UNDER signal first)
         # If edge is None, use weather adjustment as fallback
+        # Sort by edge (most negative first), with edge=None entries last
+        # Tuple key: (has_edge_flag, sort_value) where flag=0 for real edge, 1 for None
         sorted_watchlist = sorted(
             stats["watchlist"],
-            key=lambda x: x.get("edge") if x.get("edge") is not None else x.get("weather_adjustment", 0)
+            key=lambda x: (
+                (0, x["edge"]) if x.get("edge") is not None
+                else (1, x.get("weather_adjustment", 0))
+            )
         )
 
         for entry in sorted_watchlist:
@@ -618,14 +675,16 @@ def print_watchlist_report(stats: dict) -> None:
 
             # Show pass rate context if significant wind adjustment
             combined_pass_rate = entry.get('combined_pass_rate')
-            if combined_pass_rate is not None and entry['wind_adjustment'] < 0:
-                if combined_pass_rate >= 0.55:
-                    style = "Pass-heavy matchup (wind hurts more)"
+            pass_rate_available = entry.get('pass_rate_available', True)
+            if entry['wind_adjustment'] < 0:
+                if not pass_rate_available:
+                    print(f"       📋 Pass Rate: N/A (using neutral default, scaling inactive)")
+                elif combined_pass_rate >= 0.55:
+                    print(f"       📋 Pass Rate: {combined_pass_rate:.0%} (Pass-heavy, wind hurts more)")
                 elif combined_pass_rate <= 0.45:
-                    style = "Run-heavy matchup (wind hurts less)"
+                    print(f"       📋 Pass Rate: {combined_pass_rate:.0%} (Run-heavy, wind hurts less)")
                 else:
-                    style = "Balanced matchup"
-                print(f"       📋 Pass Rate: {combined_pass_rate:.0%} ({style})")
+                    print(f"       📋 Pass Rate: {combined_pass_rate:.0%} (Balanced matchup)")
 
             print(f"    Confidence: {entry['confidence']:.0%} ({entry['hours_until_game']}h until game)")
             print()
@@ -661,9 +720,14 @@ def print_saturday_confirmation_report(stats: dict, thursday_forecasts: dict) ->
     print(f"\n📊 {len(stats['watchlist'])} GAMES WITH WEATHER CONCERNS:\n")
 
     # Sort by edge (most negative first)
+    # Sort by edge (most negative first), with edge=None entries last
+    # Tuple key: (has_edge_flag, sort_value) where flag=0 for real edge, 1 for None
     sorted_watchlist = sorted(
         stats["watchlist"],
-        key=lambda x: x.get("edge") if x.get("edge") is not None else x.get("weather_adjustment", 0)
+        key=lambda x: (
+            (0, x["edge"]) if x.get("edge") is not None
+            else (1, x.get("weather_adjustment", 0))
+        )
     )
 
     for entry in sorted_watchlist:
@@ -788,13 +852,16 @@ def main():
     mode = "Saturday confirmation" if args.saturday else "Thursday"
     logger.info(f"Starting {mode} weather capture for {args.year} Week {args.week}")
 
+    # Fetch games ONCE to ensure consistent game_ids across all operations
+    games = fetch_week_games(cfbd_client, args.year, args.week)
+    logger.info(f"Found {len(games)} games for {args.year} week {args.week}")
+
     # If Saturday mode, load Thursday forecasts first for comparison
     # Use EARLIEST forecast (not latest) to get the original Thursday morning capture
     # This prevents Thursday afternoon re-runs from overwriting the comparison baseline
     thursday_forecasts = {}
     if args.saturday and not args.dry_run:
         logger.info("Loading Thursday forecasts for comparison...")
-        games = cfbd_client.get_games(year=args.year, week=args.week, season_type="regular")
         for game in games:
             # Get all forecasts and take the earliest (Thursday morning)
             all_forecasts = tomorrow_client.get_all_forecasts(game.id)
@@ -810,6 +877,7 @@ def main():
         args.week,
         dry_run=args.dry_run,
         limit=args.limit,
+        games=games,
     )
 
     # Print appropriate report
