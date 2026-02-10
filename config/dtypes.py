@@ -84,10 +84,9 @@ INT8_COLUMNS = {
 INT16_COLUMNS = {
     "year",
     "season",
-    "distance",  # Yards to go (0-99)
-    "yards_to_goal",  # Field position (0-100)
-    "stars",  # Recruit stars (2-5)
-    "rating",  # Recruit rating (0-100)
+    "distance",  # Play-by-play: yards to go (0-99). Integer field.
+    "yards_to_goal",  # Play-by-play: field position (0-100). Integer field.
+    "stars",  # Recruit stars (2-5). Integer field.
     "attempts",
     "makes",
     "punt_count",
@@ -112,6 +111,9 @@ FLOAT32_COLUMNS = {
     "prior_rating",
     "talent_score",
     "combined_rating",
+    # Recruit rating from 247Sports (0.0-1.0 scale, e.g., 0.8834)
+    # NOT an integer 0-100 scale — truncating to int corrupts portal impact calculation
+    "rating",
     # Normalized metrics (0-1 range)
     "adj_sr",
     "adj_isoppp",
