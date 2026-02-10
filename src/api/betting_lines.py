@@ -241,15 +241,31 @@ def get_merged_lines(
         if game_id in merged:
             cfbd_line = merged[game_id]
             # Merge: prefer Odds API for opening lines (better coverage)
+            # Use explicit None checks (not `or`) because 0.0 is a valid pick'em line
             if prefer_odds_api:
                 merged[game_id] = BettingLine(
                     game_id=game_id,
-                    home_team=odds_line.home_team or cfbd_line.home_team,
-                    away_team=odds_line.away_team or cfbd_line.away_team,
-                    spread_open=odds_line.spread_open or cfbd_line.spread_open,
-                    spread_close=odds_line.spread_close or cfbd_line.spread_close,
+                    home_team=(
+                        odds_line.home_team if odds_line.home_team is not None
+                        else cfbd_line.home_team
+                    ),
+                    away_team=(
+                        odds_line.away_team if odds_line.away_team is not None
+                        else cfbd_line.away_team
+                    ),
+                    spread_open=(
+                        odds_line.spread_open if odds_line.spread_open is not None
+                        else cfbd_line.spread_open
+                    ),
+                    spread_close=(
+                        odds_line.spread_close if odds_line.spread_close is not None
+                        else cfbd_line.spread_close
+                    ),
                     source='merged',
-                    sportsbook=odds_line.sportsbook or cfbd_line.sportsbook,
+                    sportsbook=(
+                        odds_line.sportsbook if odds_line.sportsbook is not None
+                        else cfbd_line.sportsbook
+                    ),
                 )
             else:
                 # Only use Odds API if CFBD doesn't have opening line
