@@ -137,7 +137,12 @@ class HomeFieldAdvantage:
         if self.data_path.exists():
             try:
                 with open(self.data_path, "r") as f:
-                    self.team_hfa = json.load(f)
+                    raw_data = json.load(f)
+                # Normalize keys on load to ensure consistent key space
+                self.team_hfa = {
+                    normalize_team_name(team): hfa
+                    for team, hfa in raw_data.items()
+                }
                 logger.info(f"Loaded HFA data for {len(self.team_hfa)} teams")
             except Exception as e:
                 logger.warning(f"Could not load HFA data: {e}")
@@ -180,8 +185,13 @@ class HomeFieldAdvantage:
         # If we have team ratings, adjust for team strength (VECTORIZED)
         # P3.3: Replaced iterrows with .map() for ~10x speedup
         if team_ratings:
-            home_rating = completed["home_team"].map(team_ratings).fillna(0)
-            away_rating = completed["away_team"].map(team_ratings).fillna(0)
+            # Map teams through normalization for lookup in team_ratings
+            home_rating = completed["home_team"].apply(
+                lambda t: team_ratings.get(normalize_team_name(t), team_ratings.get(t, 0))
+            )
+            away_rating = completed["away_team"].apply(
+                lambda t: team_ratings.get(normalize_team_name(t), team_ratings.get(t, 0))
+            )
             expected_margin = home_rating - away_rating
             adjusted_margin = home_margin - expected_margin
             return adjusted_margin.mean()
@@ -221,8 +231,13 @@ class HomeFieldAdvantage:
         # Adjust for opponent strength if ratings available (VECTORIZED)
         # P3.3: Replaced iterrows with .map() for ~10x speedup
         if team_ratings:
-            team_rating = team_ratings.get(team, 0)
-            away_rating = home_games["away_team"].map(team_ratings).fillna(0)
+            # Normalize team name for lookup in team_ratings
+            normalized_team = normalize_team_name(team)
+            team_rating = team_ratings.get(normalized_team, team_ratings.get(team, 0))
+            # Map away teams through normalization for lookup
+            away_rating = home_games["away_team"].apply(
+                lambda t: team_ratings.get(normalize_team_name(t), team_ratings.get(t, 0))
+            )
             expected_margin = team_rating - away_rating
             adjusted_margin = home_margin - expected_margin
             team_hfa = adjusted_margin.mean()
@@ -251,6 +266,9 @@ class HomeFieldAdvantage:
         Returns:
             Dictionary mapping team names to HFA values
         """
+        # Clear stale entries from prior calls with different data/years
+        self.team_hfa.clear()
+
         # Filter by years if specified
         if years and "season" in games_df.columns:
             games_df = games_df[games_df["season"].isin(years)]
@@ -258,14 +276,18 @@ class HomeFieldAdvantage:
         # Get all teams - DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(set(games_df["home_team"]) | set(games_df["away_team"]))
 
-        # Calculate league HFA first
-        self.base_hfa = self.calculate_league_hfa(games_df, team_ratings)
-        logger.info(f"League HFA: {self.base_hfa:.2f} points")
+        # Calculate league HFA for logging only (local variable)
+        # Does NOT overwrite self.base_hfa to preserve caller's fallback behavior
+        league_hfa = self.calculate_league_hfa(games_df, team_ratings)
+        logger.info(f"League HFA: {league_hfa:.2f} points")
 
-        # Calculate team-specific HFA
+        # Calculate team-specific HFA (normalize keys for consistent storage)
+        # Note: calculate_team_hfa uses self.base_hfa for regression target,
+        # which is the configured default, not this dataset's league average
         for team in all_teams:
             hfa = self.calculate_team_hfa(team, games_df, team_ratings)
-            self.team_hfa[team] = hfa
+            normalized_team = normalize_team_name(team)
+            self.team_hfa[normalized_team] = hfa
 
         return self.team_hfa
 
@@ -294,6 +316,9 @@ class HomeFieldAdvantage:
         Returns:
             Dictionary mapping team names to calculated HFA values
         """
+        # Clear stale entries from prior calls with different data/years
+        self.team_hfa.clear()
+
         # Filter to completed, non-neutral games
         # P3.5: Avoid .copy() by computing derived values as Series directly
         neutral_col = games_df.get("neutral_site", pd.Series(False, index=games_df.index))
@@ -309,9 +334,14 @@ class HomeFieldAdvantage:
             return {}
 
         # Calculate all derived Series without modifying DataFrame
+        # Map teams through normalization for lookup in team_ratings
         home_margin = completed["home_points"] - completed["away_points"]
-        home_rating = completed["home_team"].map(team_ratings).fillna(0)
-        away_rating = completed["away_team"].map(team_ratings).fillna(0)
+        home_rating = completed["home_team"].apply(
+            lambda t: team_ratings.get(normalize_team_name(t), team_ratings.get(t, 0))
+        )
+        away_rating = completed["away_team"].apply(
+            lambda t: team_ratings.get(normalize_team_name(t), team_ratings.get(t, 0))
+        )
         expected_margin = home_rating - away_rating
         residual = home_margin - expected_margin
 
@@ -332,14 +362,18 @@ class HomeFieldAdvantage:
             n_games = residual_stats.loc[team, "n_games"]
             raw_hfa = residual_stats.loc[team, "raw_hfa"]
 
+            # Normalize team name for consistent storage and conference lookup
+            normalized_team = normalize_team_name(team)
+
+            # Look up conference using both normalized and raw names
+            conf = team_conferences.get(normalized_team, team_conferences.get(team, "default"))
+
             if n_games < min_games:
                 # Not enough data, use conference prior
-                conf = team_conferences.get(team, "default")
-                calculated_hfa[team] = CONFERENCE_HFA_DEFAULTS.get(conf, CONFERENCE_HFA_DEFAULTS["default"])
+                calculated_hfa[normalized_team] = CONFERENCE_HFA_DEFAULTS.get(conf, CONFERENCE_HFA_DEFAULTS["default"])
                 continue
 
             # Get conference prior for regression
-            conf = team_conferences.get(team, "default")
             prior = CONFERENCE_HFA_DEFAULTS.get(conf, CONFERENCE_HFA_DEFAULTS["default"])
 
             # Bayesian regression: more games = trust data more
@@ -352,7 +386,7 @@ class HomeFieldAdvantage:
             # Clamp to reasonable range (1.0 to 5.0)
             regressed_hfa = max(1.0, min(5.0, regressed_hfa))
 
-            calculated_hfa[team] = regressed_hfa
+            calculated_hfa[normalized_team] = regressed_hfa
 
         logger.info(f"Calculated HFA for {len(calculated_hfa)} teams")
 
@@ -440,9 +474,10 @@ class HomeFieldAdvantage:
             modifier = (improvement / 0.3) * TRAJECTORY_MAX_MODIFIER
             modifier = max(-TRAJECTORY_MAX_MODIFIER, min(TRAJECTORY_MAX_MODIFIER, modifier))
 
-            # Only apply meaningful modifiers
+            # Only apply meaningful modifiers (normalize key for consistent storage)
             if abs(modifier) >= 0.1:
-                modifiers[team] = round(modifier, 2)
+                normalized_team = normalize_team_name(team)
+                modifiers[normalized_team] = round(modifier, 2)
 
         self.trajectory_modifiers = modifiers
         # P3.9: Debug level for per-week logging
@@ -458,7 +493,8 @@ class HomeFieldAdvantage:
             modifier: HFA adjustment (-0.5 to +0.5)
         """
         modifier = max(-TRAJECTORY_MAX_MODIFIER, min(TRAJECTORY_MAX_MODIFIER, modifier))
-        self.trajectory_modifiers[team] = modifier
+        normalized_team = normalize_team_name(team)
+        self.trajectory_modifiers[normalized_team] = modifier
 
     def get_hfa(
         self,
