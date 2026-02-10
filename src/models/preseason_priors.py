@@ -113,7 +113,10 @@ COACHING_CHANGES = {
         "Indiana": "Curt Cignetti",
         "Mississippi State": "Jeff Lebby",
     },
-    2025: {
+    # 2025: No major new coach hires to track
+    # Note: Lane Kiffin (LSU), Jon Sumrall (Florida), Ryan Silverfield (Arkansas)
+    # are 2026 hires - do NOT apply to 2025 backtest
+    2026: {
         "LSU": "Lane Kiffin",
         "Florida": "Jon Sumrall",
         "Arkansas": "Ryan Silverfield",
