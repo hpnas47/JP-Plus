@@ -100,6 +100,14 @@ TRAJECTORY_MAX_MODIFIER = 0.5  # Maximum adjustment (±0.5 points)
 TRAJECTORY_BASELINE_YEARS = 3  # Years to establish baseline (older)
 TRAJECTORY_RECENT_YEARS = 1    # Recent years to compare (newer)
 
+# Regression constant for Bayesian shrinkage formula: data_weight = n / (n + k)
+# k controls how quickly data overwhelms the prior:
+#   - At n=k games, data weight = 50% (equal weighting)
+#   - At n=2k games, data weight = 67%
+#   - At n=4k games, data weight = 80%
+# k=20 means: 10 games → 33% data, 20 games → 50%, 40 games → 67%, 100 games → 83%
+HFA_REGRESSION_K = 20
+
 
 class HomeFieldAdvantage:
     """
@@ -229,9 +237,12 @@ class HomeFieldAdvantage:
         else:
             team_hfa = home_margin.mean()
 
-        # Regress toward league average (avoid extreme values from small samples)
-        regression_weight = min(len(home_games) / 20, 1.0)
-        final_hfa = (regression_weight * team_hfa) + ((1 - regression_weight) * self.base_hfa)
+        # Bayesian shrinkage toward league average: data_weight = n / (n + k)
+        # As n → ∞, data_weight → 1.0 (prior influence vanishes)
+        # At n = k (20 games), data_weight = 0.5 (equal weighting)
+        n_games = len(home_games)
+        data_weight = n_games / (n_games + HFA_REGRESSION_K)
+        final_hfa = (data_weight * team_hfa) + ((1 - data_weight) * self.base_hfa)
 
         return final_hfa
 
@@ -346,22 +357,21 @@ class HomeFieldAdvantage:
             n_games = residual_stats.loc[team, "n_games"]
             raw_hfa = residual_stats.loc[team, "raw_hfa"]
 
+            # Get conference prior for this team
+            conf = team_conferences.get(team, "default")
+            prior = CONFERENCE_HFA_DEFAULTS.get(conf, CONFERENCE_HFA_DEFAULTS["default"])
+
             if n_games < min_games:
-                # Not enough data, use conference prior
-                conf = team_conferences.get(team, "default")
-                calculated_hfa[team] = CONFERENCE_HFA_PRIORS.get(conf, CONFERENCE_HFA_PRIORS["default"])
+                # Not enough data, use conference prior directly
+                calculated_hfa[team] = prior
                 continue
 
-            # Get conference prior for regression
-            conf = team_conferences.get(team, "default")
-            prior = CONFERENCE_HFA_PRIORS.get(conf, CONFERENCE_HFA_PRIORS["default"])
+            # Bayesian shrinkage toward conference prior: data_weight = n / (n + k)
+            # Uses regress_games as the k parameter (at n=k, data_weight = 50%)
+            # As n → ∞, data_weight → 1.0 (prior influence vanishes)
+            data_weight = n_games / (n_games + regress_games)
 
-            # Bayesian regression: more games = trust data more
-            # At regress_games, we weight data ~70%, prior ~30%
-            data_weight = min(n_games / regress_games, 0.85)
-            prior_weight = 1 - data_weight
-
-            regressed_hfa = (raw_hfa * data_weight) + (prior * prior_weight)
+            regressed_hfa = (data_weight * raw_hfa) + ((1 - data_weight) * prior)
 
             # Clamp to reasonable range (1.0 to 5.0)
             regressed_hfa = max(1.0, min(5.0, regressed_hfa))
