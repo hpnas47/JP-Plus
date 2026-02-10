@@ -34,8 +34,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CACHE_FILE = project_root / "data" / "last_backtest_metrics.json"
+RATINGS_CACHE_FILE = project_root / "data" / "last_ratings.json"
 CLAUDE_MD = project_root / "CLAUDE.md"
 MODEL_ARCH_MD = project_root / "docs" / "MODEL_ARCHITECTURE.md"
+MODEL_EXPLAINER_MD = project_root / "docs" / "MODEL_EXPLAINER.md"
 TIMESTAMP_COMMENT = "<!-- Last validated: {date} by generate_docs.py -->"
 
 
@@ -608,6 +610,201 @@ def _update_timestamp(content: str, today: str) -> str:
     return content
 
 
+# =============================================================================
+# RATINGS GENERATION
+# =============================================================================
+
+
+def generate_ratings(year: int, top_n: int = 25) -> list[dict]:
+    """Generate JP+ power ratings for a given year.
+
+    Args:
+        year: Season year
+        top_n: Number of teams to return (default 25)
+
+    Returns:
+        List of dicts with team ratings, sorted by overall rating
+    """
+    from scripts.backtest import fetch_all_season_data
+    from src.models.efficiency_foundation_model import EfficiencyFoundationModel
+    from src.models.special_teams import SpecialTeamsModel
+
+    logger.info(f"Generating {year} JP+ ratings...")
+
+    # fetch_all_season_data takes a list of years and returns dict[int, SeasonData]
+    season_data = fetch_all_season_data([year], use_priors=False, use_portal=False)
+    sd = season_data[year]
+
+    # Convert to pandas (plays already remapped by fetch_all_season_data)
+    plays_pd = sd.efficiency_plays_df.to_pandas()
+    games_pd = sd.games_df.to_pandas()
+
+    # Calculate EFM ratings (games_df used for turnover stats internally)
+    efm = EfficiencyFoundationModel(ridge_alpha=10.0)
+    efm.calculate_ratings(plays_pd, games_pd, fbs_teams=sd.fbs_teams)
+    efm_df = efm.get_ratings_df()
+
+    # Filter to FBS only
+    efm_df = efm_df[efm_df["team"].isin(sd.fbs_teams)].copy()
+
+    # Calculate ST ratings
+    st = SpecialTeamsModel()
+    st_plays = sd.st_plays_df.to_pandas()
+    games_played = games_pd.groupby("home_team").size().to_dict()
+    away_games = games_pd.groupby("away_team").size().to_dict()
+    for team, count in away_games.items():
+        games_played[team] = games_played.get(team, 0) + count
+    st.calculate_all_st_ratings_from_plays(st_plays, games_played)
+
+    # Build ratings list
+    # EFM get_ratings_df() columns: team, overall, offense, defense, special_teams, etc.
+    ratings = []
+    for _, row in efm_df.iterrows():
+        team = row["team"]
+        st_rating = st.get_rating(team)
+        st_val = st_rating.overall_rating if st_rating else 0.0
+
+        ratings.append({
+            "team": team,
+            "overall": row["overall"] + st_val,  # EFM overall + ST
+            "offense": row["offense"],
+            "defense": row["defense"],
+            "st": st_val,
+        })
+
+    # Sort by overall and add ranks
+    ratings.sort(key=lambda x: -x["overall"])
+    for i, r in enumerate(ratings):
+        r["rank"] = i + 1
+
+    # Add component ranks
+    off_sorted = sorted(ratings, key=lambda x: -x["offense"])
+    def_sorted = sorted(ratings, key=lambda x: -x["defense"])
+    st_sorted = sorted(ratings, key=lambda x: -x["st"])
+
+    off_ranks = {r["team"]: i + 1 for i, r in enumerate(off_sorted)}
+    def_ranks = {r["team"]: i + 1 for i, r in enumerate(def_sorted)}
+    st_ranks = {r["team"]: i + 1 for i, r in enumerate(st_sorted)}
+
+    for r in ratings:
+        r["off_rank"] = off_ranks[r["team"]]
+        r["def_rank"] = def_ranks[r["team"]]
+        r["st_rank"] = st_ranks[r["team"]]
+
+    logger.info(f"Generated ratings for {len(ratings)} FBS teams")
+    return ratings[:top_n]
+
+
+def build_top25_table(ratings: list[dict], year: int) -> str:
+    """Build the Top 25 markdown table for MODEL_EXPLAINER.md."""
+    lines = [
+        f"## {year} JP+ Top 25",
+        "",
+        "End-of-season power ratings including all postseason (bowls + CFP through National Championship):",
+        "",
+        "| Rank | Team | Overall | Off (rank) | Def (rank) | ST (rank) |",
+        "|------|------|---------|------------|------------|-----------|",
+    ]
+
+    for r in ratings[:25]:
+        # Bold the #1 team
+        team_str = f"**{r['team']}**" if r["rank"] == 1 else r["team"]
+        lines.append(
+            f"| {r['rank']} | {team_str} | {r['overall']:+.1f} | "
+            f"{r['offense']:+.1f} ({r['off_rank']}) | "
+            f"{r['defense']:+.1f} ({r['def_rank']}) | "
+            f"{r['st']:+.2f} ({r['st_rank']}) |"
+        )
+
+    return "\n".join(lines)
+
+
+def save_ratings_cache(ratings: list[dict], year: int):
+    """Save ratings to JSON cache file."""
+    RATINGS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "year": year,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ratings": ratings,
+    }
+    with open(RATINGS_CACHE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info(f"Ratings cached to {RATINGS_CACHE_FILE}")
+
+
+def load_ratings_cache() -> tuple[list[dict], int]:
+    """Load ratings from JSON cache file.
+
+    Returns:
+        Tuple of (ratings list, year)
+    """
+    if not RATINGS_CACHE_FILE.exists():
+        raise FileNotFoundError(
+            f"No cached ratings found at {RATINGS_CACHE_FILE}. "
+            "Run with --ratings first."
+        )
+    with open(RATINGS_CACHE_FILE, "r") as f:
+        data = json.load(f)
+    logger.info(
+        f"Loaded cached {data['year']} ratings from {RATINGS_CACHE_FILE} "
+        f"(generated: {data.get('generated', 'unknown')})"
+    )
+    return data["ratings"], data["year"]
+
+
+def update_model_explainer_ratings(
+    ratings: list[dict], year: int, dry_run: bool = False
+) -> bool:
+    """Update the Top 25 table in MODEL_EXPLAINER.md.
+
+    Returns True if changes were made.
+    """
+    if not MODEL_EXPLAINER_MD.exists():
+        logger.error(f"MODEL_EXPLAINER.md not found at {MODEL_EXPLAINER_MD}")
+        return False
+
+    content = MODEL_EXPLAINER_MD.read_text()
+
+    # Build new table
+    new_table = build_top25_table(ratings, year)
+
+    # Pattern to match the existing Top 25 section
+    # Matches from "## YYYY JP+ Top 25" through the table rows
+    pattern = re.compile(
+        r"## \d{4} JP\+ Top 25\n\n"
+        r"End-of-season power ratings.*?\n\n"
+        r"\| Rank \| Team \|.*?\n"
+        r"\|[-| ]+\n"
+        r"(?:\|.*\n)+",
+        re.MULTILINE,
+    )
+
+    match = pattern.search(content)
+    if not match:
+        logger.error("Could not find Top 25 section in MODEL_EXPLAINER.md")
+        return False
+
+    old_section = match.group(0)
+    new_section = new_table + "\n"
+
+    if old_section.strip() == new_section.strip():
+        logger.info("MODEL_EXPLAINER.md Top 25 table is already up to date")
+        return False
+
+    new_content = content[: match.start()] + new_section + content[match.end() :]
+
+    if dry_run:
+        logger.info("[DRY RUN] Would update MODEL_EXPLAINER.md Top 25 table")
+        print(f"\n--- Top 25 Table (new) ---")
+        print(new_table)
+        print("---")
+        return True
+
+    MODEL_EXPLAINER_MD.write_text(new_content)
+    logger.info(f"Updated MODEL_EXPLAINER.md with {year} Top 25 ratings")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate/update documentation with current backtest metrics"
@@ -622,11 +819,57 @@ def main():
         action="store_true",
         help="Show changes without writing files",
     )
+    parser.add_argument(
+        "--ratings",
+        action="store_true",
+        help="Generate Top 25 power ratings and update MODEL_EXPLAINER.md",
+    )
+    parser.add_argument(
+        "--ratings-year",
+        type=int,
+        default=2025,
+        help="Year for ratings generation (default: 2025)",
+    )
+    parser.add_argument(
+        "--ratings-only",
+        action="store_true",
+        help="Only generate ratings, skip backtest metrics",
+    )
     args = parser.parse_args()
 
     # Ensure we're running from project root
     os.chdir(project_root)
 
+    updated = []
+
+    # Handle ratings generation
+    if args.ratings or args.ratings_only:
+        ratings = generate_ratings(args.ratings_year, top_n=25)
+        save_ratings_cache(ratings, args.ratings_year)
+
+        # Print Top 25
+        print("\n" + "=" * 60)
+        print(f"{args.ratings_year} JP+ TOP 25")
+        print("=" * 60)
+        print(f"{'Rank':<5} {'Team':<20} {'Overall':>8} {'Off':>8} {'Def':>8} {'ST':>8}")
+        print("-" * 60)
+        for r in ratings[:25]:
+            print(
+                f"{r['rank']:<5} {r['team']:<20} {r['overall']:>+8.1f} "
+                f"{r['offense']:>+8.1f} {r['defense']:>+8.1f} {r['st']:>+8.2f}"
+            )
+        print("=" * 60)
+
+        if update_model_explainer_ratings(ratings, args.ratings_year, dry_run=args.dry_run):
+            updated.append("docs/MODEL_EXPLAINER.md")
+
+        if args.ratings_only:
+            if updated:
+                action = "Would update" if args.dry_run else "Updated"
+                print(f"\n{action}: {', '.join(updated)}")
+            return
+
+    # Handle backtest metrics
     if args.skip_backtest:
         metrics = load_metrics_cache()
     else:
@@ -649,7 +892,6 @@ def main():
     print("=" * 60)
 
     # Update docs
-    updated = []
     if update_claude_md(metrics, dry_run=args.dry_run):
         updated.append("CLAUDE.md")
     if update_model_architecture_md(metrics, dry_run=args.dry_run):
