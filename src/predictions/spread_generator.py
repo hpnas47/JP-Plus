@@ -226,6 +226,7 @@ class SpreadGenerator:
         track_diagnostics: bool = False,
         global_cap: float = 7.0,
         st_spread_cap: Optional[float] = 2.5,
+        st_early_season_weight: float = 1.0,  # Weight for ST in weeks 1-3 (1.0 = full, 0.5 = half)
     ):
         """Initialize spread generator with EFM ratings and adjustment layers.
 
@@ -246,6 +247,7 @@ class SpreadGenerator:
             track_diagnostics: If True, track adjustment stacks for P2.11 analysis
             global_cap: Maximum total adjustment (default: 7.0)
             st_spread_cap: Cap on ST differential's effect on spread. Default 2.5 (APPROVED). 0/None = no cap.
+            st_early_season_weight: Weight for ST impact in weeks 1-3 (1.0 = full). Default 1.0.
         """
         self.ratings = ratings or {}
         # Calculate mean rating for fallback on missing teams
@@ -280,6 +282,7 @@ class SpreadGenerator:
         # ST spread cap (Approach B: margin-level capping)
         # Caps the effect of ST differential on final spread, not the rating itself
         self.st_spread_cap = st_spread_cap
+        self.st_early_season_weight = st_early_season_weight
 
     def _get_base_margin(self, home_team: str, away_team: str) -> float:
         """Get base margin from EFM ratings differential.
@@ -546,9 +549,14 @@ class SpreadGenerator:
         # Apply margin-level cap if configured (Approach B)
         # This caps the EFFECT on spread, not the rating itself
         if self.st_spread_cap and self.st_spread_cap > 0:
-            components.special_teams = max(-self.st_spread_cap, min(self.st_spread_cap, raw_st_diff))
+            st_capped = max(-self.st_spread_cap, min(self.st_spread_cap, raw_st_diff))
         else:
-            components.special_teams = raw_st_diff
+            st_capped = raw_st_diff
+        # Apply early-season weight (Approach C) - reduce ST impact weeks 1-3
+        if week is not None and week <= 3 and self.st_early_season_weight < 1.0:
+            components.special_teams = st_capped * self.st_early_season_weight
+        else:
+            components.special_teams = st_capped
 
         # Finishing drives differential (red zone efficiency)
         # SHELVED: 4 consecutive backtest rejections confirmed ~70-80% overlap with EFM (IsoPPP).
