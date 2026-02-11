@@ -326,7 +326,7 @@ The special teams model calculates marginal point contribution (PBTA - Points Be
 
 **FBS Distribution:** Mean ~0, Std ~1.0, 95% range [-2, +2] pts/game
 
-**Integration:** ST ratings are displayed separately from the O/D total. In spread prediction, the ST differential between teams is applied as an adjustment.
+**Integration:** ST ratings are displayed separately from the O/D total. In spread prediction, the ST differential between teams is applied as an adjustment, **capped at ±2.5 pts** to prevent noisy outliers from dominating the spread. This margin-level cap preserves the underlying ratings while limiting extreme matchup differentials.
 
 #### Key Files
 - `src/models/efficiency_foundation_model.py` - Core EFM implementation (includes RZ Leverage weighting)
@@ -358,7 +358,7 @@ EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments.
 | | Sandwich Spot | -1.0 pts extra | BOTH letdown AND lookahead (compounding) |
 | | Rivalry Boost | +1.0 pts | Underdog in rivalry game only |
 | **Opponent/Pace** | FCS Penalty | +18/+32 pts | Tiered: Elite FCS (+18), Standard FCS (+32) |
-| | Special Teams | -3 to +3 pts | Full ST differential (FG+Punt+Kickoff PBTA) |
+| | Special Teams | ±2.5 pts max | ST differential capped to prevent outlier-driven spreads |
 | | Pace (Triple-Option) | -10% to -15% | Spread compression for low-play-count games |
 | **Manual** | QB Injury | ±3-10 pts | Flag when starting QB is out |
 | **Totals Only** | Weather | varies | Wind, cold, precipitation penalties |

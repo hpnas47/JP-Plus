@@ -41,7 +41,7 @@ Instead of asking "how many points did they score?", JP+ asks "how efficiently d
 - **Garbage Time Filtering:** Blowout plays are down-weighted for the trailing team, but kept for the winning team (they earned the dominance)
 - **Red Zone Leverage:** Plays inside the 20 are weighted 1.5x and inside the 10 are weighted 2.0x, while empty-calorie yards (midfield gains that don't lead to scoring) are weighted 0.7x
 - **Conference Strength Anchor:** Out-of-conference games are weighted 1.5x in ridge regression, plus a Bayesian conference strength adjustment corrects inter-conference rating bias
-- **Special Teams:** Complete ST model (field goals, punting, kickoffs) expressed as points better than average
+- **Special Teams:** Complete ST model (field goals, punting, kickoffs) expressed as points better than average, with spread impact capped at ±2.5 pts to prevent outlier-driven predictions
 
 ---
 
