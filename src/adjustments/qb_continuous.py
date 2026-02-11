@@ -41,7 +41,7 @@ DEFAULT_QB_CAP = 3.0
 
 # QB scaling factor: converts PPA difference to points
 # Calibrated so 90th percentile reaches ~60-70% of cap by week 8
-DEFAULT_QB_SCALE = 4.0
+DEFAULT_QB_SCALE = 5.0
 
 # Prior season decay factor
 DEFAULT_PRIOR_DECAY = 0.3

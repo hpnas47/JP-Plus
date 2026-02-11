@@ -54,6 +54,7 @@ from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
+from src.adjustments.qb_continuous import QBContinuousAdjuster
 from src.predictions.spread_generator import SpreadGenerator
 from src.predictions.vegas_comparison import VegasComparison
 from src.reports.excel_export import ExcelExporter
@@ -745,6 +746,17 @@ def run_predictions(
                 qb_adjuster.flag_qb_out(team)
             qb_adjuster.print_depth_charts()
 
+        # Initialize QB Continuous adjuster (Phase1-only mode by default)
+        # Only applies for weeks 1-3 to avoid double-counting with EFM
+        qb_continuous = None
+        if week <= 3:
+            logger.info(f"Initializing QB Continuous adjuster for week {week} (Phase 1)")
+            qb_continuous = QBContinuousAdjuster(
+                year=year,
+                phase1_only=True,  # Only for weeks 1-3
+            )
+            qb_continuous.build_qb_data(through_week=week - 1 if week > 1 else 0)
+
         # Build spread generator
         # Note: fcs_penalty_elite/standard use SpreadGenerator's defaults (18.0/32.0)
         # These are fallbacks when dynamic FCS estimator is unavailable.
@@ -758,6 +770,7 @@ def run_predictions(
             altitude=altitude,
             fbs_teams=fbs_teams,
             qb_adjuster=qb_adjuster,
+            qb_continuous=qb_continuous,
         )
 
         # Fetch upcoming games

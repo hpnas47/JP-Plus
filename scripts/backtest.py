@@ -3923,16 +3923,17 @@ def main():
         default=0.50,
         help="HFA offset for close line evaluation. Default: 0.50",
     )
-    # QB Continuous Rating System
+    # QB Continuous Rating System (DEFAULT: enabled with phase1-only)
     parser.add_argument(
         "--qb-continuous",
         action="store_true",
-        help="Enable continuous QB rating system (always-on QB quality adjustment). Default: disabled",
+        default=True,
+        help="Enable continuous QB rating system. Default: ENABLED",
     )
     parser.add_argument(
         "--no-qb-continuous",
         action="store_true",
-        help="Explicitly disable QB continuous (for clarity when comparing)",
+        help="Disable QB continuous rating system",
     )
     parser.add_argument(
         "--qb-shrinkage-k",
@@ -3949,8 +3950,8 @@ def main():
     parser.add_argument(
         "--qb-scale",
         type=float,
-        default=4.0,
-        help="QB PPA-to-points scaling factor. Default: 4.0",
+        default=5.0,
+        help="QB PPA-to-points scaling factor. Default: 5.0",
     )
     parser.add_argument(
         "--qb-prior-decay",
@@ -3966,7 +3967,13 @@ def main():
     parser.add_argument(
         "--qb-phase1-only",
         action="store_true",
-        help="Only apply QB adjustment for weeks 1-3 (skip Core weeks 4+)",
+        default=True,
+        help="Only apply QB adjustment for weeks 1-3 (skip Core weeks 4+). Default: ENABLED",
+    )
+    parser.add_argument(
+        "--no-qb-phase1-only",
+        action="store_true",
+        help="Apply QB adjustment for ALL weeks (not just Phase 1). Warning: may degrade Core ATS.",
     )
     # Dual-Cap Sweep Mode
     parser.add_argument(
@@ -4211,7 +4218,7 @@ def main():
         qb_scale=args.qb_scale,
         qb_prior_decay=args.qb_prior_decay,
         qb_use_prior_season=not args.no_qb_prior_season,
-        qb_phase1_only=args.qb_phase1_only,
+        qb_phase1_only=args.qb_phase1_only and not args.no_qb_phase1_only,
     )
 
     # P3.4: Print results with ATS data for sanity report
