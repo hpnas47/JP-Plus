@@ -56,8 +56,21 @@ JP+ applies game-specific adjustments for factors that affect the spread beyond 
 - **Rest Differential** — bye weeks, short weeks, and MACtion scheduling
 - **Situational Spots** — letdown games after big wins, lookahead to rivalry/ranked opponents
 - **FCS Opponents** — dynamic penalty (10-45 pts) when FBS plays FCS, based on prior game margins
+- **QB Continuous** (Weeks 1-3 only) — walk-forward QB quality estimates from PPA data, improving Phase 1 5+ Edge by +0.6%
 
 All adjustments pass through a smoothing layer to prevent over-prediction when multiple factors stack.
+
+### QB Continuous Rating (DEFAULT)
+
+The QB Continuous system applies walk-forward-safe QB quality estimates for **Weeks 1-3 only** (Phase 1). This captures QB value before the EFM efficiency metrics have enough data.
+
+**Why Phase 1 only?** By Week 4, the EFM has already "baked in" QB quality through success rate and explosiveness metrics. Applying additional QB adjustment for Core weeks causes double-counting.
+
+| Metric | Without QB | With QB Phase1-only | Improvement |
+|--------|------------|---------------------|-------------|
+| Phase 1 5+ Edge (Close) | 50.2% | 50.8% | **+0.6%** |
+| Phase 1 MAE | 15.33 | 15.31 | -0.02 |
+| Core 5+ Edge | 54.5% | 54.5% | unchanged |
 
 ### Edge-Aware Production Mode (DEFAULT in 2026)
 

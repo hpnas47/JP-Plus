@@ -637,11 +637,46 @@ JP+ compresses spreads 10% toward zero for triple-option games (15% if both team
 
 ---
 
+### QB Continuous Rating (DEFAULT)
+
+Walk-forward-safe QB quality estimates that automatically adjust spreads based on quarterback performance. **Enabled by default** for all predictions.
+
+#### How It Works
+
+1. **Data Source:** CFBD `get_predicted_points_added_by_player_game` for QB PPA, `get_game_player_stats` for dropbacks
+2. **Shrinkage:** K=200 (~250 dropbacks → 55% weight on raw signal)
+3. **Prior Season:** Decay factor 0.3 for Week 1 projections
+4. **Starter ID:** Conservative logic — only switch if new QB leads team in most recent game with MIN_RECENT_DB=15 and MIN_CUM_DB=50
+
+#### Phase1-only Mode (DEFAULT)
+
+The key insight: by Week 4, the EFM has already "baked in" QB quality through efficiency metrics. Applying additional QB adjustment causes double-counting and degrades Core ATS.
+
+**Phase1-only mode** applies QB adjustment only for Weeks 1-3, then disables for Core:
+
+| Phase | QB Adjustment | Rationale |
+|-------|---------------|-----------|
+| Weeks 1-3 | ENABLED | EFM hasn't captured current QB yet |
+| Weeks 4+ | DISABLED | EFM efficiency metrics include QB performance |
+
+**Results (2022-2025):**
+
+| Metric | Without QB | With QB Phase1-only | Delta |
+|--------|------------|---------------------|-------|
+| Phase 1 5+ Edge (Close) | 50.2% | 50.8% | **+0.6%** |
+| Phase 1 5+ Edge (Open) | ~50.2% | 50.7% | **+0.5%** |
+| Phase 1 MAE | 15.33 | 15.31 | -0.02 |
+| Core 5+ Edge | 54.5% | 54.5% | **0.0%** |
+
+**CLI:** `--no-qb-continuous` to disable, `--no-qb-phase1-only` to test full mode (warning: degrades Core)
+
+---
+
 ### Manual Adjustments
 
 #### QB Injury
 
-The single biggest unmodeled source of prediction error. Manual flagging system:
+For known injuries NOT captured by the continuous system. Manual flagging system:
 
 1. Pre-compute depth charts from CFBD player PPA data (starter = most pass attempts)
 2. Calculate PPA differential between starter and backup
