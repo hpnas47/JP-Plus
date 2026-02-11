@@ -533,6 +533,38 @@ Examples: Oklahoma -49 actual vs Texas when predicted -8 (residual -41), Arizona
 
 **Trade-off:** LSA improves 5+ Edge by +1.2% while reducing 3+ Edge by -0.8%. This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
 
+#### Dual-Spread Mode (Dynamic Bet Timing)
+
+**Problem:** LSA excels at closing lines (56.1% at 5+) but fixed baseline excels at opening lines (57.0% at 5+). Which should we use?
+
+**Solution:** The `--dual-spread` flag outputs both spreads and recommends the optimal one based on bet timing:
+
+```python
+# Implementation in run_weekly.py
+if days_until_game >= lsa_threshold_days:  # Default: 4 days
+    recommendation = "fixed"   # Opening line bet
+else:
+    recommendation = "lsa"     # Closing line bet
+```
+
+**Performance by Timing:**
+| Bet Timing | Recommended Mode | 5+ Edge | Rationale |
+|------------|------------------|---------|-----------|
+| Opening (Sun–Wed) | Fixed | **57.0%** | Raw market inefficiency not yet priced |
+| Closing (Thu–Sat) | LSA | **56.1%** | Market moved; LSA's filter identifies remaining edge |
+
+**CLI:**
+```bash
+python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread
+python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread --lsa-threshold-days 3
+```
+
+**Output Columns:**
+- `jp_spread_fixed` — Prediction using fixed situational constants
+- `jp_spread_lsa` — Prediction using learned coefficients
+- `bet_timing_rec` — "fixed" or "lsa" based on `days_until_game >= threshold`
+- `jp_spread_recommended` — The spread matching the timing recommendation
+
 ---
 
 ### Opponent & Pace Adjustments

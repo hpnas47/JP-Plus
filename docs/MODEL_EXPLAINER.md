@@ -74,6 +74,33 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 **Configuration:** `alpha=300.0`, `clamp_max=4.0` (safety net)
 
+#### Dynamic Bet Timing Mode
+
+The `--dual-spread` flag enables smart switching between fixed and LSA based on when you're placing your bet:
+
+| Days Before Game | Recommendation | Why |
+|------------------|----------------|-----|
+| 4+ days (Sun–Wed) | Fixed baseline | Opening lines haven't absorbed sharp action; fixed captures raw edge (57.0% at 5+) |
+| <4 days (Thu–Sat) | LSA | Market has moved toward equilibrium; LSA's high-confidence filter excels here (56.1% at 5+) |
+
+**CLI Usage:**
+```bash
+# Standard mode (fixed only)
+python3 scripts/run_weekly.py --year 2025 --week 12
+
+# Dual-spread with recommendations
+python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread
+
+# Custom threshold (e.g., 3 days instead of 4)
+python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread --lsa-threshold-days 3
+```
+
+**Output columns (dual-spread mode):**
+- `jp_spread_fixed` — Spread using fixed situational constants
+- `jp_spread_lsa` — Spread using learned coefficients
+- `bet_timing_rec` — "fixed" or "lsa" based on days to game
+- `jp_spread_recommended` — The spread matching the recommendation
+
 *For detailed adjustment values and formulas, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 
 ---
