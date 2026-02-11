@@ -7,7 +7,7 @@ to a continuous penalty function.
 Replaces the static ELITE_FCS_TEAMS frozenset with data-driven, year-adaptive estimates.
 
 Key features:
-- Walk-forward safe: Only uses games from weeks < current week
+- Walk-forward safe: Only uses games from weeks <= through_week (caller passes current_week - 1)
 - HFA neutralization: Removes home field advantage bias from margin calculations
 - Bayesian shrinkage: Heavy shrinkage early season, less as games accumulate
 - Continuous penalty: Smooth mapping from margin to penalty (no discrete tiers)
@@ -87,9 +87,15 @@ class FCSStrengthEstimator:
     _team_margins: dict[str, list[float]] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Initialize internal state."""
-        self._team_strengths = {}
-        self._team_margins = {}
+        """Validate parameters on initialization."""
+        if self.k_fcs <= 0:
+            raise ValueError(f"k_fcs must be positive, got {self.k_fcs}")
+        if self.min_penalty > self.max_penalty:
+            raise ValueError(
+                f"min_penalty ({self.min_penalty}) must be <= max_penalty ({self.max_penalty})"
+            )
+        if self.slope < 0:
+            raise ValueError(f"slope must be non-negative, got {self.slope}")
 
     def reset(self) -> None:
         """Clear all state for a new season."""
@@ -100,26 +106,27 @@ class FCSStrengthEstimator:
         self,
         games_df: pl.DataFrame,
         fbs_teams: set[str],
-        max_week: int,
+        through_week: int,
     ) -> None:
         """Update FCS strength estimates from game results.
 
-        Walk-forward safe: only uses games where week <= max_week.
+        Walk-forward safe: includes games where week <= through_week.
+        Callers must pass current_week - 1 to exclude the current week's games.
         Uses vectorized Polars operations for performance.
 
         Args:
             games_df: Polars DataFrame with columns: week, home_team, away_team,
                       home_points, away_points
             fbs_teams: Set of FBS team names
-            max_week: Maximum week to include (for walk-forward safety)
+            through_week: Include games up to and including this week (pass current_week - 1)
         """
         # Clear existing state and rebuild from scratch
         self._team_margins.clear()
         self._team_strengths.clear()
 
-        # Filter to completed games up to max_week
+        # Filter to completed games up to through_week
         filtered = games_df.filter(
-            (pl.col("week") <= max_week)
+            (pl.col("week") <= through_week)
             & pl.col("home_points").is_not_null()
             & pl.col("away_points").is_not_null()
         )
@@ -193,7 +200,7 @@ class FCSStrengthEstimator:
             )
             logger.debug(
                 f"FCS estimator updated: {n_teams} teams, {n_games} games, "
-                f"avg margin={avg_margin:.1f}, hfa_adj={self.hfa_value} (through week {max_week})"
+                f"avg margin={avg_margin:.1f}, hfa_adj={self.hfa_value} (through week {through_week})"
             )
 
     def _recalculate_strengths(self) -> None:
@@ -202,8 +209,12 @@ class FCSStrengthEstimator:
             n_games = len(margins)
             raw_margin = sum(margins) / n_games if n_games > 0 else self.baseline_margin
 
-            # Bayesian shrinkage toward baseline
-            shrink_factor = n_games / (n_games + self.k_fcs)
+            # Bayesian shrinkage toward baseline (with zero-division guard)
+            if self.k_fcs == 0:
+                # Defensive: k_fcs should never be 0 (validated in __post_init__)
+                shrink_factor = 1.0 if n_games > 0 else 0.0
+            else:
+                shrink_factor = n_games / (n_games + self.k_fcs)
             shrunk_margin = (
                 self.baseline_margin
                 + (raw_margin - self.baseline_margin) * shrink_factor

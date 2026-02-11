@@ -140,7 +140,7 @@ def collect_feature_games(
 
             # FCS estimator
             fcs_estimator = FCSStrengthEstimator()
-            fcs_estimator.update_from_games(games_df, fbs_teams, max_week=pred_week - 1)
+            fcs_estimator.update_from_games(games_df, fbs_teams, through_week=pred_week - 1)
 
             # Build spread generator
             spread_gen = SpreadGenerator(

@@ -855,7 +855,7 @@ def walk_forward_predict(
         # Only update if we have an estimator and not using static mode
         active_fcs_estimator = None
         if fcs_estimator is not None and not fcs_static:
-            fcs_estimator.update_from_games(games_df, fbs_teams, max_week=pred_week - 1)
+            fcs_estimator.update_from_games(games_df, fbs_teams, through_week=pred_week - 1)
             active_fcs_estimator = fcs_estimator
 
         # Build spread generator with EFM ratings
