@@ -80,12 +80,12 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 
 #### Performance by Season Phase
 
-| Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
-|-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1–3 | 960 | 14.82 | 18.75 | 47.9% | 49.1% | 48.1% | 48.9% | 50.2% |
-| **Core** | **4–15** | **2,485** | **12.50** | **15.82** | **52.2%** | **53.5%** | **53.9%** | **54.4%** | **57.3%** |
-| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 47.2% | 46.7% | 46.8% |
-| **Full** | **All** | **3,657** | **13.17** | **16.67** | **50.8%** | **52.1%** | **51.7%** | **52.1%** | **54.8%** |
+| Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
+|-------|-------|-------|-----|------|---------------|--------------|-----------------|----------------|-----------------|----------------|
+| Calibration | 1–3 | 960 | 14.82 | 18.75 | 47.9% | 49.1% | 48.8% | 49.3% | 50.2% | 51.0% |
+| **Core** | **4–15** | **2,485** | **12.50** | **15.82** | **52.1%** | **53.4%** | **53.9%** | **55.4%** | **54.4%** | **57.5%** |
+| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 46.7% | 47.6% | 47.3% | 48.6% |
+| **Full** | **All** | **3,657** | **13.17** | **16.67** | **50.8%** | **52.1%** | **51.7%** | **53.3%** | **52.4%** | **55.0%** |
 
 **The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
 
@@ -96,6 +96,8 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 | All picks | 1,268-1,165 (52.1%) | 1,305-1,139 (53.4%) |
 | 3+ pts | 763-653 (53.9%) | 805-648 (55.4%) |
 | **5+ pts** | **472-395 (54.4%)** | **520-384 (57.5%)** |
+
+*Games: 1,416 at 3+ edge, 867 at 5+ edge. Per CLAUDE.md baseline 2026-02-10.*
 
 **Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.4% vs closing lines and 57.5% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%).
 
