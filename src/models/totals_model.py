@@ -332,7 +332,16 @@ class TotalsModel:
         if self.decay_factor == 1.0:
             sample_weights = None  # Ridge uses uniform weights when None
         else:
-            # Build weeks vector for recency weighting
+            # Guard: recency weighting is only valid for single-year training
+            # With multi-year data, week numbers repeat (2022 week 9 vs 2024 week 9)
+            # and weeks_ago would incorrectly treat them as equally recent.
+            if n_years > 1:
+                raise ValueError(
+                    f"decay_factor={self.decay_factor} is incompatible with multi-year training "
+                    f"({n_years} years). Week-based recency doesn't account for year boundaries. "
+                    f"Use decay_factor=1.0 (no decay) for multi-year training."
+                )
+            # Build weeks vector for recency weighting (single-year only)
             weeks = np.empty(n_rows, dtype=np.float64)
             weeks[0::2] = game_weeks
             weeks[1::2] = game_weeks
