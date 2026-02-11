@@ -72,6 +72,18 @@ class Settings:
     # Sweep tested: 1.5, 2.0, 2.5, 3.0 — cap 2.5 best for both Core and Full Season.
     st_spread_cap: Optional[float] = 2.5
 
+    # FCS Strength Estimator (Dynamic penalties based on prior FBS-vs-FCS game margins)
+    # Replaces static ELITE_FCS_TEAMS frozenset with walk-forward-safe, data-driven estimates.
+    # Uses Bayesian shrinkage toward baseline when data is sparse.
+    # Sweep tested intercepts 12-28; intercept=20 gives best 5+ Edge (53.9% vs static 54.0%).
+    fcs_static: bool = False  # If True, use static elite list instead of dynamic estimator
+    fcs_k: float = 8.0  # Shrinkage k (games for 50% trust in data)
+    fcs_baseline_margin: float = -28.0  # Prior margin for unknown FCS (FCS - FBS, negative = FCS loses)
+    fcs_min_penalty: float = 10.0  # Floor for elite FCS teams
+    fcs_max_penalty: float = 40.0  # Ceiling for weak FCS teams
+    fcs_slope: float = -0.5  # Penalty change per margin point
+    fcs_intercept: float = 20.0  # Penalty when margin = 0 (optimized via sweep)
+
     # Vegas Comparison
     value_threshold: float = field(
         default_factory=lambda: float(os.getenv("VALUE_THRESHOLD", "3.0"))

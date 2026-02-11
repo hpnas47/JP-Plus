@@ -42,6 +42,7 @@ from src.adjustments.altitude import AltitudeAdjuster
 # FinishingDrivesModel import removed — shelved after 4 backtest rejections (70-80% overlap with EFM)
 # Infrastructure preserved in src/models/finishing_drives.py for future reactivation
 from src.models.special_teams import SpecialTeamsModel
+from src.models.fcs_strength import FCSStrengthEstimator
 from src.predictions.spread_generator import SpreadGenerator
 import numpy as np
 import pandas as pd
@@ -610,6 +611,8 @@ def walk_forward_predict(
     ooc_credibility_weight: float = 0.0,
     st_spread_cap: Optional[float] = 2.5,
     st_early_weight: float = 1.0,
+    fcs_estimator: Optional[FCSStrengthEstimator] = None,
+    fcs_static: bool = False,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -636,12 +639,14 @@ def walk_forward_predict(
         asymmetric_garbage: Only penalize trailing team in garbage time (default True)
         team_records: Historical team records for trajectory calculation
         year: Current season year (for trajectory calculation)
-        fcs_penalty_elite: Points for elite FCS teams (default 18.0)
-        fcs_penalty_standard: Points for standard FCS teams (default 32.0)
+        fcs_penalty_elite: Points for elite FCS teams (default 18.0, used if fcs_static=True)
+        fcs_penalty_standard: Points for standard FCS teams (default 32.0, used if fcs_static=True)
         st_plays_df: Field goal plays dataframe for FG efficiency calculation (Polars DataFrame)
         historical_rankings: Week-by-week AP poll rankings for letdown spot detection
         team_conferences: Dict mapping team name to conference name for conference strength anchor
         hfa_global_offset: Points subtracted from ALL HFA values (for sweep testing). Default 0.0.
+        fcs_estimator: Dynamic FCS strength estimator (if provided and fcs_static=False, used for penalties)
+        fcs_static: If True, use static elite list instead of dynamic estimator. Default False.
 
     Returns:
         List of prediction result dictionaries
@@ -831,6 +836,13 @@ def walk_forward_predict(
                 for team, st_rating in special_teams.team_ratings.items():
                     efm.set_special_teams_rating(team, st_rating.overall_rating)
 
+        # Update FCS estimator with games from prior weeks (walk-forward safe)
+        # Only update if we have an estimator and not using static mode
+        active_fcs_estimator = None
+        if fcs_estimator is not None and not fcs_static:
+            fcs_estimator.update_from_games(games_df, fbs_teams, max_week=pred_week - 1)
+            active_fcs_estimator = fcs_estimator
+
         # Build spread generator with EFM ratings
         # Note: travel/altitude/situational are stateless (reused from outside loop)
         # special_teams is retrained each week (fresh instance)
@@ -847,6 +859,7 @@ def walk_forward_predict(
             fcs_penalty_standard=fcs_penalty_standard,
             st_spread_cap=st_spread_cap,  # Margin-level ST capping (Approach B)
             st_early_season_weight=st_early_weight,  # Early-season ST weighting (Approach C)
+            fcs_estimator=active_fcs_estimator,  # Dynamic FCS penalties (None = use static)
         )
 
         # Predict this week's games (Polars iteration is faster)
@@ -2126,6 +2139,13 @@ def _process_single_season(
     st_k_ko: float = 6.0,
     st_spread_cap: Optional[float] = 2.5,
     st_early_weight: float = 1.0,
+    fcs_static: bool = False,
+    fcs_k: float = 8.0,
+    fcs_baseline: float = -28.0,
+    fcs_min_pen: float = 10.0,
+    fcs_max_pen: float = 40.0,
+    fcs_slope: float = -0.5,
+    fcs_intercept: float = 20.0,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2159,6 +2179,18 @@ def _process_single_season(
     historical_rankings = season_data.historical_rankings
     team_conferences = season_data.team_conferences
 
+    # Create FCS estimator for this season (if not using static mode)
+    fcs_estimator = None
+    if not fcs_static:
+        fcs_estimator = FCSStrengthEstimator(
+            k_fcs=fcs_k,
+            baseline_margin=fcs_baseline,
+            min_penalty=fcs_min_pen,
+            max_penalty=fcs_max_pen,
+            slope=fcs_slope,
+            intercept=fcs_intercept,
+        )
+
     # Walk-forward predictions
     predictions = walk_forward_predict(
         games_df,
@@ -2186,6 +2218,8 @@ def _process_single_season(
         ooc_credibility_weight=ooc_credibility_weight,
         st_spread_cap=st_spread_cap,
         st_early_weight=st_early_weight,
+        fcs_estimator=fcs_estimator,
+        fcs_static=fcs_static,
     )
 
     # Calculate ATS
@@ -2230,6 +2264,13 @@ def run_backtest(
     st_k_ko: float = 6.0,
     st_spread_cap: Optional[float] = 2.5,
     st_early_weight: float = 1.0,
+    fcs_static: bool = False,
+    fcs_k: float = 8.0,
+    fcs_baseline: float = -28.0,
+    fcs_min_pen: float = 10.0,
+    fcs_max_pen: float = 40.0,
+    fcs_slope: float = -0.5,
+    fcs_intercept: float = 20.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2259,6 +2300,13 @@ def run_backtest(
         st_k_fg: Shrinkage k for FG component (attempts needed to trust rating fully). Default 20.0.
         st_k_punt: Shrinkage k for punt component. Default 15.0.
         st_k_ko: Shrinkage k for kickoff component. Default 15.0.
+        fcs_static: If True, use static elite list instead of dynamic estimator. Default False.
+        fcs_k: FCS shrinkage k (games for 50% trust). Default 8.0.
+        fcs_baseline: Prior margin for unknown FCS teams (FCS - FBS). Default -28.0.
+        fcs_min_pen: Minimum penalty for elite FCS. Default 10.0.
+        fcs_max_pen: Maximum penalty for weak FCS. Default 40.0.
+        fcs_slope: Penalty change per margin point. Default -0.5.
+        fcs_intercept: Penalty at margin=0. Default 20.0 (optimized via sweep).
 
     Returns:
         Dictionary with backtest results
@@ -2336,6 +2384,14 @@ def run_backtest(
         st_k_ko=st_k_ko,
         st_spread_cap=st_spread_cap,
         st_early_weight=st_early_weight,
+        # FCS dynamic estimator params
+        fcs_static=fcs_static,
+        fcs_k=fcs_k,
+        fcs_baseline=fcs_baseline,
+        fcs_min_pen=fcs_min_pen,
+        fcs_max_pen=fcs_max_pen,
+        fcs_slope=fcs_slope,
+        fcs_intercept=fcs_intercept,
     )
 
     if len(years) > 1:
@@ -2766,13 +2822,55 @@ def main():
         "--fcs-penalty-elite",
         type=float,
         default=18.0,
-        help="Points for elite FCS teams (default: 18.0)",
+        help="Points for elite FCS teams (default: 18.0, used if --fcs-static)",
     )
     parser.add_argument(
         "--fcs-penalty-standard",
         type=float,
         default=32.0,
-        help="Points for standard FCS teams (default: 32.0)",
+        help="Points for standard FCS teams (default: 32.0, used if --fcs-static)",
+    )
+    # FCS Dynamic Estimator parameters
+    parser.add_argument(
+        "--fcs-static",
+        action="store_true",
+        help="Use static elite FCS list instead of dynamic estimator (baseline comparison)",
+    )
+    parser.add_argument(
+        "--fcs-k",
+        type=float,
+        default=8.0,
+        help="FCS shrinkage k (games for 50%% trust in data). Default: 8.0",
+    )
+    parser.add_argument(
+        "--fcs-baseline",
+        type=float,
+        default=-28.0,
+        help="Prior margin for unknown FCS teams (FCS - FBS, negative = FCS loses). Default: -28.0",
+    )
+    parser.add_argument(
+        "--fcs-min-pen",
+        type=float,
+        default=10.0,
+        help="Minimum FCS penalty (for elite FCS). Default: 10.0",
+    )
+    parser.add_argument(
+        "--fcs-max-pen",
+        type=float,
+        default=40.0,
+        help="Maximum FCS penalty (for weak FCS). Default: 40.0",
+    )
+    parser.add_argument(
+        "--fcs-slope",
+        type=float,
+        default=-0.5,
+        help="FCS penalty change per margin point. Default: -0.5",
+    )
+    parser.add_argument(
+        "--fcs-intercept",
+        type=float,
+        default=20.0,
+        help="FCS penalty when margin = 0. Default: 20.0 (optimized via sweep)",
     )
     parser.add_argument(
         "--no-portal",
@@ -2893,7 +2991,10 @@ def main():
     print(f"  HFA:                team-specific (fallback={args.hfa}, global_offset={args.hfa_offset})")
     print(f"  EFM weights:        SR={args.efficiency_weight}, IsoPPP={args.explosiveness_weight}, TO={args.turnover_weight}")
     print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
-    print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
+    if args.fcs_static:
+        print(f"  FCS penalties:      static (elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard})")
+    else:
+        print(f"  FCS penalties:      dynamic (k={args.fcs_k}, baseline={args.fcs_baseline}, range=[{args.fcs_min_pen}, {args.fcs_max_pen}])")
     st_shrink_status = f"enabled (k_fg={args.st_k_fg}, k_punt={args.st_k_punt}, k_ko={args.st_k_ko})" if args.st_shrink else "disabled (default)"
     print(f"  ST shrinkage:       {st_shrink_status}")
     st_cap_status = f"±{args.st_spread_cap} pts" if args.st_spread_cap and args.st_spread_cap > 0 else "disabled"
@@ -2926,6 +3027,14 @@ def main():
         st_k_ko=args.st_k_ko,
         st_spread_cap=args.st_spread_cap,
         st_early_weight=args.st_early_weight,
+        # FCS dynamic estimator params
+        fcs_static=args.fcs_static,
+        fcs_k=args.fcs_k,
+        fcs_baseline=args.fcs_baseline,
+        fcs_min_pen=args.fcs_min_pen,
+        fcs_max_pen=args.fcs_max_pen,
+        fcs_slope=args.fcs_slope,
+        fcs_intercept=args.fcs_intercept,
     )
 
     # P3.4: Print results with ATS data for sanity report

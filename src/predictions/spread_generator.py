@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
+from src.models.fcs_strength import FCSStrengthEstimator
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import (
     SituationalAdjuster,
@@ -227,6 +228,7 @@ class SpreadGenerator:
         global_cap: float = 7.0,
         st_spread_cap: Optional[float] = 2.5,
         st_early_season_weight: float = 1.0,  # Weight for ST in weeks 1-3 (1.0 = full, 0.5 = half)
+        fcs_estimator: Optional[FCSStrengthEstimator] = None,  # Dynamic FCS strength estimator
     ):
         """Initialize spread generator with EFM ratings and adjustment layers.
 
@@ -239,15 +241,16 @@ class SpreadGenerator:
             travel: Travel adjuster (timezone, distance)
             altitude: Altitude adjuster (high elevation venues)
             fbs_teams: Set of FBS team names for FCS detection
-            fcs_penalty_elite: Points for elite FCS teams (default: 18.0)
-            fcs_penalty_standard: Points for standard FCS teams (default: 32.0)
-            elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS)
+            fcs_penalty_elite: Points for elite FCS teams (default: 18.0, used if no fcs_estimator)
+            fcs_penalty_standard: Points for standard FCS teams (default: 32.0, used if no fcs_estimator)
+            elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS, used if no fcs_estimator)
             qb_adjuster: QB injury adjuster (optional, for QB-out adjustments)
             aggregator: AdjustmentAggregator for consolidated smoothing (default: creates new)
             track_diagnostics: If True, track adjustment stacks for P2.11 analysis
             global_cap: Maximum total adjustment (default: 7.0)
             st_spread_cap: Cap on ST differential's effect on spread. Default 2.5 (APPROVED). 0/None = no cap.
             st_early_season_weight: Weight for ST impact in weeks 1-3 (1.0 = full). Default 1.0.
+            fcs_estimator: Dynamic FCS strength estimator (if provided, overrides static elite list)
         """
         self.ratings = ratings or {}
         # Calculate mean rating for fallback on missing teams
@@ -283,6 +286,9 @@ class SpreadGenerator:
         # Caps the effect of ST differential on final spread, not the rating itself
         self.st_spread_cap = st_spread_cap
         self.st_early_season_weight = st_early_season_weight
+
+        # Dynamic FCS strength estimator (overrides static elite list if provided)
+        self.fcs_estimator = fcs_estimator
 
     def _get_base_margin(self, home_team: str, away_team: str) -> float:
         """Get base margin from EFM ratings differential.
@@ -355,9 +361,9 @@ class SpreadGenerator:
     def _get_fcs_adjustment(self, home_team: str, away_team: str) -> float:
         """Calculate FCS adjustment for the matchup.
 
-        When an FBS team plays an FCS team, apply a tiered penalty in favor of
-        the FBS team. Elite FCS teams (playoff regulars, consistent vs FBS)
-        get a smaller penalty than standard FCS teams.
+        When an FBS team plays an FCS team, apply a penalty in favor of the FBS team.
+        Uses dynamic FCS estimator if available (data-driven, walk-forward safe),
+        otherwise falls back to static elite list with tiered penalties.
 
         Note: FCS teams may appear in self.ratings if they played FBS opponents,
         but they should still receive the FCS penalty. The ratings dict includes
@@ -378,11 +384,23 @@ class SpreadGenerator:
 
         if home_is_fbs and not away_is_fbs:
             # Home is FBS, away is FCS - add penalty to home's favor
-            penalty = self.fcs_penalty_elite if away_team in self.elite_fcs_teams else self.fcs_penalty_standard
+            fcs_team = away_team
+            if self.fcs_estimator is not None:
+                # Dynamic penalty from FCS strength estimator
+                penalty = self.fcs_estimator.get_penalty(fcs_team)
+            else:
+                # Fallback to static tiered system
+                penalty = self.fcs_penalty_elite if fcs_team in self.elite_fcs_teams else self.fcs_penalty_standard
             return penalty
         elif away_is_fbs and not home_is_fbs:
             # Away is FBS, home is FCS - subtract penalty (favor away)
-            penalty = self.fcs_penalty_elite if home_team in self.elite_fcs_teams else self.fcs_penalty_standard
+            fcs_team = home_team
+            if self.fcs_estimator is not None:
+                # Dynamic penalty from FCS strength estimator
+                penalty = self.fcs_estimator.get_penalty(fcs_team)
+            else:
+                # Fallback to static tiered system
+                penalty = self.fcs_penalty_elite if fcs_team in self.elite_fcs_teams else self.fcs_penalty_standard
             return -penalty
         else:
             # Both FBS or both non-FBS - no adjustment

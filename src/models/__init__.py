@@ -5,6 +5,7 @@ Active models (EFM pipeline):
 - SpecialTeamsModel: Field goal, punt, and kickoff efficiency
 - PreseasonPriors: Preseason ratings and blending
 - TotalsModel: Opponent-adjusted scoring for over/under betting
+- FCSStrengthEstimator: Walk-forward safe FCS penalty estimation with Bayesian shrinkage
 
 Shelved models (kept for backward compatibility):
 - FinishingDrivesModel: Replaced by RZ Leverage weighting in EFM (4 backtest rejections)
@@ -15,6 +16,7 @@ from .finishing_drives import FinishingDrivesModel
 from .special_teams import SpecialTeamsModel
 from .preseason_priors import PreseasonPriors
 from .totals_model import TotalsModel, TotalsRating, TotalsPrediction
+from .fcs_strength import FCSStrengthEstimator, FCSTeamStrength
 
 __all__ = [
     "EfficiencyFoundationModel",
@@ -24,4 +26,6 @@ __all__ = [
     "TotalsModel",
     "TotalsRating",
     "TotalsPrediction",
+    "FCSStrengthEstimator",
+    "FCSTeamStrength",
 ]
