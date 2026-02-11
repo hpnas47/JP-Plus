@@ -549,25 +549,28 @@ Examples: Oklahoma -49 actual vs Texas when predicted -8 (residual -41), Arizona
 
 **Trade-off:** LSA improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while reducing 3+ Edge by -0.9pp (53.4% → 52.5%). This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
 
-#### Dual-Spread Mode (Dynamic Bet Timing)
+#### Dual-Spread Mode (Edge-Aware Bet Timing)
 
-**Problem:** LSA excels at closing lines (55.8% at 5+) but fixed baseline excels at opening lines (57.0% at 5+). Which should we use?
+**Problem:** LSA excels at 5+ edge closing lines (55.8%) but *degrades* 3+ edge (52.5% vs 53.4% fixed). Fixed excels at opening lines (57.0% at 5+). How do we get the best of both?
 
-**Solution:** The `--dual-spread` flag outputs both spreads and recommends the optimal one based on bet timing:
+**Solution:** The `--dual-spread` flag considers **both** timing and edge size:
 
 ```python
 # Implementation in run_weekly.py
 if days_until_game >= lsa_threshold_days:  # Default: 4 days
-    recommendation = "fixed"   # Opening line bet
+    recommendation = "fixed"   # Opening line: always fixed
+elif abs(edge_lsa) >= 5.0:
+    recommendation = "lsa"     # Closing line, 5+ edge: LSA wins
 else:
-    recommendation = "lsa"     # Closing line bet
+    recommendation = "fixed"   # Closing line, 3-5 edge: fixed wins
 ```
 
-**Performance by Timing:**
-| Bet Timing | Recommended Mode | 5+ Edge | Rationale |
-|------------|------------------|---------|-----------|
-| Opening (Sun–Wed) | Fixed | **57.0%** | Raw market inefficiency not yet priced |
-| Closing (Thu–Sat) | LSA + TO-adj | **55.8%** | Market moved; LSA's filter identifies remaining edge |
+**Performance by Timing + Edge:**
+| Bet Timing | Edge Size | Recommended | ATS % | Rationale |
+|------------|-----------|-------------|-------|-----------|
+| Opening (4+ days) | Any | Fixed | **57.0%** (5+) | Raw market inefficiency not yet priced |
+| Closing (<4 days) | **5+ pts** | LSA | **55.8%** | LSA's filter excels at high conviction |
+| Closing (<4 days) | 3-5 pts | Fixed | **53.4%** | Fixed beats LSA at 3+ edge (53.4% vs 52.5%) |
 
 **CLI:**
 ```bash

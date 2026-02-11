@@ -835,39 +835,11 @@ def run_predictions(
 
     predictions_df = spread_gen.predictions_to_dataframe(predictions)
 
-    # Add dual-spread columns if enabled
+    # Store dual-spread data for later (after Vegas comparison)
+    # Edge-aware recommendation requires knowing the edge, which needs Vegas lines
     if dual_spread:
-        from datetime import datetime, timedelta
-
-        # Add fixed and LSA spread columns
         predictions_df['jp_spread_fixed'] = predictions_df['game_id'].map(fixed_spreads)
         predictions_df['jp_spread_lsa'] = predictions_df['game_id'].map(lsa_spreads)
-
-        # Calculate days until game and recommendation
-        today = datetime.now().date()
-        def get_recommendation(row):
-            try:
-                # Parse game date (format: "YYYY-MM-DD" or similar)
-                if 'start_date' in row and pd.notna(row['start_date']):
-                    game_date = pd.to_datetime(row['start_date']).date()
-                    days_until = (game_date - today).days
-                    # Use fixed for opening bets (4+ days out), LSA for closing
-                    if days_until >= lsa_threshold_days:
-                        return 'fixed'
-                    else:
-                        return 'lsa'
-            except Exception:
-                pass
-            return 'fixed'  # Default to fixed if can't determine
-
-        predictions_df['bet_timing_rec'] = predictions_df.apply(get_recommendation, axis=1)
-        predictions_df['jp_spread_recommended'] = predictions_df.apply(
-            lambda row: row['jp_spread_fixed'] if row['bet_timing_rec'] == 'fixed' else row['jp_spread_lsa'],
-            axis=1
-        )
-
-        logger.info(f"Dual-spread mode: {sum(predictions_df['bet_timing_rec'] == 'fixed')} games recommend fixed, "
-                   f"{sum(predictions_df['bet_timing_rec'] == 'lsa')} recommend LSA (threshold: {lsa_threshold_days} days)")
 
     # Vegas comparison
     logger.info(f"Fetching Vegas lines and comparing (min_edge={min_edge})...")
@@ -877,6 +849,66 @@ def run_predictions(
     comparison_df = vegas.generate_comparison_df(predictions)
     value_plays = vegas.identify_value_plays(predictions)
     value_plays_df = vegas.value_plays_to_dataframe(value_plays)
+
+    # Add edge-aware dual-spread recommendations (requires Vegas lines for edge calculation)
+    if dual_spread:
+        from datetime import datetime
+
+        # Merge dual-spread columns into comparison_df
+        dual_cols = predictions_df[['game_id', 'jp_spread_fixed', 'jp_spread_lsa']].copy()
+        comparison_df = comparison_df.merge(dual_cols, on='game_id', how='left')
+
+        # Add game dates from upcoming_games for timing calculation
+        game_dates = {g['id']: g.get('start_date') for g in upcoming_games}
+        comparison_df['start_date'] = comparison_df['game_id'].map(game_dates)
+
+        # Calculate edge for both fixed and LSA spreads
+        # Sign convention: edge = (-model_spread) - vegas_spread
+        comparison_df['edge_fixed'] = (-comparison_df['jp_spread_fixed']) - comparison_df['vegas_spread']
+        comparison_df['edge_lsa'] = (-comparison_df['jp_spread_lsa']) - comparison_df['vegas_spread']
+
+        # Edge-aware recommendation logic:
+        # - Opening line (4+ days): Always use Fixed (57.0% at 5+ edge)
+        # - Closing line, 5+ edge: Use LSA (55.8% at 5+ edge)
+        # - Closing line, 3-5 edge: Use Fixed (53.4% vs 52.5% LSA)
+        today = datetime.now().date()
+
+        def get_edge_aware_recommendation(row):
+            try:
+                # Determine days until game
+                days_until = 99  # Default to opening if unknown
+                if pd.notna(row.get('start_date')):
+                    game_date = pd.to_datetime(row['start_date']).date()
+                    days_until = (game_date - today).days
+
+                # Opening line (4+ days): Always use Fixed
+                if days_until >= lsa_threshold_days:
+                    return 'fixed'
+
+                # Closing line (<4 days): LSA only for 5+ edge
+                edge_lsa = row.get('edge_lsa')
+                if pd.notna(edge_lsa) and abs(edge_lsa) >= 5.0:
+                    return 'lsa'
+                else:
+                    return 'fixed'  # 3-5 pt edge at closing: use fixed (53.4% > 52.5%)
+            except Exception:
+                return 'fixed'
+
+        comparison_df['bet_timing_rec'] = comparison_df.apply(get_edge_aware_recommendation, axis=1)
+        comparison_df['jp_spread_recommended'] = comparison_df.apply(
+            lambda row: row['jp_spread_fixed'] if row['bet_timing_rec'] == 'fixed' else row['jp_spread_lsa'],
+            axis=1
+        )
+        comparison_df['edge_recommended'] = comparison_df.apply(
+            lambda row: row['edge_fixed'] if row['bet_timing_rec'] == 'fixed' else row['edge_lsa'],
+            axis=1
+        )
+
+        # Log summary
+        n_fixed = sum(comparison_df['bet_timing_rec'] == 'fixed')
+        n_lsa = sum(comparison_df['bet_timing_rec'] == 'lsa')
+        logger.info(f"Dual-spread mode: {n_fixed} games recommend fixed, {n_lsa} recommend LSA "
+                   f"(threshold: {lsa_threshold_days} days, LSA only for 5+ edge at closing)")
 
     # P3.7: Generate reports (skip with --no-reports for faster testing)
     excel_path = None

@@ -76,14 +76,17 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 **Configuration:** `alpha=300.0`, `clamp_max=4.0`, `adjust_for_turnovers=True` (default ON)
 
-#### Dynamic Bet Timing Mode
+#### Dynamic Bet Timing Mode (Edge-Aware)
 
-The `--dual-spread` flag enables smart switching between fixed and LSA based on when you're placing your bet:
+The `--dual-spread` flag enables smart switching between fixed and LSA based on **both** timing and edge size:
 
-| Days Before Game | Recommendation | Why |
-|------------------|----------------|-----|
-| 4+ days (Sun–Wed) | Fixed baseline | Opening lines haven't absorbed sharp action; fixed captures raw edge (57.0% at 5+) |
-| <4 days (Thu–Sat) | LSA | Market has moved toward equilibrium; LSA's high-confidence filter excels here (56.1% at 5+) |
+| Bet Timing | Edge Size | Recommendation | Historical ATS |
+|------------|-----------|----------------|----------------|
+| Opening (4+ days) | Any | Fixed | 57.0% at 5+ |
+| Closing (<4 days) | **5+ pts** | LSA | 55.8% at 5+ |
+| Closing (<4 days) | 3-5 pts | Fixed | 53.4% at 3+ |
+
+**Key insight:** LSA improves 5+ Edge but *degrades* 3+ Edge (52.5% vs 53.4%). The dual-spread engine now considers edge size, only recommending LSA for high-conviction (5+ pt) closing line bets.
 
 **CLI Usage:**
 ```bash

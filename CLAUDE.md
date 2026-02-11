@@ -86,7 +86,7 @@ Learned Situational Adjustment replaces fixed situational constants with ridge-l
 - **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 - **ST Spread Cap:** ±2.5 pts (APPROVED 2026-02-10). Caps ST differential's effect on spread without shrinking ratings toward zero.
 - **FCS Strength Estimator:** Dynamic, walk-forward-safe FCS penalties (APPROVED 2026-02-10). Replaces static elite list with Bayesian shrinkage (k=8, baseline=-28, intercept=10, slope=0.8). Penalty range [10, 45] pts. CLI: `--fcs-static` for baseline comparison.
-- **LSA:** Optional high-confidence filter (APPROVED 2026-02-10). Learns situational coefficients via ridge regression on residuals. Improves 5+ Edge +1.2% at cost of 3+ Edge -0.8%. CLI: `--learned-situ` to enable.
+- **LSA:** Optional high-confidence filter (APPROVED 2026-02-10). Learns situational coefficients via ridge regression on residuals. Improves 5+ Edge (Close) +1.3% at cost of 3+ Edge -0.9%. CLI: `--learned-situ` to enable, `--dual-spread` for edge-aware timing (LSA only for 5+ edge at closing; fixed otherwise).
 
 ## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
 
