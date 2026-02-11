@@ -53,7 +53,7 @@ JP+ applies game-specific adjustments for factors that affect the spread beyond 
 - **Travel & Altitude** — cross-country trips and high-altitude venues penalize visitors
 - **Rest Differential** — bye weeks, short weeks, and MACtion scheduling
 - **Situational Spots** — letdown games after big wins, lookahead to rivalry/ranked opponents
-- **FCS Opponents** — tiered penalty when FBS plays FCS
+- **FCS Opponents** — dynamic penalty (10-40 pts) when FBS plays FCS, based on prior game margins
 
 All adjustments pass through a smoothing layer to prevent over-prediction when multiple factors stack.
 

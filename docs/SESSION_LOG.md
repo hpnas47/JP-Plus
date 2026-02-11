@@ -4,6 +4,59 @@
 
 ---
 
+## Session: February 10, 2026 (Late Night)
+
+### Theme: Dynamic FCS Strength Estimator
+
+---
+
+#### Dynamic FCS Strength Estimator — APPROVED
+**Status**: Committed, enabled by default
+**Commit**: `0219f62`
+
+Replaced static `ELITE_FCS_TEAMS` frozenset (17 hardcoded teams with fixed 18/32 pt penalties) with a walk-forward-safe, data-driven FCS strength estimator using Bayesian shrinkage.
+
+**Architecture**:
+- `FCSStrengthEstimator` class in new `src/models/fcs_strength.py`
+- Per-team strength tracked from FBS-vs-FCS game margins
+- Bayesian shrinkage: `shrunk = baseline + (raw - baseline) * (n / (n + k))`
+- Continuous penalty mapping: `penalty = clamp(intercept + slope * margin, min, max)`
+- Walk-forward safe: `update_from_games()` only uses `max_week` filter
+
+**Default parameters** (optimized via sweep):
+- k=8 (games for 50% trust in data)
+- baseline=-28 (prior FCS margin vs FBS)
+- intercept=20, slope=-0.5, range=[10, 40]
+
+**Intercept sweep results** (Core 5+ Edge):
+| Intercept | 5+ Edge |
+|-----------|---------|
+| 12 | 53.6% |
+| 14 | 53.7% |
+| 16 | 53.6% |
+| 18 | 53.7% |
+| **20** | **53.9%** |
+| 22-28 | 53.7-53.8% |
+
+**Final comparison**:
+| Mode | 5+ Edge (Close) | 5+ Edge (Open) |
+|------|-----------------|----------------|
+| Static (baseline) | 54.0% | 57.3% |
+| Dynamic (intercept=20) | 53.9% | 57.1% |
+
+**Degradation**: -0.1pp on Close, -0.2pp on Open — well within ≤0.2pp tolerance.
+
+**CLI arguments added**:
+- `--fcs-static`: Use static elite list (baseline comparison)
+- `--fcs-k`: Shrinkage k (default 8.0)
+- `--fcs-baseline`: Prior margin (default -28.0)
+- `--fcs-min-pen`, `--fcs-max-pen`: Penalty bounds (10.0, 40.0)
+- `--fcs-slope`, `--fcs-intercept`: Mapping params (-0.5, 20.0)
+
+**Why approved**: Replaces hardcoded list with adaptive, walk-forward-safe system. Minimal performance impact. Infrastructure enables future improvements (e.g., cross-season FCS tracking).
+
+---
+
 ## Session: February 10, 2026 (Evening)
 
 ### Theme: ST Empirical Bayes Shrinkage + Bug Fixes
