@@ -4,6 +4,89 @@
 
 ---
 
+## Session: February 11, 2026 (Evening)
+
+### Theme: QB Continuous Rating System
+
+---
+
+#### QB Continuous Rating System — Phase1-only Mode — COMMITTED
+**Status**: Committed (`9d2118c`)
+**Files**: `src/adjustments/qb_continuous.py` (NEW), `scripts/qb_calibration.py` (NEW), `scripts/backtest.py`, `src/predictions/spread_generator.py`
+
+Implemented walk-forward-safe QB quality estimates that improve Phase 1 (weeks 1-3) ATS performance without degrading Core (weeks 4-15).
+
+**Key Architecture:**
+- QB PPA tracking via CFBD API (`get_predicted_points_added_by_player_game`)
+- Shrinkage parameter K=200 (~250 dropbacks → 55% weight on raw signal)
+- Prior season decay factor 0.3 for Week 1 projections
+- Conservative starter identification (MIN_RECENT_DB=15, MIN_CUM_DB=50)
+- Residual adjustment logic to avoid double-counting with EFM
+
+**The Key Insight — Phase1-only Mode:**
+By week 4, the EFM has already "baked in" QB quality through efficiency metrics. Any additional QB adjustment in Core weeks causes double-counting and slight ATS degradation. The `--qb-phase1-only` flag disables QB adjustment for weeks 4+, capturing early-season signal where QB priors provide genuine value.
+
+**Calibration Results (2023-2024, N=4,035 team-weeks):**
+| Week Bucket | qb_value_shrunk P90 | Mean Uncertainty | Unknown Starter |
+|-------------|---------------------|------------------|-----------------|
+| Weeks 1-3 | 0.163 | 0.78 | 34.7% |
+| Weeks 4-8 | 0.216 | 0.57 | 0.9% |
+| Weeks 9-15 | 0.245 | 0.48 | 0.7% |
+
+**Scale Sweep Results (2024 Core Weeks 4-15):**
+| Scale | MAE | 5+ Edge Close | vs Baseline |
+|-------|-----|---------------|-------------|
+| Baseline | 12.66 | 56.4% | — |
+| 4.0 | 12.63 | 56.6% | +0.2% |
+| **5.0** | **12.63** | **57.1%** | **+0.7%** |
+| 6.0 | 12.62 | 56.9% | +0.5% |
+
+**But Full 2022-2025 Validation showed Core degradation with full QB mode:**
+All scales degraded Core 5+ Edge by 0.2-0.3% due to double-counting.
+
+**Solution — Phase1-only Mode (2022-2025):**
+| Phase | Baseline 5+ Edge | QB Phase1 Only | Delta |
+|-------|------------------|----------------|-------|
+| Phase 1 (1-3) | 50.2% (269-267) | 50.8% (270-261) | **+0.6%** |
+| Phase 2 (4-15) | 54.5% (463-386) | 54.5% (463-386) | **0.0%** |
+
+**CLI Flags:**
+- `--qb-continuous`: Enable QB adjustment
+- `--qb-scale`: PPA-to-points scale (default 5.0)
+- `--qb-phase1-only`: Only apply for weeks 1-3 (RECOMMENDED)
+- `--qb-shrinkage-k`: Shrinkage parameter (default 200)
+- `--qb-cap`: Max point adjustment (default 3.0)
+- `--qb-prior-decay`: Prior season decay (default 0.3)
+
+**Residual Adjustment Logic (Infrastructure):**
+Built but not needed with Phase1-only mode. The residual formula:
+```
+baking_factor = ramp(0→1 over weeks 1-8)
+residual = current_starter_value - (team_avg_value × baking_factor)
+```
+This prevents double-counting for stable starters while correctly penalizing injuries/backups.
+
+---
+
+#### Experiments Tested but Not Adopted
+
+**Full QB Continuous (all weeks):**
+- Core 5+ Edge: 54.5% → 54.3% (-0.2%)
+- Failed acceptance criteria (must not degrade Core)
+- Root cause: Double-counting with EFM efficiency metrics
+
+**Year-by-Year Analysis:**
+| Year | Baseline 5+ Edge | QB Full Mode | Delta |
+|------|------------------|--------------|-------|
+| 2022 | 53.2% | 54.0% | +0.8% |
+| 2023 | 54.8% | 53.8% | -1.0% |
+| 2024 | 56.4% | 57.1% | +0.7% |
+| 2025 | 53.5% | 51.7% | -1.8% |
+
+Inconsistent year-to-year results suggest QB signal is noisier in Core weeks where EFM already captures it.
+
+---
+
 ## Session: February 11, 2026 (Afternoon)
 
 ### Theme: Edge-Aware LSA Default + Dual-Cap Infrastructure

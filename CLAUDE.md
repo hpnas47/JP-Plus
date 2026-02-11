@@ -49,11 +49,14 @@
 - **Priors Engine:** `src/models/preseason_priors.py` (Talent, Portal, Recruiting Offsets)
 - **Core EFM Logic:** `src/models/efficiency_foundation_model.py` (Ridge Regression, HFA, SOS)
 - **Sub-Models:** `src/models/special_teams.py` (FG + punt + kickoff)
+- **QB Continuous:** `src/adjustments/qb_continuous.py` (Walk-forward QB quality estimates)
 - **Backtest Engine:** `scripts/backtest.py` (The Validator)
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
 ## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-11)
+
+**With QB Continuous Phase1-only mode enabled** (`--qb-continuous --qb-scale 5.0 --qb-phase1-only`)
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
@@ -93,6 +96,7 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
 - **ST Spread Cap:** ±2.5 pts (APPROVED 2026-02-10). Caps ST differential's effect on spread without shrinking ratings toward zero.
 - **FCS Strength Estimator:** Dynamic, walk-forward-safe FCS penalties (APPROVED 2026-02-10). Replaces static elite list with Bayesian shrinkage (k=8, baseline=-28, intercept=10, slope=0.8). Penalty range [10, 45] pts. CLI: `--fcs-static` for baseline comparison.
 - **LSA Edge-Aware Mode:** DEFAULT for 2026 production. Automatically uses LSA for 5+ edge closing bets, Fixed otherwise. No flags needed — `run_weekly.py` handles timing/edge logic automatically. CLI: `--no-lsa` to force Fixed-only mode.
+- **QB Continuous Rating:** Walk-forward-safe QB quality estimates using PPA data with shrinkage (K=200) and prior season decay (0.3). **Phase1-only mode** enabled by default — applies QB adjustment only for weeks 1-3 where EFM hasn't yet captured QB quality. Improves Phase 1 5+ Edge by +0.6% without affecting Core. CLI: `--qb-continuous --qb-scale 5.0 --qb-phase1-only`
 
 ## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
 
