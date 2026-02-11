@@ -67,6 +67,15 @@
 | 3+ Edge (Core) | 4–15 | 1,421 | — | — | 53.4% (744-650) | 55.6% (795-634) |
 | 5+ Edge (Core) | 4–15 | 869 | — | — | 54.5% (463-386) | 57.0% (514-387) |
 
+**Phase 1 Improvement with QB Continuous:**
+| Metric | Without QB | With QB Phase1-only | Delta |
+|--------|------------|---------------------|-------|
+| 5+ Edge (Close) | 50.2% (269-267) | 50.8% (270-261) | **+0.6%** |
+| 5+ Edge (Open) | ~50.2% | 50.7% (272-265) | **+0.5%** |
+| MAE | 15.33 | 15.31 | -0.02 |
+
+Core (weeks 4-15) performance is **unchanged** with Phase1-only mode.
+
 ### Edge-Aware Production Mode (DEFAULT in 2026)
 
 The prediction engine automatically selects Fixed or LSA based on timing and edge magnitude:
