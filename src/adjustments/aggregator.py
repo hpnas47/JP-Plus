@@ -552,6 +552,8 @@ class AdjustmentAggregator:
             )
         else:
             result.net_adjustment = pre_global_cap_total
+            # Explicit False for defensive programming (matches env_was_capped pattern)
+            result.was_capped = False
 
         return result
 
