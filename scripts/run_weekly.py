@@ -172,21 +172,27 @@ def load_lsa_coefficients(year: int) -> dict[str, float] | None:
         Dictionary of {feature_name: coefficient} or None if not found
     """
     import json
+    import re
     coef_dir = project_root / "data" / "learned_situ_coefficients"
 
     if not coef_dir.exists():
         logger.warning("LSA coefficients directory not found. Run backtest with --learned-situ first.")
         return None
 
-    # Find all coefficient files for this year
+    def extract_week_number(filepath):
+        """Extract week number from filename for numeric sorting."""
+        match = re.search(r'week(\d+)', filepath.name)
+        return int(match.group(1)) if match else 0
+
+    # Find all coefficient files for this year, sorted numerically by week
     pattern = f"lsa_{year}_week*.json"
-    files = sorted(coef_dir.glob(pattern))
+    files = sorted(coef_dir.glob(pattern), key=extract_week_number)
 
     if not files:
         # Try previous year's final coefficients
         prev_year = year - 1
         pattern = f"lsa_{prev_year}_week*.json"
-        files = sorted(coef_dir.glob(pattern))
+        files = sorted(coef_dir.glob(pattern), key=extract_week_number)
         if files:
             logger.info(f"Using {prev_year} coefficients (no {year} data yet)")
 
@@ -982,11 +988,10 @@ def main():
     if args.week:
         week = args.week
     else:
-        # Auto-detect week - predict next week's games
+        # Auto-detect week - predict current week's games
         try:
             client = CFBDClient()
-            current_week = client.get_current_week(year)
-            week = current_week + 1  # Predict upcoming week
+            week = client.get_current_week(year)
         except Exception as e:
             logger.error(f"Could not auto-detect week: {e}")
             logger.info("Please specify --week argument")
