@@ -8,6 +8,7 @@ Replaces the static ELITE_FCS_TEAMS frozenset with data-driven, year-adaptive es
 
 Key features:
 - Walk-forward safe: Only uses games from weeks < current week
+- HFA neutralization: Removes home field advantage bias from margin calculations
 - Bayesian shrinkage: Heavy shrinkage early season, less as games accumulate
 - Continuous penalty: Smooth mapping from margin to penalty (no discrete tiers)
 - Fallback: Unknown FCS teams get baseline-derived penalty
@@ -17,7 +18,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-import pandas as pd
 import polars as pl
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class FCSTeamStrength:
     """Strength estimate for a single FCS team."""
 
     team: str
-    raw_margin: float  # Mean(FCS_pts - FBS_pts), negative = FCS loses by N pts
+    raw_margin: float  # Mean(FCS_pts - FBS_pts), HFA-neutralized, negative = FCS loses
     shrunk_margin: float  # After Bayesian shrinkage toward baseline
     n_games: int  # Number of FBS games observed
     penalty: float  # Final penalty in points (positive = FBS advantage)
@@ -41,6 +41,11 @@ class FCSStrengthEstimator:
     For each FCS team, calculates expected margin against FBS from prior game results.
     Uses Empirical Bayes shrinkage to handle sparse data (heavily shrinks toward baseline
     when few games observed, trusts data more as games accumulate).
+
+    HFA Neutralization:
+        When Home is FBS: margin = fcs_pts - (fbs_pts - hfa_value)
+        When Home is FCS: margin = (fcs_pts - hfa_value) - fbs_pts
+        This removes venue bias from margin calculations.
 
     Shrinkage formula:
         shrink_factor = n_games / (n_games + k_fcs)
@@ -63,6 +68,9 @@ class FCSStrengthEstimator:
         - avg_loss=50+ (very weak FCS): penalty=45 pts (capped)
     """
 
+    # HFA neutralization parameter (disabled by default - hurts Phase 1 more than helps Core)
+    hfa_value: float = 0.0  # Set >0 to strip HFA from margins (tested: no benefit)
+
     # Shrinkage parameters
     k_fcs: float = 8.0  # Games needed for 50% trust in data
     baseline_margin: float = -28.0  # Prior for unknown FCS teams (FCS - FBS)
@@ -75,17 +83,17 @@ class FCSStrengthEstimator:
 
     # Internal state
     _team_strengths: dict[str, FCSTeamStrength] = field(default_factory=dict)
-    _game_margins: dict[str, list[float]] = field(default_factory=dict)
+    _team_margins: dict[str, list[float]] = field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize internal state."""
         self._team_strengths = {}
-        self._game_margins = {}
+        self._team_margins = {}
 
     def reset(self) -> None:
         """Clear all state for a new season."""
         self._team_strengths.clear()
-        self._game_margins.clear()
+        self._team_margins.clear()
 
     def update_from_games(
         self,
@@ -96,6 +104,7 @@ class FCSStrengthEstimator:
         """Update FCS strength estimates from game results.
 
         Walk-forward safe: only uses games where week <= max_week.
+        Uses vectorized Polars operations for performance.
 
         Args:
             games_df: Polars DataFrame with columns: week, home_team, away_team,
@@ -104,45 +113,72 @@ class FCSStrengthEstimator:
             max_week: Maximum week to include (for walk-forward safety)
         """
         # Clear existing state and rebuild from scratch
-        # (simpler than incremental update, and games_df is already filtered)
-        self._game_margins.clear()
+        self._team_margins.clear()
         self._team_strengths.clear()
 
         # Filter to completed games up to max_week
         filtered = games_df.filter(
-            (pl.col("week") <= max_week) &
-            pl.col("home_points").is_not_null() &
-            pl.col("away_points").is_not_null()
+            (pl.col("week") <= max_week)
+            & pl.col("home_points").is_not_null()
+            & pl.col("away_points").is_not_null()
         )
 
-        # Process each game
-        for row in filtered.iter_rows(named=True):
-            home_team = row["home_team"]
-            away_team = row["away_team"]
-            home_pts = row["home_points"]
-            away_pts = row["away_points"]
+        if filtered.height == 0:
+            return
 
-            home_is_fbs = home_team in fbs_teams
-            away_is_fbs = away_team in fbs_teams
+        # Convert fbs_teams set to a Series for vectorized membership check
+        fbs_list = list(fbs_teams)
 
-            # Only interested in FBS-vs-FCS games
-            if home_is_fbs == away_is_fbs:
-                continue
+        # Vectorized pipeline: identify FBS-vs-FCS games and calculate HFA-neutralized margins
+        fcs_games = (
+            filtered.with_columns(
+                [
+                    pl.col("home_team").is_in(fbs_list).alias("home_is_fbs"),
+                    pl.col("away_team").is_in(fbs_list).alias("away_is_fbs"),
+                ]
+            )
+            # Filter to FBS-vs-FCS games only (exactly one team is FBS)
+            .filter(pl.col("home_is_fbs") != pl.col("away_is_fbs"))
+            .with_columns(
+                [
+                    # Identify FCS team
+                    pl.when(pl.col("home_is_fbs"))
+                    .then(pl.col("away_team"))
+                    .otherwise(pl.col("home_team"))
+                    .alias("fcs_team"),
+                    # Calculate HFA-neutralized margin from FCS perspective
+                    # When Home is FBS: margin = fcs_pts - (fbs_pts - hfa)
+                    # When Home is FCS: margin = (fcs_pts - hfa) - fbs_pts
+                    pl.when(pl.col("home_is_fbs"))
+                    .then(
+                        pl.col("away_points")
+                        - (pl.col("home_points") - pl.lit(self.hfa_value))
+                    )
+                    .otherwise(
+                        (pl.col("home_points") - pl.lit(self.hfa_value))
+                        - pl.col("away_points")
+                    )
+                    .alias("hfa_adj_margin"),
+                ]
+            )
+        )
 
-            # Calculate margin from FCS team's perspective (FCS_pts - FBS_pts)
-            if home_is_fbs and not away_is_fbs:
-                # Home is FBS, away is FCS
-                fcs_team = away_team
-                margin = away_pts - home_pts  # Negative = FCS lost
-            else:
-                # Away is FBS, home is FCS
-                fcs_team = home_team
-                margin = home_pts - away_pts  # Negative = FCS lost
+        if fcs_games.height == 0:
+            return
 
-            # Accumulate margins
-            if fcs_team not in self._game_margins:
-                self._game_margins[fcs_team] = []
-            self._game_margins[fcs_team].append(margin)
+        # Aggregate per FCS team: n_games and mean margin
+        team_stats = fcs_games.group_by("fcs_team").agg(
+            [
+                pl.col("hfa_adj_margin").count().alias("n_games"),
+                pl.col("hfa_adj_margin").mean().alias("mean_margin"),
+                pl.col("hfa_adj_margin").alias("margins"),  # Keep list for internal state
+            ]
+        )
+
+        # Store margins in internal state and calculate strengths
+        for row in team_stats.iter_rows(named=True):
+            team = row["fcs_team"]
+            self._team_margins[team] = row["margins"]
 
         # Recalculate shrunk margins and penalties
         self._recalculate_strengths()
@@ -151,21 +187,26 @@ class FCSStrengthEstimator:
         n_teams = len(self._team_strengths)
         n_games = sum(s.n_games for s in self._team_strengths.values())
         if n_teams > 0:
-            avg_margin = sum(s.raw_margin for s in self._team_strengths.values()) / n_teams
+            avg_margin = (
+                sum(s.raw_margin for s in self._team_strengths.values()) / n_teams
+            )
             logger.debug(
                 f"FCS estimator updated: {n_teams} teams, {n_games} games, "
-                f"avg margin={avg_margin:.1f} (through week {max_week})"
+                f"avg margin={avg_margin:.1f}, hfa_adj={self.hfa_value} (through week {max_week})"
             )
 
     def _recalculate_strengths(self) -> None:
         """Recalculate shrunk margins and penalties from accumulated game margins."""
-        for team, margins in self._game_margins.items():
+        for team, margins in self._team_margins.items():
             n_games = len(margins)
             raw_margin = sum(margins) / n_games if n_games > 0 else self.baseline_margin
 
             # Bayesian shrinkage toward baseline
             shrink_factor = n_games / (n_games + self.k_fcs)
-            shrunk_margin = self.baseline_margin + (raw_margin - self.baseline_margin) * shrink_factor
+            shrunk_margin = (
+                self.baseline_margin
+                + (raw_margin - self.baseline_margin) * shrink_factor
+            )
 
             # Map to penalty
             penalty = self._margin_to_penalty(shrunk_margin)
@@ -237,7 +278,9 @@ class FCSStrengthEstimator:
                 "avg_raw_margin": None,
                 "avg_shrunk_margin": None,
                 "avg_penalty": None,
+                "baseline_margin": self.baseline_margin,
                 "baseline_penalty": self.baseline_penalty,
+                "hfa_value": self.hfa_value,
             }
 
         strengths = list(self._team_strengths.values())
@@ -250,7 +293,13 @@ class FCSStrengthEstimator:
             "avg_raw_margin": sum(s.raw_margin for s in strengths) / n_teams,
             "avg_shrunk_margin": sum(s.shrunk_margin for s in strengths) / n_teams,
             "avg_penalty": sum(s.penalty for s in strengths) / n_teams,
+            "baseline_margin": self.baseline_margin,
             "baseline_penalty": self.baseline_penalty,
-            "min_penalty_team": min(strengths, key=lambda s: s.penalty).team if strengths else None,
-            "max_penalty_team": max(strengths, key=lambda s: s.penalty).team if strengths else None,
+            "hfa_value": self.hfa_value,
+            "min_penalty_team": min(strengths, key=lambda s: s.penalty).team
+            if strengths
+            else None,
+            "max_penalty_team": max(strengths, key=lambda s: s.penalty).team
+            if strengths
+            else None,
         }

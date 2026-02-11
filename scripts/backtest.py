@@ -2146,6 +2146,7 @@ def _process_single_season(
     fcs_max_pen: float = 45.0,
     fcs_slope: float = 0.8,
     fcs_intercept: float = 10.0,
+    fcs_hfa: float = 0.0,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2183,6 +2184,7 @@ def _process_single_season(
     fcs_estimator = None
     if not fcs_static:
         fcs_estimator = FCSStrengthEstimator(
+            hfa_value=fcs_hfa,
             k_fcs=fcs_k,
             baseline_margin=fcs_baseline,
             min_penalty=fcs_min_pen,
@@ -2271,6 +2273,7 @@ def run_backtest(
     fcs_max_pen: float = 45.0,
     fcs_slope: float = 0.8,
     fcs_intercept: float = 10.0,
+    fcs_hfa: float = 0.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2392,6 +2395,7 @@ def run_backtest(
         fcs_max_pen=fcs_max_pen,
         fcs_slope=fcs_slope,
         fcs_intercept=fcs_intercept,
+        fcs_hfa=fcs_hfa,
     )
 
     if len(years) > 1:
@@ -2873,6 +2877,12 @@ def main():
         help="Base FCS penalty (elite FCS with 0 avg loss). Default: 10.0",
     )
     parser.add_argument(
+        "--fcs-hfa",
+        type=float,
+        default=0.0,
+        help="HFA value to neutralize in FCS margin calculations. 0=disabled. Default: 0.0",
+    )
+    parser.add_argument(
         "--no-portal",
         action="store_true",
         help="Disable transfer portal adjustment in preseason priors",
@@ -3035,6 +3045,7 @@ def main():
         fcs_max_pen=args.fcs_max_pen,
         fcs_slope=args.fcs_slope,
         fcs_intercept=args.fcs_intercept,
+        fcs_hfa=args.fcs_hfa,
     )
 
     # P3.4: Print results with ATS data for sanity report
