@@ -58,14 +58,15 @@ class FCSStrengthEstimator:
         - 16 games: 67% data, 33% baseline
 
     Penalty mapping (continuous):
-        avg_loss = abs(shrunk_margin)  # Convert to positive loss amount
+        avg_loss = -shrunk_margin  # Negative margin = loss → positive avg_loss
         penalty = clamp(intercept + slope * avg_loss, min_pen, max_pen)
 
     With defaults (intercept=10, slope=0.8):
-        - avg_loss=10 (elite FCS like NDSU): penalty=18 pts
-        - avg_loss=28 (average FCS): penalty=32.4 pts
-        - avg_loss=40 (weak FCS): penalty=42 pts
-        - avg_loss=50+ (very weak FCS): penalty=45 pts (capped)
+        - margin=+5 (elite FCS beats FBS by 5): avg_loss=-5 → penalty=10 pts (floor)
+        - margin=-10 (good FCS loses by 10): avg_loss=10 → penalty=18 pts
+        - margin=-28 (average FCS, baseline): avg_loss=28 → penalty=32.4 pts
+        - margin=-40 (weak FCS): avg_loss=40 → penalty=42 pts
+        - margin=-50 (very weak FCS): avg_loss=50 → penalty=45 pts (capped)
     """
 
     # HFA neutralization parameter (disabled by default - hurts Phase 1 more than helps Core)
@@ -223,15 +224,17 @@ class FCSStrengthEstimator:
         """Convert shrunk margin to penalty points.
 
         Linear mapping with clipping at min/max bounds.
-        Uses absolute value of margin (avg loss) since slope is positive.
+        Uses negative of margin so that:
+        - Positive margin (FCS win) → negative avg_loss → lower penalty
+        - Negative margin (FCS loss) → positive avg_loss → higher penalty
 
         Args:
-            margin: Expected FCS - FBS margin (negative = FCS loses)
+            margin: Expected FCS - FBS margin (negative = FCS loses, positive = FCS wins)
 
         Returns:
             Penalty points to apply in favor of FBS team
         """
-        avg_loss = abs(margin)  # Convert to positive loss amount
+        avg_loss = -margin  # FCS wins (positive margin) → lower penalty
         raw_penalty = self.intercept + self.slope * avg_loss
         return max(self.min_penalty, min(self.max_penalty, raw_penalty))
 
