@@ -8,6 +8,8 @@ Usage:
     python scripts/run_weekly.py
     python scripts/run_weekly.py --year 2025 --week 5
     python scripts/run_weekly.py --no-wait  # Skip data availability check
+    python scripts/run_weekly.py --sharp    # High-conviction mode (5+ edge only)
+    python scripts/run_weekly.py --min-edge 7  # Custom edge threshold
 """
 
 import argparse
@@ -103,6 +105,17 @@ def parse_args():
         "--use-delta-cache",
         action="store_true",
         help="Use week-level delta caching (only fetch current week from API, load historical from cache)",
+    )
+    parser.add_argument(
+        "--min-edge",
+        type=float,
+        default=3.0,
+        help="Minimum edge (pts) to show as value play. Default: 3.0",
+    )
+    parser.add_argument(
+        "--sharp",
+        action="store_true",
+        help="Sharp betting mode: only show 5+ edge picks (shortcut for --min-edge 5)",
     )
     return parser.parse_args()
 
@@ -387,6 +400,7 @@ def run_predictions(
     qb_out_teams: list[str] = None,
     generate_reports: bool = True,
     use_delta_cache: bool = False,
+    min_edge: float = 3.0,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -398,6 +412,8 @@ def run_predictions(
         qb_out_teams: List of teams whose starting QB is out
         generate_reports: Whether to generate Excel/HTML reports. Set False for
                          faster execution in testing/scripting. Default True.
+        min_edge: Minimum edge (pts) to qualify as value play. Default 3.0.
+                  Use 5.0 for high-conviction filtering (--sharp mode).
 
     Returns:
         Dictionary with results summary
@@ -576,8 +592,8 @@ def run_predictions(
         predictions_df = spread_gen.predictions_to_dataframe(predictions)
 
         # Vegas comparison
-        logger.info("Fetching Vegas lines and comparing...")
-        vegas = VegasComparison(client=client)
+        logger.info(f"Fetching Vegas lines and comparing (min_edge={min_edge})...")
+        vegas = VegasComparison(client=client, value_threshold=min_edge)
         vegas.fetch_lines(year, week)
 
         comparison_df = vegas.generate_comparison_df(predictions)
@@ -675,7 +691,13 @@ def main():
             logger.info("Please specify --week argument")
             sys.exit(1)
 
-    logger.info(f"Running predictions for {year} Week {week}")
+    # Determine min_edge threshold
+    min_edge = args.min_edge
+    if args.sharp:
+        min_edge = 5.0
+        logger.info("Sharp mode enabled: filtering to 5+ edge picks only")
+
+    logger.info(f"Running predictions for {year} Week {week} (min_edge={min_edge})")
 
     results = run_predictions(
         year=year,
@@ -685,6 +707,7 @@ def main():
         qb_out_teams=args.qb_out,
         generate_reports=not args.no_reports,
         use_delta_cache=args.use_delta_cache,
+        min_edge=min_edge,
     )
 
     if results["success"]:
