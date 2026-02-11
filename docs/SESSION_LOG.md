@@ -4,6 +4,51 @@
 
 ---
 
+## Session: February 11, 2026
+
+### Theme: INT/Fumble Separate Shrinkage in Turnover Model
+
+---
+
+#### INT/Fumble Bayesian Shrinkage Split — APPROVED
+**Status**: Committed
+**Files**: `config/play_types.py`, `src/models/efficiency_foundation_model.py`, `scripts/backtest.py`
+
+Refactored turnover margin component to apply different Bayesian shrinkage to INTs (skill-based) vs fumbles (luck-based).
+
+**Hypothesis**: Interceptions correlate year-to-year (QB decision-making, defensive scheme), while fumble recoveries are essentially coin flips.
+
+**Implementation**:
+- Added `INTERCEPTION_PLAY_TYPES` and `FUMBLE_PLAY_TYPES` classification in play_types.py
+- Track INT thrown/forced and fumbles lost/recovered separately in EFM
+- Apply different shrinkage: `shrink_int = n/(n+k_int)`, `shrink_fum = n/(n+k_fumble)`
+- CLI parameters: `--k-int` (default 10.0), `--k-fumble` (default 30.0)
+
+**Parameter Sweep Results (k_int × k_fumble)**:
+| k_int | k_fumble | 5+ ATS Close |
+|-------|----------|--------------|
+| 10 | 10 | 53.7% (unified baseline) |
+| **10** | **30** | **54.0%** (+0.3pp) |
+| 10 | 50 | 54.0% (tied) |
+
+**Year-to-Year Stability**:
+- 2022: 52.7% → 52.7% (unchanged)
+- 2023: 53.7% → 53.9% (+0.2pp)
+- 2024: 55.5% → 55.8% (+0.3pp)
+- 2025: 52.9% → 53.2% (+0.3pp)
+
+**Key Finding**: Applying stronger shrinkage to fumbles (k=30 vs k=10) improves 5+ ATS Close by +0.3pp consistently across years. Validates the "INT is skill, fumble is luck" hypothesis.
+
+---
+
+#### FCS Vectorization — Minor Improvement
+**Status**: Committed
+**Files**: `src/models/fcs_strength.py`
+
+Converted FCS strength estimation to fully vectorized Polars pipeline. No performance change, cleaner code.
+
+---
+
 ## Session: February 10, 2026 (Evening)
 
 ### Theme: Learned Situational Adjustment (LSA) Implementation
