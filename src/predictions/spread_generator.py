@@ -389,7 +389,9 @@ class SpreadGenerator:
                 # Dynamic penalty from FCS strength estimator
                 penalty = self.fcs_estimator.get_penalty(fcs_team)
                 strength = self.fcs_estimator.get_strength(fcs_team)
-                avg_loss = abs(strength.shrunk_margin) if strength else abs(self.fcs_estimator.baseline_margin)
+                # avg_loss = -shrunk_margin (positive = FCS loses, negative = FCS wins)
+                # Consistent with _margin_to_penalty() in FCS estimator
+                avg_loss = -strength.shrunk_margin if strength else -self.fcs_estimator.baseline_margin
                 logger.debug(f"[FCS Scale] Team: {fcs_team}, AvgLoss: {avg_loss:.1f}, FinalBonus: {penalty:.1f}")
             else:
                 # Fallback to static tiered system
@@ -402,7 +404,8 @@ class SpreadGenerator:
                 # Dynamic penalty from FCS strength estimator
                 penalty = self.fcs_estimator.get_penalty(fcs_team)
                 strength = self.fcs_estimator.get_strength(fcs_team)
-                avg_loss = abs(strength.shrunk_margin) if strength else abs(self.fcs_estimator.baseline_margin)
+                # avg_loss = -shrunk_margin (positive = FCS loses, negative = FCS wins)
+                avg_loss = -strength.shrunk_margin if strength else -self.fcs_estimator.baseline_margin
                 logger.debug(f"[FCS Scale] Team: {fcs_team}, AvgLoss: {avg_loss:.1f}, FinalBonus: {penalty:.1f}")
             else:
                 # Fallback to static tiered system
