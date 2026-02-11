@@ -119,10 +119,12 @@ def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
         sample = plays_df
 
     # P0.3: Robust hash using team sequences + metric stats + weight stats
+    # P3.6: Use numpy tobytes() instead of str.cat() for faster hashing
+    # Note: np.asarray() handles ArrowStringArray (pyarrow backend)
     hash_parts = [
         str(n_plays),
-        hashlib.md5(sample["offense"].str.cat(sep=",").encode()).hexdigest()[:8],
-        hashlib.md5(sample["defense"].str.cat(sep=",").encode()).hexdigest()[:8],
+        hashlib.md5(np.asarray(sample["offense"]).astype(str).tobytes()).hexdigest()[:8],
+        hashlib.md5(np.asarray(sample["defense"]).astype(str).tobytes()).hexdigest()[:8],
         f"{sample[metric_col].sum():.8f}",
         f"{sample[metric_col].mean():.8f}",
     ]
@@ -832,9 +834,10 @@ class EfficiencyFoundationModel:
         if self.rz_leverage_enabled and "yards_to_goal" in df.columns and "is_success" in df.columns:
             # SAFETY CHECK 1: Exclude plays with nonsensical field position data
             # If yards_to_goal + yards_gained > 100, the field position is flipped or corrupted
-            valid_field_position = pd.Series(True, index=df.index)
+            # P3.5: Use numpy arrays instead of pd.Series for boolean masks
+            valid_field_position = np.ones(len(df), dtype=bool)
             if "yards_gained" in df.columns:
-                valid_field_position = (df["yards_to_goal"] + df["yards_gained"]) <= 100
+                valid_field_position = (df["yards_to_goal"].values + df["yards_gained"].values) <= 100
                 invalid_count = (~valid_field_position).sum()
                 if invalid_count > 0:
                     logger.debug(
@@ -847,21 +850,25 @@ class EfficiencyFoundationModel:
 
             # Successful plays in this zone that DON'T enter the red zone or score
             # A play enters the RZ if: yards_to_goal - yards_gained < 20
+            # P3.5: Use numpy arrays instead of pd.Series for boolean masks
             if "yards_gained" in df.columns:
-                enters_rz = (df["yards_to_goal"] - df["yards_gained"]) < 20
+                enters_rz = (df["yards_to_goal"].values - df["yards_gained"].values) < 20
             else:
-                enters_rz = pd.Series(False, index=df.index)
+                enters_rz = np.zeros(len(df), dtype=bool)
 
             # Check for scoring plays
-            is_scoring = pd.Series(False, index=df.index)
+            # P3.5: Use numpy arrays instead of pd.Series for boolean masks
             if "play_type" in df.columns:
                 scoring_types = ["Passing Touchdown", "Rushing Touchdown", "Field Goal Good"]
-                is_scoring = df["play_type"].isin(scoring_types)
+                is_scoring = df["play_type"].isin(scoring_types).values
+            else:
+                is_scoring = np.zeros(len(df), dtype=bool)
 
             # Apply 0.7x weight to successful plays in empty zone that don't enter RZ or score
+            # P3.5: Convert remaining Series to numpy arrays for consistent boolean operations
             is_empty_success = (
-                in_empty_zone &
-                (df["is_success"] == 1) &
+                in_empty_zone.values &
+                (df["is_success"].values == 1) &
                 ~enters_rz &
                 ~is_scoring
             )
@@ -881,9 +888,10 @@ class EfficiencyFoundationModel:
                 # Build stats in one pass via groupby
                 successful_mask = df["is_success"] == 1
                 if successful_mask.any():
+                    # P3.5: is_empty_success is now numpy array, index directly
                     stats_df = pd.DataFrame({
                         "offense": df.loc[successful_mask, "offense"],
-                        "is_empty": is_empty_success[successful_mask].values,
+                        "is_empty": is_empty_success[successful_mask.values],
                     })
                     team_stats = stats_df.groupby("offense").agg(
                         success_count=("offense", "count"),
@@ -1372,7 +1380,8 @@ class EfficiencyFoundationModel:
             off_str = np.asarray(offenses, dtype=object)
             def_str = np.asarray(defenses, dtype=object)
             home_str = np.asarray(home_teams, dtype=object)
-            home_valid_mask = np.array([pd.notna(h) for h in home_str], dtype=bool)
+            # P3.4: Use vectorized pd.notna instead of list comprehension
+            home_valid_mask = pd.notna(plays_df["home_team"]).values
             off_is_home = (off_str == home_str) & home_valid_mask
             def_is_home = (def_str == home_str) & home_valid_mask
 
@@ -1588,23 +1597,36 @@ class EfficiencyFoundationModel:
             return empty_result
 
         # Find turnover plays by type
-        turnover_plays = plays_df[plays_df["play_type"].isin(TURNOVER_PLAY_TYPES)]
-        int_plays = plays_df[plays_df["play_type"].isin(INTERCEPTION_PLAY_TYPES)]
-        fumble_plays = plays_df[plays_df["play_type"].isin(FUMBLE_PLAY_TYPES)]
+        # P3.3: Consolidate 6 separate groupby().size() calls into 2 groupby().agg() calls
+        to_plays = plays_df[plays_df["play_type"].isin(TURNOVER_PLAY_TYPES)].copy()
 
-        if len(turnover_plays) == 0:
+        if len(to_plays) == 0:
             logger.warning("No turnover plays found")
             return empty_result
 
+        # Add boolean columns for INT/FUM classification
+        to_plays["is_int"] = to_plays["play_type"].isin(INTERCEPTION_PLAY_TYPES)
+        to_plays["is_fum"] = to_plays["play_type"].isin(FUMBLE_PLAY_TYPES)
+
         # Count turnovers lost (offense = team that lost the ball)
-        turnovers_lost = turnover_plays.groupby("offense").size()
-        ints_thrown_count = int_plays.groupby("offense").size() if len(int_plays) > 0 else pd.Series(dtype=int)
-        fumbles_lost_count = fumble_plays.groupby("offense").size() if len(fumble_plays) > 0 else pd.Series(dtype=int)
+        lost_agg = to_plays.groupby("offense").agg(
+            total=("is_int", "count"),
+            ints=("is_int", "sum"),
+            fums=("is_fum", "sum"),
+        )
+        turnovers_lost = lost_agg["total"]
+        ints_thrown_count = lost_agg["ints"]
+        fumbles_lost_count = lost_agg["fums"]
 
         # Count turnovers forced (defense = team that forced it)
-        turnovers_forced = turnover_plays.groupby("defense").size()
-        ints_forced_count = int_plays.groupby("defense").size() if len(int_plays) > 0 else pd.Series(dtype=int)
-        fumbles_rec_count = fumble_plays.groupby("defense").size() if len(fumble_plays) > 0 else pd.Series(dtype=int)
+        forced_agg = to_plays.groupby("defense").agg(
+            total=("is_int", "count"),
+            ints=("is_int", "sum"),
+            fums=("is_fum", "sum"),
+        )
+        turnovers_forced = forced_agg["total"]
+        ints_forced_count = forced_agg["ints"]
+        fumbles_rec_count = forced_agg["fums"]
 
         # Get all teams - DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(
@@ -1620,12 +1642,14 @@ class EfficiencyFoundationModel:
 
         if games_df is not None and len(games_df) > 0:
             # Primary: count from games_df (most reliable)
+            # P3.2: Use two groupbys instead of per-team O(N) filtering
             games_source = "games_df"
+            home_counts = games_df.groupby("home_team").size()
+            away_counts = games_df.groupby("away_team").size()
             for team in all_teams:
-                n_games = len(games_df[
-                    (games_df["home_team"] == team) | (games_df["away_team"] == team)
-                ])
-                games_played[team] = max(n_games, 1)
+                games_played[team] = max(
+                    home_counts.get(team, 0) + away_counts.get(team, 0), 1
+                )
         elif "game_id" in plays_df.columns:
             # Fallback: count unique game_ids from plays (reliable if game_id exists)
             games_source = "plays_df.game_id"
@@ -1847,6 +1871,10 @@ class EfficiencyFoundationModel:
         # P3.6: Use canonical team index (already sorted, computed once at start)
         all_teams = self._canonical_teams
 
+        # P3.1: Pre-compute play counts via groupby instead of per-team O(N) filtering
+        off_play_counts = prepared.groupby("offense").size()
+        def_play_counts = prepared.groupby("defense").size()
+
         # Calculate league averages from adjusted values
         # P3.6: np.mean() is order-independent, no need to sort for determinism
         avg_sr = np.mean(list(adj_off_sr.values()))
@@ -1952,9 +1980,9 @@ class EfficiencyFoundationModel:
             # turnover_rating is diagnostic only — do not add it to overall
             overall = offensive_rating + defensive_rating
 
-            # Get sample sizes
-            off_plays = len(prepared[prepared["offense"] == team])
-            def_plays = len(prepared[prepared["defense"] == team])
+            # Get sample sizes (P3.1: use pre-computed groupby counts)
+            off_plays = off_play_counts.get(team, 0)
+            def_plays = def_play_counts.get(team, 0)
 
             self.team_ratings[team] = TeamEFMRating(
                 team=team,
@@ -2496,31 +2524,14 @@ class EfficiencyFoundationModel:
         )
 
         # Combine home and away stats
-        all_teams = set(home_stats.index) | set(away_stats.index)
-        team_win_stats = {}
-
-        for team in all_teams:
-            home_exp = home_stats.loc[team, "home_expected"] if team in home_stats.index else 0.0
-            home_act = home_stats.loc[team, "home_actual"] if team in home_stats.index else 0.0
-            home_n = home_stats.loc[team, "home_games"] if team in home_stats.index else 0
-            away_exp = away_stats.loc[team, "away_expected"] if team in away_stats.index else 0.0
-            away_act = away_stats.loc[team, "away_actual"] if team in away_stats.index else 0.0
-            away_n = away_stats.loc[team, "away_games"] if team in away_stats.index else 0
-
-            n_games = home_n + away_n
-            if n_games == 0:
-                continue
-
-            expected_wins = home_exp + away_exp
-            actual_wins = home_act + away_act
-            win_gap = expected_wins - actual_wins
-
-            team_win_stats[team] = {
-                "n_games": n_games,
-                "actual_wins": actual_wins,
-                "expected_wins": expected_wins,
-                "win_gap": win_gap,
-            }
+        # P3.7: Replace per-team conditional .loc lookups with a single join
+        combined_stats = home_stats.join(away_stats, how="outer").fillna(0)
+        combined_stats["n_games"] = combined_stats["home_games"] + combined_stats["away_games"]
+        combined_stats["expected_wins"] = combined_stats["home_expected"] + combined_stats["away_expected"]
+        combined_stats["actual_wins"] = combined_stats["home_actual"] + combined_stats["away_actual"]
+        combined_stats["win_gap"] = combined_stats["expected_wins"] - combined_stats["actual_wins"]
+        combined_stats = combined_stats[combined_stats["n_games"] > 0]
+        team_win_stats = combined_stats[["n_games", "actual_wins", "expected_wins", "win_gap"]].to_dict("index")
 
         # Apply fraud tax to under-performers
         n_penalized = 0
