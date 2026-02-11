@@ -64,6 +64,50 @@ Added `--lsa-clamp-max` CLI parameter to enforce hard bounds on coefficients aft
 
 ---
 
+#### Production Workflow Streamlining — COMMITTED
+**Status**: Committed
+**Commits**: `a9b6163`, `fa04789`
+
+Added streamlined CLI arguments to `scripts/run_weekly.py` for 2026 season production use.
+
+**New CLI arguments**:
+- `--min-edge N` - Minimum edge (pts) to show as value play (default: 3.0)
+- `--sharp` - Sharp betting mode: shortcut for `--min-edge 5`
+- `--learned-situ` - Enable LSA with automatic coefficient loading
+
+**LSA coefficient loading**:
+- `load_lsa_coefficients(year)` - Loads most recent coefficients from `data/learned_situ_coefficients/`
+- Falls back to previous year's coefficients if current year not available
+- `apply_lsa_adjustment()` - Computes per-game adjustment from situational features
+
+**Streamlined 2026 workflow**:
+```bash
+# First-time setup (once per season):
+python3 scripts/backtest.py --years 2022 2023 2024 2025 --learned-situ
+
+# Weekly (sharp betting mode):
+python3 scripts/run_weekly.py --learned-situ --sharp
+```
+
+---
+
+#### Documentation Updates — COMMITTED
+**Status**: Committed
+**Commits**: `7a4a7cf`, `3713592`
+
+Updated all documentation to reflect LSA implementation:
+- `docs/MODEL_EXPLAINER.md` - Added LSA section with architecture and grid sweep results
+- `docs/MODEL_ARCHITECTURE.md` - Added LSA to situational factors section
+- `CLAUDE.md` - Updated baseline table to show both Fixed and LSA modes
+
+**Dual-baseline display** (from CLAUDE.md):
+| Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
+|------|-----------------|-----------------|----------|
+| Fixed (default) | **53.1%** (800-708) | 53.7% (498-429) | Standard production |
+| LSA enabled | 52.3% (772-704) | **54.9%** (483-397) | High-conviction filtering |
+
+---
+
 ## Session: February 11, 2026
 
 ### Theme: FCS Vectorization + HFA Neutralization
