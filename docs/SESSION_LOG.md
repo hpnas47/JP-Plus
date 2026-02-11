@@ -4,6 +4,60 @@
 
 ---
 
+## Session: February 11, 2026 (Evening)
+
+### Theme: FCS & LSA Code Hardening
+
+---
+
+#### FCS Penalty Logic Fix — APPROVED
+**Status**: Committed
+**Files**: `src/models/fcs_strength.py`
+
+Fixed critical bug where `abs(margin)` incorrectly penalized elite FCS teams that beat FBS opponents.
+
+**The Bug**: A +10 margin (FCS wins by 10) was treated identically to -10 margin (FCS loses by 10), causing elite FCS teams like NDSU to receive higher penalties when they should receive lower.
+
+**The Fix**: Changed `abs(margin)` to `-margin` so:
+- Positive margin (FCS wins) → lower penalty (min 10 pts)
+- Negative margin (FCS loses) → higher penalty
+
+**Phase 1 Backtest (Weeks 1-3)**: ATS +0.8% (47.9% → 48.7%), MAE +0.51
+
+---
+
+#### FCSStrengthEstimator Refactor — Code Quality
+**Status**: Committed
+**Files**: `src/models/fcs_strength.py`, `scripts/backtest.py`, `scripts/diagnose_lsa_features.py`
+
+1. Renamed `max_week` → `through_week` with explicit docstring clarifying callers must pass `current_week - 1`
+2. Added `__post_init__` parameter validation (k_fcs > 0, min_penalty <= max_penalty, slope >= 0)
+3. Vectorized Polars pipeline: shrink_factor, shrunk_margin, penalty computed in Polars chain
+4. Single iteration instead of separate `_recalculate_strengths()` method
+5. `pl.Series` for fbs_teams (avoids rebuilding hashset on each `is_in()`)
+6. Lazy %-formatting for logger
+7. Single-pass accumulation in `get_summary_stats()`
+
+---
+
+#### LSA Model Hardening — Bug Fixes + Optimization
+**Status**: Committed
+**Files**: `src/models/learned_situational.py`
+
+**Bug Fixes**:
+1. **FEATURE_NAMES/to_array() drift prevention**: Dynamic `to_array()` from FEATURE_NAMES + module-level assertion
+2. **EMA cross-season bleed**: Clear `_prev_coefficients` in `reset()` — first train() of each season uses raw coefficients
+3. **seed_with_prior_data ordering**: Prepend prior data instead of replacing (safe regardless of call order)
+4. **Clamp-after-EMA ratchet**: Clamp raw coefficients FIRST, then EMA (prevents sticky ceiling)
+5. **None guards in from_situational_factors**: Defensive coalescing for rest_days and penalty fields
+6. **Year validation before persist**: Warn and skip if `train()` called before `reset()`
+
+**Optimizations**:
+7. **Numpy**: `np.dot()` for predict(), parallel lists + `np.vstack()` for training data
+8. **Documentation**: Expanded sign convention docstring for `compute_situational_residual`
+
+---
+
 ## Session: February 11, 2026
 
 ### Theme: INT/Fumble Separate Shrinkage in Turnover Model
