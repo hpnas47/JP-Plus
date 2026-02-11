@@ -140,12 +140,9 @@ def parse_args():
         action="store_true",
         help="Use Learned Situational Adjustment (LSA). Trains on prior seasons + current season weeks.",
     )
-    parser.add_argument(
-        "--lsa-alpha",
-        type=float,
-        default=300.0,
-        help="LSA ridge alpha for regularization. Default: 300.0",
-    )
+    # Note: LSA alpha is a TRAINING-TIME parameter configured during backtest.
+    # Coefficients are pre-baked in data/learned_situ_coefficients/*.json.
+    # No alpha parameter needed at inference time.
     parser.add_argument(
         "--dual-spread",
         action="store_true",
@@ -377,6 +374,9 @@ def build_schedule_df(
 ) -> pd.DataFrame:
     """Build full season schedule for situational analysis.
 
+    Fetches all regular season weeks (1-15). Needed for lookahead and sandwich
+    spot detection, which requires visibility into future opponents.
+
     Args:
         client: API client
         year: Season year
@@ -385,11 +385,20 @@ def build_schedule_df(
         DataFrame with full schedule
     """
     all_games = []
+    consecutive_empty = 0
 
     # Fetch all regular season weeks
     for week in range(1, 16):
         try:
             games = client.get_games(year, week)
+            if not games:
+                # Empty response = week doesn't exist yet (mid-season)
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    # Two consecutive empty weeks = reached end of scheduled games
+                    break
+                continue
+            consecutive_empty = 0  # Reset on successful fetch
             for game in games:
                 all_games.append({
                     "week": game.week,
@@ -398,8 +407,15 @@ def build_schedule_df(
                     "home_points": game.home_points,
                     "away_points": game.away_points,
                 })
-        except Exception:
-            break  # Stop if week doesn't exist
+        except Exception as e:
+            # Log transient errors but continue fetching remaining weeks
+            # (rate limits, timeouts should not truncate the schedule)
+            logger.warning(f"Error fetching week {week} schedule: {e}")
+            continue
+
+    if all_games:
+        max_week = max(g["week"] for g in all_games)
+        logger.debug(f"Built schedule with {len(all_games)} games through week {max_week}")
 
     return pd.DataFrame(all_games)
 
@@ -536,7 +552,6 @@ def run_predictions(
     use_delta_cache: bool = False,
     min_edge: float = 3.0,
     use_learned_situ: bool = False,
-    lsa_alpha: float = 300.0,
     dual_spread: bool = False,
     lsa_threshold_days: int = 4,
 ) -> dict:
@@ -553,7 +568,8 @@ def run_predictions(
         min_edge: Minimum edge (pts) to qualify as value play. Default 3.0.
                   Use 5.0 for high-conviction filtering (--sharp mode).
         use_learned_situ: Whether to use LSA (Learned Situational Adjustment).
-        lsa_alpha: Ridge regularization for LSA. Default 300.0.
+        dual_spread: Output both fixed and LSA spreads with timing recommendation.
+        lsa_threshold_days: Days before game to switch from fixed to LSA recommendation.
 
     Returns:
         Dictionary with results summary
@@ -637,7 +653,7 @@ def run_predictions(
         # Build EFM model
         logger.info("Fitting Efficiency Foundation Model...")
         efm = EfficiencyFoundationModel(
-            ridge_alpha=settings.ridge_alpha if hasattr(settings, 'ridge_alpha') else 50.0,
+            ridge_alpha=settings.ridge_alpha,
         )
         efm.calculate_ratings(
             plays_df, current_games_df, max_week=week - 1, season=year,
@@ -687,6 +703,8 @@ def run_predictions(
             qb_adjuster.print_depth_charts()
 
         # Build spread generator
+        # Note: fcs_penalty_elite/standard use SpreadGenerator's defaults (18.0/32.0)
+        # These are fallbacks when dynamic FCS estimator is unavailable.
         spread_gen = SpreadGenerator(
             ratings=team_ratings,
             special_teams=special_teams,
@@ -696,8 +714,6 @@ def run_predictions(
             travel=travel,
             altitude=altitude,
             fbs_teams=fbs_teams,
-            fcs_penalty_elite=settings.fcs_penalty_elite if hasattr(settings, 'fcs_penalty_elite') else 18.0,
-            fcs_penalty_standard=settings.fcs_penalty_standard if hasattr(settings, 'fcs_penalty_standard') else 32.0,
             qb_adjuster=qb_adjuster,
         )
 
@@ -734,6 +750,7 @@ def run_predictions(
 
         # Dual-spread mode: compute BOTH fixed and LSA spreads
         lsa_spreads = {}
+        lsa_adjustments = []  # Track adjustments for proper logging
         if dual_spread or use_learned_situ:
             lsa_coefficients = load_lsa_coefficients(year)
             if lsa_coefficients:
@@ -749,21 +766,24 @@ def run_predictions(
                         historical_rankings=historical_rankings,
                         week=week,
                     )
-                    # Calculate LSA spread
-                    fixed_situ = pred.components.situational if hasattr(pred, 'components') else 0.0
+                    lsa_adjustments.append(lsa_adj)
+
+                    # Calculate LSA spread: replace fixed situational with learned
+                    fixed_situ = pred.components.situational
                     lsa_spread = pred.spread - fixed_situ + lsa_adj
                     lsa_spreads[pred.game_id] = lsa_spread
 
                     # If use_learned_situ (not dual), apply LSA to prediction
                     if use_learned_situ and not dual_spread:
                         pred.spread = lsa_spread
-                        if hasattr(pred, 'components') and hasattr(pred.components, 'situational'):
-                            object.__setattr__(pred.components, 'situational', lsa_adj)
+                        pred.components.situational = lsa_adj
 
+                # Log mean of actual LSA adjustments (not mean of final spreads)
+                mean_lsa = sum(lsa_adjustments) / len(lsa_adjustments) if lsa_adjustments else 0.0
                 if use_learned_situ and not dual_spread:
-                    logger.info(f"LSA adjustments applied (mean shift: {sum(p.spread for p in predictions)/len(predictions):.2f})")
+                    logger.info(f"LSA adjustments applied (mean adjustment: {mean_lsa:+.2f} pts)")
                 else:
-                    logger.info(f"LSA spreads computed for dual-spread mode")
+                    logger.info(f"LSA spreads computed for dual-spread mode (mean adjustment: {mean_lsa:+.2f} pts)")
             else:
                 logger.warning("LSA coefficients not found - using fixed situational only")
                 # Fill lsa_spreads with fixed values as fallback
@@ -915,7 +935,7 @@ def main():
     use_learned_situ = args.learned_situ
     dual_spread = args.dual_spread
     if use_learned_situ:
-        logger.info(f"LSA enabled: alpha={args.lsa_alpha}")
+        logger.info("LSA enabled (using pre-computed coefficients)")
     if dual_spread:
         logger.info(f"Dual-spread mode: outputting both fixed and LSA spreads (threshold: {args.lsa_threshold_days} days)")
 
@@ -931,7 +951,6 @@ def main():
         use_delta_cache=args.use_delta_cache,
         min_edge=min_edge,
         use_learned_situ=use_learned_situ,
-        lsa_alpha=args.lsa_alpha,
         dual_spread=dual_spread,
         lsa_threshold_days=args.lsa_threshold_days,
     )
