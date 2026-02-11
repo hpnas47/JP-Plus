@@ -623,12 +623,14 @@ class EfficiencyFoundationModel:
         initial_count = len(df)
 
         # DATA LEAKAGE GUARD: Verify no future weeks in training data
+        # BUG FIX: Use explicit if/raise instead of assert (asserts can be disabled with -O)
         if max_week is not None and "week" in df.columns:
             actual_max = df["week"].max()
-            assert actual_max <= max_week, (
-                f"DATA LEAKAGE in EFM: plays include week {actual_max} "
-                f"but max_week={max_week}. Filter plays before calling calculate_ratings()."
-            )
+            if actual_max > max_week:
+                raise ValueError(
+                    f"DATA LEAKAGE in EFM: plays include week {actual_max} "
+                    f"but max_week={max_week}. Filter plays before calling calculate_ratings()."
+                )
 
         # P3.5: Build combined filter mask to avoid multiple intermediate DataFrames
         # This reduces peak memory by filtering once instead of chaining df = df[mask]
@@ -699,7 +701,8 @@ class EfficiencyFoundationModel:
         # P3.2: Vectorized weight calculation (replaces row-wise apply)
         if self.garbage_time_weight == 0:
             # Discard garbage time plays entirely
-            df = df[~df["is_garbage_time"]]
+            # BUG FIX: Use .copy() to avoid SettingWithCopyWarning and ensure assignment sticks
+            df = df[~df["is_garbage_time"]].copy()
             df["weight"] = 1.0
         elif self.asymmetric_garbage:
             # Three-tier garbage time: leading team gets partial credit,
@@ -991,12 +994,13 @@ class EfficiencyFoundationModel:
         """
         agg_start = time.time()
 
-        # P3.5: Compute weighted success without copying - caller passes a copy from _prepare_plays()
-        # Pre-compute weighted success column for efficiency (in-place assignment is safe here)
-        plays_df["weighted_success"] = plays_df["is_success"].astype(float) * plays_df["weight"]
+        # BUG FIX: Compute weighted success as local array instead of mutating input DataFrame
+        # This prevents cross-run contamination if caller reuses/caches the DataFrame
+        weighted_success = plays_df["is_success"].astype(float).values * plays_df["weight"].values
 
         # ===== OFFENSIVE METRICS (groupby offense) =====
-        off_grouped = plays_df.groupby("offense").agg(
+        # Use assign() to create temporary column for aggregation without mutating input
+        off_grouped = plays_df.assign(weighted_success=weighted_success).groupby("offense").agg(
             play_count=("weight", "size"),
             weight_sum=("weight", "sum"),
             weighted_success_sum=("weighted_success", "sum"),
@@ -1012,7 +1016,7 @@ class EfficiencyFoundationModel:
         off_sr = off_grouped["sr"].to_dict()
 
         # ===== DEFENSIVE METRICS (groupby defense) =====
-        def_grouped = plays_df.groupby("defense").agg(
+        def_grouped = plays_df.assign(weighted_success=weighted_success).groupby("defense").agg(
             play_count=("weight", "size"),
             weight_sum=("weight", "sum"),
             weighted_success_sum=("weighted_success", "sum"),
@@ -1332,6 +1336,23 @@ class EfficiencyFoundationModel:
         # Using preset categories ensures indices match team_to_idx ordering
         off_idx = pd.Categorical(offenses, categories=all_teams, ordered=False).codes.astype(np.int32)
         def_idx = pd.Categorical(defenses, categories=all_teams, ordered=False).codes.astype(np.int32)
+
+        # BUG FIX: Validate team indices - pd.Categorical returns -1 for unknown categories
+        # This can happen with NaN teams, trailing spaces, name mismatches, or subset filtering
+        invalid_off = (off_idx == -1)
+        invalid_def = (def_idx == -1)
+        if invalid_off.any() or invalid_def.any():
+            n_invalid_off = invalid_off.sum()
+            n_invalid_def = invalid_def.sum()
+            # Get examples of unknown teams for debugging
+            unknown_off = set(offenses[invalid_off][:5]) if n_invalid_off > 0 else set()
+            unknown_def = set(defenses[invalid_def][:5]) if n_invalid_def > 0 else set()
+            raise ValueError(
+                f"Invalid team indices in ridge regression: "
+                f"{n_invalid_off} unknown offenses (e.g., {unknown_off}), "
+                f"{n_invalid_def} unknown defenses (e.g., {unknown_def}). "
+                f"Teams not in all_teams set. Check for NaN, typos, or filtering mismatches."
+            )
 
         # Home field signs: +1 if offense is home, -1 if defense is home, 0 if neutral
         has_home_info = "home_team" in plays_df.columns
