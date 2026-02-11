@@ -104,6 +104,38 @@ Fixed critical bug where `abs(margin)` incorrectly penalized elite FCS teams tha
 
 ---
 
+#### run_weekly.py Additional Fixes — Code Quality
+**Status**: Committed (`76a7613`)
+**Files**: `scripts/run_weekly.py`
+
+**Fixes**:
+
+1. **fetch_upcoming_games returning completed games** — BUG
+   - No filter for completed games, could include games with scores
+   - **Fix**: Added filter `completed=False` (if available) or filter on null home_points
+
+2. **Broad exception handler in run_predictions** — CODE SMELL
+   - Single `try/except Exception` caught programming errors (TypeError, ValueError, KeyError)
+   - **Fix**: Split into targeted handlers; let programming errors propagate
+
+3. **Missing fbs_teams validation** — BUG
+   - If fbs_teams empty/None, predictions silently used invalid data
+   - **Fix**: Added explicit validation with descriptive error message
+
+4. **Polars-to-Pandas conversion before FBS filtering** — INEFFICIENCY
+   - Converted full DataFrame to pandas, then filtered
+   - **Fix**: Do FBS filtering in Polars, convert result to pandas (~130 teams filtered from ~200)
+
+5. **build_schedule_df DataNotAvailableError handling** — BUG
+   - All exceptions caused `break`, conflating "week doesn't exist" with transient errors
+   - **Fix**: `DataNotAvailableError` → break (expected); other exceptions → log warning and continue
+
+6. **Per-team ST/FD loops** — TODO added
+   - 130+ FBS teams × full DataFrame scan = ~130x redundant iteration
+   - Added TODO noting batch methods exist only for play-by-play, not game stats
+
+---
+
 ## Session: February 11, 2026
 
 ### Theme: INT/Fumble Separate Shrinkage in Turnover Model
