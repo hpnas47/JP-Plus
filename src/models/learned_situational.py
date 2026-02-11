@@ -182,14 +182,17 @@ class SituationalFeatures:
         )
 
 
-# Validate FEATURE_NAMES matches SituationalFeatures fields (ImportError if they drift)
+# Validate FEATURE_NAMES matches SituationalFeatures fields at import time.
+# Uses explicit if/raise instead of assert to prevent optimization removal (python -O).
 _FEATURE_FIELDS = {f.name for f in dataclasses.fields(SituationalFeatures)}
 for _name in FEATURE_NAMES:
-    assert _name in _FEATURE_FIELDS, f"FEATURE_NAMES entry '{_name}' not in SituationalFeatures"
-assert len(FEATURE_NAMES) == len(_FEATURE_FIELDS), (
-    f"FEATURE_NAMES has {len(FEATURE_NAMES)} entries but SituationalFeatures "
-    f"has {len(_FEATURE_FIELDS)} fields"
-)
+    if _name not in _FEATURE_FIELDS:
+        raise ValueError(f"FEATURE_NAMES entry '{_name}' not in SituationalFeatures")
+if len(FEATURE_NAMES) != len(_FEATURE_FIELDS):
+    raise ValueError(
+        f"FEATURE_NAMES has {len(FEATURE_NAMES)} entries but SituationalFeatures "
+        f"has {len(_FEATURE_FIELDS)} fields"
+    )
 del _FEATURE_FIELDS, _name  # Clean up module namespace
 
 
@@ -279,13 +282,14 @@ class LearnedSituationalModel:
         self._year: Optional[int] = None
         self._max_week: int = 0
         self._is_trained: bool = False
+        self._seeded: bool = False  # Guard against duplicate seed_with_prior_data calls
 
     def reset(self, year: int) -> None:
         """Reset model state for a new season.
 
-        Note: Training data from prior seasons should be passed via
-        seed_with_prior_data() after reset() is called. This method clears
-        the current season's state but not the accumulated training data.
+        Clears ALL state including training data. After reset(), call
+        seed_with_prior_data() to load prior seasons, then add_training_game()
+        for current season games.
 
         Args:
             year: Current season year
@@ -293,10 +297,15 @@ class LearnedSituationalModel:
         self._year = year
         self._max_week = 0
         self._is_trained = False
+        # Clear training data to prevent duplicate accumulation across seasons
+        self._X_train.clear()
+        self._y_train.clear()
         # Clear EMA state so first train() uses raw coefficients without smoothing.
         # This is correct because training data already includes prior seasons
         # via seed_with_prior_data() - no need for additional cross-season EMA bleed.
         self._prev_coefficients = None
+        # Clear seeded flag for duplicate prevention
+        self._seeded = False
 
     def seed_with_prior_data(
         self,
@@ -304,20 +313,30 @@ class LearnedSituationalModel:
     ) -> None:
         """Seed model with training data from prior completed seasons.
 
-        Called at start of each season with pooled data from all prior years.
+        Called ONCE at start of each season with pooled data from all prior years.
         This provides ~3,000+ training samples even in week 1.
 
-        Safe to call after add_training_game(); prior data is prepended,
-        preserving current-season entries.
+        Calling multiple times without reset() in between will raise an error
+        to prevent duplicate data accumulation.
 
         Args:
             prior_training_data: List of (features_array, residual) tuples
+
+        Raises:
+            RuntimeError: If called multiple times without reset()
         """
+        if self._seeded:
+            raise RuntimeError(
+                "seed_with_prior_data() already called this season. "
+                "Call reset(year) first to clear state before re-seeding."
+            )
+
         # Prepend prior data, preserving any current-season games already added
         prior_X = [t[0] for t in prior_training_data]
         prior_y = [t[1] for t in prior_training_data]
         self._X_train = prior_X + self._X_train
         self._y_train = prior_y + self._y_train
+        self._seeded = True
         logger.debug(
             "LSA seeded with %d prior games (%d total)",
             len(prior_training_data),
