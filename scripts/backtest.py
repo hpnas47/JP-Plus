@@ -603,6 +603,8 @@ def walk_forward_predict(
     efficiency_weight: float = 0.45,
     explosiveness_weight: float = 0.45,
     turnover_weight: float = 0.10,
+    k_int: float = 10.0,
+    k_fumble: float = 30.0,
     garbage_time_weight: float = 0.1,
     asymmetric_garbage: bool = True,
     team_records: Optional[dict[str, dict[int, tuple[int, int]]]] = None,
@@ -761,6 +763,8 @@ def walk_forward_predict(
                 efficiency_weight=efficiency_weight,
                 explosiveness_weight=explosiveness_weight,
                 turnover_weight=turnover_weight,
+                k_int=k_int,
+                k_fumble=k_fumble,
                 garbage_time_weight=garbage_time_weight,
                 asymmetric_garbage=asymmetric_garbage,
                 ooc_credibility_weight=ooc_credibility_weight,
@@ -2185,6 +2189,8 @@ def _process_single_season(
     efficiency_weight: float,
     explosiveness_weight: float,
     turnover_weight: float,
+    k_int: float,  # Bayesian shrinkage for INT (skill-based)
+    k_fumble: float,  # Bayesian shrinkage for fumbles (luck-based)
     garbage_time_weight: float,
     asymmetric_garbage: bool,
     fcs_penalty_elite: float,
@@ -2291,6 +2297,8 @@ def _process_single_season(
         efficiency_weight=efficiency_weight,
         explosiveness_weight=explosiveness_weight,
         turnover_weight=turnover_weight,
+        k_int=k_int,
+        k_fumble=k_fumble,
         garbage_time_weight=garbage_time_weight,
         asymmetric_garbage=asymmetric_garbage,
         team_records=team_records,
@@ -2333,6 +2341,8 @@ def run_backtest(
     efficiency_weight: float = 0.45,
     explosiveness_weight: float = 0.45,
     turnover_weight: float = 0.10,
+    k_int: float = 10.0,  # Bayesian shrinkage for INT (skill-based)
+    k_fumble: float = 30.0,  # Bayesian shrinkage for fumbles (luck-based)
     garbage_time_weight: float = 0.1,
     asymmetric_garbage: bool = True,
     fcs_penalty_elite: float = 18.0,
@@ -2469,6 +2479,8 @@ def run_backtest(
         efficiency_weight=efficiency_weight,
         explosiveness_weight=explosiveness_weight,
         turnover_weight=turnover_weight,
+        k_int=k_int,
+        k_fumble=k_fumble,
         garbage_time_weight=garbage_time_weight,
         asymmetric_garbage=asymmetric_garbage,
         fcs_penalty_elite=fcs_penalty_elite,
@@ -2939,6 +2951,19 @@ def main():
         default=0.10,
         help="Weight for turnover margin component (default: 0.10)",
     )
+    # INT/Fumble separate shrinkage parameters
+    parser.add_argument(
+        "--k-int",
+        type=float,
+        default=10.0,
+        help="Bayesian shrinkage k for interceptions (skill-based, moderate shrinkage). Default: 10.0",
+    )
+    parser.add_argument(
+        "--k-fumble",
+        type=float,
+        default=30.0,
+        help="Bayesian shrinkage k for fumbles (luck-based, strong shrinkage). Default: 30.0",
+    )
     parser.add_argument(
         "--no-asymmetric-garbage",
         action="store_true",
@@ -3152,6 +3177,7 @@ def main():
     print(f"  Transfer portal:    {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
     print(f"  HFA:                team-specific (fallback={args.hfa}, global_offset={args.hfa_offset})")
     print(f"  EFM weights:        SR={args.efficiency_weight}, IsoPPP={args.explosiveness_weight}, TO={args.turnover_weight}")
+    print(f"  TO shrinkage:       k_int={args.k_int}, k_fumble={args.k_fumble} (INT=skill, fumble=luck)")
     print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
     if args.fcs_static:
         print(f"  FCS penalties:      static (elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard})")
@@ -3176,6 +3202,8 @@ def main():
         efficiency_weight=args.efficiency_weight,
         explosiveness_weight=args.explosiveness_weight,
         turnover_weight=args.turnover_weight,
+        k_int=args.k_int,
+        k_fumble=args.k_fumble,
         asymmetric_garbage=not args.no_asymmetric_garbage,
         fcs_penalty_elite=args.fcs_penalty_elite,
         fcs_penalty_standard=args.fcs_penalty_standard,

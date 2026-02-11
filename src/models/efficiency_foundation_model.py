@@ -22,6 +22,8 @@ from scipy import linalg
 from config.settings import get_settings
 from config.play_types import (
     TURNOVER_PLAY_TYPES,
+    INTERCEPTION_PLAY_TYPES,
+    FUMBLE_PLAY_TYPES,
     POINTS_PER_TURNOVER,
     SCRIMMAGE_PLAY_TYPES,
     NON_SCRIMMAGE_PLAY_TYPES,
@@ -358,7 +360,9 @@ class EfficiencyFoundationModel:
         efficiency_weight: float = 0.45,  # Equal SR/IsoPPP weighting (Explosiveness Uplift)
         explosiveness_weight: float = 0.45,  # Equal SR/IsoPPP weighting (Explosiveness Uplift)
         turnover_weight: float = 0.10,  # 10% weight for turnovers (like SP+)
-        turnover_prior_strength: float = 10.0,  # Bayesian shrinkage for turnover margin
+        turnover_prior_strength: float = 10.0,  # DEPRECATED: Use k_int/k_fumble instead
+        k_int: float = 10.0,  # Bayesian shrinkage for interceptions (skill-based, moderate shrinkage)
+        k_fumble: float = 30.0,  # Bayesian shrinkage for fumbles (luck-based, strong shrinkage)
         garbage_time_weight: float = 0.1,  # Weight for garbage time plays (0 to discard)
         rating_std: float = 12.0,  # Target std for ratings (SP+ uses ~12)
         asymmetric_garbage: bool = True,  # Only penalize trailing team in garbage time
@@ -387,9 +391,13 @@ class EfficiencyFoundationModel:
             efficiency_weight: Weight for success rate component (default 0.45)
             explosiveness_weight: Weight for IsoPPP component (default 0.45)
             turnover_weight: Weight for turnover margin component (default 0.10, like SP+)
-            turnover_prior_strength: Bayesian shrinkage for turnover margin (default 10).
-                                    Equivalent to 10 games of 0 margin prior data. Higher = more
-                                    regression toward 0. Prevents overweighting small-sample TO luck.
+            turnover_prior_strength: DEPRECATED - Use k_int/k_fumble for separate shrinkage.
+            k_int: Bayesian shrinkage strength for interceptions (default 10.0).
+                   INTs are more skill-based (QB decisions, defensive scheme) so use moderate shrinkage.
+                   shrink = games / (games + k_int). At k=10, 10-game team keeps 50% of raw value.
+            k_fumble: Bayesian shrinkage strength for fumbles (default 30.0).
+                      Fumbles are more luck-based (ball bounces randomly) so use strong shrinkage.
+                      shrink = games / (games + k_fumble). At k=30, 10-game team keeps only 25% of raw value.
             garbage_time_weight: Weight for garbage time plays (0.1 recommended, 0 to discard)
             rating_std: Target standard deviation for ratings. Set to 12.0 for SP+-like scale
                        where Team A - Team B = expected spread. Higher = more spread between teams.
@@ -425,7 +433,9 @@ class EfficiencyFoundationModel:
         self.rating_std = rating_std
         self.explosiveness_weight = explosiveness_weight
         self.turnover_weight = turnover_weight
-        self.turnover_prior_strength = turnover_prior_strength
+        self.turnover_prior_strength = turnover_prior_strength  # DEPRECATED
+        self.k_int = k_int
+        self.k_fumble = k_fumble
         self.garbage_time_weight = garbage_time_weight
         self.asymmetric_garbage = asymmetric_garbage
         self.leading_garbage_weight = leading_garbage_weight
@@ -454,11 +464,16 @@ class EfficiencyFoundationModel:
         self.off_isoppp: dict[str, float] = {}
         self.def_isoppp: dict[str, float] = {}
 
-        # Turnover stats (P2.6: split into O/D components)
+        # Turnover stats (P2.6: split into O/D components, now with INT/fumble separation)
         self.turnovers_lost: dict[str, float] = {}  # Per-game turnovers lost (ball security)
         self.turnovers_forced: dict[str, float] = {}  # Per-game turnovers forced (takeaways)
         self.turnover_margin: dict[str, float] = {}  # Per-game net margin (for backward compat)
         self.team_games_played: dict[str, int] = {}  # Games played per team (for TO shrinkage)
+        # INT/Fumble split for separate shrinkage (INTs are skill, fumbles are luck)
+        self.ints_thrown: dict[str, float] = {}  # Per-game INTs thrown (offense lost)
+        self.ints_forced: dict[str, float] = {}  # Per-game INTs forced (defense gained)
+        self.fumbles_lost: dict[str, float] = {}  # Per-game fumbles lost (offense lost)
+        self.fumbles_recovered: dict[str, float] = {}  # Per-game fumbles recovered (defense gained)
 
         # Learned implicit HFA from ridge regression (for validation/logging)
         self.learned_hfa_sr: Optional[float] = None  # Implicit HFA in success rate
@@ -1528,10 +1543,11 @@ class EfficiencyFoundationModel:
         plays_df: pd.DataFrame,
         games_df: Optional[pd.DataFrame] = None,
     ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        """Calculate per-game turnover stats for each team (P2.6: split O/D).
+        """Calculate per-game turnover stats for each team (P2.6: split O/D, now INT/fumble).
 
         Returns separate stats for ball security (turnovers lost) and
         takeaways (turnovers forced) to enable O/D-specific turnover ratings.
+        Also calculates INT and fumble breakdown for separate shrinkage.
 
         Args:
             plays_df: Play-by-play data with 'play_type', 'offense', 'defense' columns
@@ -1542,6 +1558,7 @@ class EfficiencyFoundationModel:
             - lost_per_game: Turnovers lost per game (lower = better ball security)
             - forced_per_game: Turnovers forced per game (higher = better takeaways)
             - margin_per_game: Net margin (forced - lost) for backward compat
+            Also populates self.ints_thrown, self.ints_forced, self.fumbles_lost, self.fumbles_recovered
         """
         empty_result = ({}, {}, {})
 
@@ -1549,8 +1566,10 @@ class EfficiencyFoundationModel:
             logger.warning("No play_type column for turnover calculation")
             return empty_result
 
-        # Find turnover plays
+        # Find turnover plays by type
         turnover_plays = plays_df[plays_df["play_type"].isin(TURNOVER_PLAY_TYPES)]
+        int_plays = plays_df[plays_df["play_type"].isin(INTERCEPTION_PLAY_TYPES)]
+        fumble_plays = plays_df[plays_df["play_type"].isin(FUMBLE_PLAY_TYPES)]
 
         if len(turnover_plays) == 0:
             logger.warning("No turnover plays found")
@@ -1558,12 +1577,20 @@ class EfficiencyFoundationModel:
 
         # Count turnovers lost (offense = team that lost the ball)
         turnovers_lost = turnover_plays.groupby("offense").size()
+        ints_thrown_count = int_plays.groupby("offense").size() if len(int_plays) > 0 else pd.Series(dtype=int)
+        fumbles_lost_count = fumble_plays.groupby("offense").size() if len(fumble_plays) > 0 else pd.Series(dtype=int)
 
         # Count turnovers forced (defense = team that forced it)
         turnovers_forced = turnover_plays.groupby("defense").size()
+        ints_forced_count = int_plays.groupby("defense").size() if len(int_plays) > 0 else pd.Series(dtype=int)
+        fumbles_rec_count = fumble_plays.groupby("defense").size() if len(fumble_plays) > 0 else pd.Series(dtype=int)
 
         # Get all teams - DETERMINISM: Sort for consistent iteration order
-        all_teams = sorted(set(turnovers_lost.index) | set(turnovers_forced.index))
+        all_teams = sorted(
+            set(turnovers_lost.index) | set(turnovers_forced.index) |
+            set(ints_thrown_count.index) | set(ints_forced_count.index) |
+            set(fumbles_lost_count.index) | set(fumbles_rec_count.index)
+        )
 
         # Count games per team - MUST have reliable count for shrinkage calculation
         # P2.10: No arbitrary defaults; compute from data or fail loudly
@@ -1608,6 +1635,10 @@ class EfficiencyFoundationModel:
         lost_per_game = {}
         forced_per_game = {}
         margin_per_game = {}
+        ints_thrown_pg = {}
+        ints_forced_pg = {}
+        fumbles_lost_pg = {}
+        fumbles_rec_pg = {}
 
         for team in all_teams:
             lost = turnovers_lost.get(team, 0)
@@ -1618,15 +1649,31 @@ class EfficiencyFoundationModel:
             forced_per_game[team] = forced / games
             margin_per_game[team] = (forced - lost) / games
 
+            # INT/Fumble breakdown
+            ints_thrown_pg[team] = ints_thrown_count.get(team, 0) / games
+            ints_forced_pg[team] = ints_forced_count.get(team, 0) / games
+            fumbles_lost_pg[team] = fumbles_lost_count.get(team, 0) / games
+            fumbles_rec_pg[team] = fumbles_rec_count.get(team, 0) / games
+
         # Store games played for Bayesian shrinkage in calculate_ratings
         self.team_games_played = games_played
+        # Store INT/fumble breakdown for separate shrinkage
+        self.ints_thrown = ints_thrown_pg
+        self.ints_forced = ints_forced_pg
+        self.fumbles_lost = fumbles_lost_pg
+        self.fumbles_recovered = fumbles_rec_pg
 
         # Log summary stats (P3.9: debug level for per-week logging)
         avg_lost = np.mean(list(lost_per_game.values()))
         avg_forced = np.mean(list(forced_per_game.values()))
+        avg_ints_thrown = np.mean(list(ints_thrown_pg.values())) if ints_thrown_pg else 0.0
+        avg_ints_forced = np.mean(list(ints_forced_pg.values())) if ints_forced_pg else 0.0
+        avg_fum_lost = np.mean(list(fumbles_lost_pg.values())) if fumbles_lost_pg else 0.0
+        avg_fum_rec = np.mean(list(fumbles_rec_pg.values())) if fumbles_rec_pg else 0.0
         logger.debug(
             f"Calculated turnover stats for {len(all_teams)} teams: "
-            f"avg lost={avg_lost:.2f}/game, avg forced={avg_forced:.2f}/game"
+            f"avg lost={avg_lost:.2f}/game, avg forced={avg_forced:.2f}/game, "
+            f"INT={avg_ints_thrown:.2f}/{avg_ints_forced:.2f}, FUM={avg_fum_lost:.2f}/{avg_fum_rec:.2f}"
         )
 
         return lost_per_game, forced_per_game, margin_per_game
@@ -1793,6 +1840,11 @@ class EfficiencyFoundationModel:
         # P3.6: np.mean() is order-independent, no need to sort
         avg_lost = np.mean(list(self.turnovers_lost.values())) if self.turnovers_lost else 0.0
         avg_forced = np.mean(list(self.turnovers_forced.values())) if self.turnovers_forced else 0.0
+        # League averages for INT/Fumble split (for separate shrinkage)
+        avg_ints_thrown = np.mean(list(self.ints_thrown.values())) if self.ints_thrown else 0.0
+        avg_ints_forced = np.mean(list(self.ints_forced.values())) if self.ints_forced else 0.0
+        avg_fum_lost = np.mean(list(self.fumbles_lost.values())) if self.fumbles_lost else 0.0
+        avg_fum_rec = np.mean(list(self.fumbles_recovered.values())) if self.fumbles_recovered else 0.0
 
         for team in all_teams:
             # Get adjusted metrics
@@ -1815,8 +1867,8 @@ class EfficiencyFoundationModel:
             explosiveness_rating = off_exp_pts + def_exp_pts
 
             # P2.6: Split turnovers into offensive (ball security) and defensive (takeaways)
-            # Apply Bayesian shrinkage to each component separately
-            # Shrinkage: games / (games + prior_strength). E.g., 15-game team keeps 60% of raw value.
+            # Now with separate shrinkage for INTs (skill) vs fumbles (luck)
+            # Shrinkage: games / (games + k). E.g., 10-game team with k=10 keeps 50% of raw value.
             # P2.10: No arbitrary defaults - must have reliable games count
             if team not in self.team_games_played:
                 # Team has efficiency data but no turnover data - compute games from plays
@@ -1835,19 +1887,28 @@ class EfficiencyFoundationModel:
                     )
             else:
                 games = self.team_games_played[team]
-            shrinkage = games / (games + self.turnover_prior_strength)
 
-            # Offensive turnover: ball security (fewer lost = better)
-            # Relative to average: (avg_lost - team_lost) * shrinkage * points_per_to
-            # Positive when team loses fewer than average
-            raw_lost = self.turnovers_lost.get(team, avg_lost)
-            off_to_pts = (avg_lost - raw_lost) * shrinkage * POINTS_PER_TURNOVER
+            # Separate shrinkage for INT (skill-based) and fumbles (luck-based)
+            shrink_int = games / (games + self.k_int)
+            shrink_fum = games / (games + self.k_fumble)
 
-            # Defensive turnover: takeaways (more forced = better)
-            # Relative to average: (team_forced - avg_forced) * shrinkage * points_per_to
-            # Positive when team forces more than average
-            raw_forced = self.turnovers_forced.get(team, avg_forced)
-            def_to_pts = (raw_forced - avg_forced) * shrinkage * POINTS_PER_TURNOVER
+            # ---- OFFENSIVE TURNOVERS: Ball security (fewer lost = better) ----
+            # INT thrown: skill (moderate shrinkage)
+            raw_ints_thrown = self.ints_thrown.get(team, avg_ints_thrown)
+            int_off_pts = (avg_ints_thrown - raw_ints_thrown) * shrink_int * POINTS_PER_TURNOVER
+            # Fumbles lost: luck (strong shrinkage)
+            raw_fum_lost = self.fumbles_lost.get(team, avg_fum_lost)
+            fum_off_pts = (avg_fum_lost - raw_fum_lost) * shrink_fum * POINTS_PER_TURNOVER
+            off_to_pts = int_off_pts + fum_off_pts
+
+            # ---- DEFENSIVE TURNOVERS: Takeaways (more forced = better) ----
+            # INT forced: skill (moderate shrinkage)
+            raw_ints_forced = self.ints_forced.get(team, avg_ints_forced)
+            int_def_pts = (raw_ints_forced - avg_ints_forced) * shrink_int * POINTS_PER_TURNOVER
+            # Fumbles recovered: luck (strong shrinkage)
+            raw_fum_rec = self.fumbles_recovered.get(team, avg_fum_rec)
+            fum_def_pts = (raw_fum_rec - avg_fum_rec) * shrink_fum * POINTS_PER_TURNOVER
+            def_to_pts = int_def_pts + fum_def_pts
 
             # Combined turnover rating for backward compat (should equal off_to + def_to)
             turnover_rating = off_to_pts + def_to_pts

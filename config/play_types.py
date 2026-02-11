@@ -68,6 +68,20 @@ TURNOVER_PLAY_TYPES = frozenset({
     "Pass Interception Return",
 })
 
+# INT/Fumble split for separate shrinkage (INTs are skill, fumbles are luck)
+# Used by EFM to apply different Bayesian shrinkage strengths
+INTERCEPTION_PLAY_TYPES = frozenset({
+    "Interception",
+    "Interception Return",
+    "Interception Return Touchdown",
+    "Pass Interception Return",
+})
+
+FUMBLE_PLAY_TYPES = frozenset({
+    "Fumble Recovery (Opponent)",
+    "Fumble Return Touchdown",
+})
+
 # Points value per turnover (empirical, used for margin scrubbing and ratings)
 POINTS_PER_TURNOVER = 4.5
 
@@ -92,6 +106,17 @@ def validate_play_types():
     turnover_not_in_scrimmage = TURNOVER_PLAY_TYPES - SCRIMMAGE_PLAY_TYPES
     assert not turnover_not_in_scrimmage, (
         f"Turnover types not in scrimmage plays: {turnover_not_in_scrimmage}"
+    )
+
+    # Ensure INT + fumble = all turnovers (complete, non-overlapping)
+    int_fumble_union = INTERCEPTION_PLAY_TYPES | FUMBLE_PLAY_TYPES
+    assert int_fumble_union == TURNOVER_PLAY_TYPES, (
+        f"INT + Fumble types don't match TURNOVER_PLAY_TYPES: "
+        f"union={int_fumble_union}, expected={TURNOVER_PLAY_TYPES}"
+    )
+    int_fumble_overlap = INTERCEPTION_PLAY_TYPES & FUMBLE_PLAY_TYPES
+    assert not int_fumble_overlap, (
+        f"Overlap between INT and fumble types: {int_fumble_overlap}"
     )
 
     # Ensure no overlap between scrimmage and non-scrimmage
