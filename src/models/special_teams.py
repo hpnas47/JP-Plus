@@ -183,6 +183,127 @@ class SpecialTeamsModel:
         self.team_ratings[team] = rating
         return rating
 
+    def calculate_all_from_game_stats(
+        self,
+        teams: set[str],
+        games_df: pd.DataFrame,
+    ) -> dict[str, SpecialTeamsRating]:
+        """Calculate special teams ratings for all teams in a single pass.
+
+        Batch version of calculate_from_game_stats() that uses groupby instead of
+        per-team DataFrame filtering. ~130x faster for FBS (130 teams).
+
+        Args:
+            teams: Set of team names to calculate ratings for
+            games_df: DataFrame with game-level stats
+
+        Returns:
+            Dict mapping team name to SpecialTeamsRating
+        """
+        logger.debug(f"ST batch: calculating ratings for {len(teams)} teams from game stats")
+
+        # Initialize accumulators for each team
+        team_stats = {team: {
+            'fg_made': 0, 'fg_attempts': 0,
+            'punt_yards': 0, 'punt_count': 0,
+            'n_games': 0
+        } for team in teams}
+
+        # Check which columns are available
+        has_fg = 'home_fg_made' in games_df.columns and 'away_fg_made' in games_df.columns
+        has_punt = 'home_punt_yards' in games_df.columns and 'away_punt_yards' in games_df.columns
+
+        # Single pass: aggregate home game stats by home_team
+        if has_fg or has_punt:
+            home_agg = {}
+            if has_fg:
+                home_agg['home_fg_made'] = 'sum'
+                home_agg['home_fg_attempts'] = 'sum'
+            if has_punt:
+                home_agg['home_punt_yards'] = 'sum'
+                home_agg['home_punts'] = 'sum'
+
+            home_grouped = games_df.groupby('home_team').agg(home_agg).fillna(0)
+
+            for team in teams:
+                if team in home_grouped.index:
+                    row = home_grouped.loc[team]
+                    if has_fg:
+                        team_stats[team]['fg_made'] += row.get('home_fg_made', 0)
+                        team_stats[team]['fg_attempts'] += row.get('home_fg_attempts', 0)
+                    if has_punt:
+                        team_stats[team]['punt_yards'] += row.get('home_punt_yards', 0)
+                        team_stats[team]['punt_count'] += row.get('home_punts', 0)
+
+        # Single pass: aggregate away game stats by away_team
+        if has_fg or has_punt:
+            away_agg = {}
+            if has_fg:
+                away_agg['away_fg_made'] = 'sum'
+                away_agg['away_fg_attempts'] = 'sum'
+            if has_punt:
+                away_agg['away_punt_yards'] = 'sum'
+                away_agg['away_punts'] = 'sum'
+
+            away_grouped = games_df.groupby('away_team').agg(away_agg).fillna(0)
+
+            for team in teams:
+                if team in away_grouped.index:
+                    row = away_grouped.loc[team]
+                    if has_fg:
+                        team_stats[team]['fg_made'] += row.get('away_fg_made', 0)
+                        team_stats[team]['fg_attempts'] += row.get('away_fg_attempts', 0)
+                    if has_punt:
+                        team_stats[team]['punt_yards'] += row.get('away_punt_yards', 0)
+                        team_stats[team]['punt_count'] += row.get('away_punts', 0)
+
+        # Count games per team (single pass each)
+        home_counts = games_df.groupby('home_team').size()
+        away_counts = games_df.groupby('away_team').size()
+        for team in teams:
+            team_stats[team]['n_games'] = (
+                home_counts.get(team, 0) + away_counts.get(team, 0)
+            )
+
+        # Calculate ratings for all teams
+        results = {}
+        for team in teams:
+            stats = team_stats[team]
+            n_games = stats['n_games']
+
+            # FG rating (same logic as calculate_from_game_stats)
+            fg_rating = 0.0
+            if stats['fg_attempts'] > 0:
+                actual_rate = stats['fg_made'] / stats['fg_attempts']
+                expected_rate = 0.78
+                total_paae = (actual_rate - expected_rate) * stats['fg_attempts'] * 3.0
+                fg_rating = total_paae / max(1, n_games)
+
+            # Punt rating (same logic as calculate_from_game_stats)
+            punt_rating = 0.0
+            if stats['punt_count'] > 0:
+                avg_gross = stats['punt_yards'] / stats['punt_count']
+                expected_gross = 42.0
+                yards_diff = avg_gross - expected_gross
+                punt_rating_per_punt = yards_diff * self.YARDS_TO_POINTS
+                punt_rating = punt_rating_per_punt * (stats['punt_count'] / max(1, n_games))
+
+            # Kickoff defaults to 0 without detailed data
+            kick_rating = 0.0
+            overall = fg_rating + punt_rating + kick_rating
+
+            rating = SpecialTeamsRating(
+                team=team,
+                field_goal_rating=fg_rating,
+                punt_rating=punt_rating,
+                kickoff_rating=kick_rating,
+                overall_rating=overall,
+            )
+            self.team_ratings[team] = rating
+            results[team] = rating
+
+        return results
+
     def get_rating(self, team: str) -> Optional[SpecialTeamsRating]:
         """Get special teams rating for a team.
 

@@ -309,6 +309,119 @@ class FinishingDrivesModel:
             games_played=games_played,
         )
 
+    def calculate_all_from_game_stats(
+        self,
+        teams: set[str],
+        games_df: pd.DataFrame,
+    ) -> dict[str, FinishingDrivesRating]:
+        """Calculate finishing drives ratings for all teams in a single pass.
+
+        Batch version of calculate_from_game_stats() that uses groupby instead of
+        per-team DataFrame filtering. ~130x faster for FBS (130 teams).
+
+        Args:
+            teams: Set of team names to calculate ratings for
+            games_df: DataFrame with game-level stats
+
+        Returns:
+            Dict mapping team name to FinishingDrivesRating
+        """
+        logger.debug(f"FD batch: calculating ratings for {len(teams)} teams from game stats")
+
+        # Check which columns are available
+        has_rz = 'home_rz_attempts' in games_df.columns and 'away_rz_attempts' in games_df.columns
+
+        # Initialize accumulators for each team
+        team_stats = {team: {
+            'rz_attempts': 0, 'rz_tds': 0,
+            'total_points': 0, 'n_games': 0
+        } for team in teams}
+
+        # Single pass: aggregate home game stats by home_team
+        home_agg = {'home_points': 'sum'}
+        if has_rz:
+            home_agg['home_rz_attempts'] = 'sum'
+            home_agg['home_rz_tds'] = 'sum'
+
+        home_grouped = games_df.groupby('home_team').agg(home_agg).fillna(0)
+
+        for team in teams:
+            if team in home_grouped.index:
+                row = home_grouped.loc[team]
+                team_stats[team]['total_points'] += row.get('home_points', 0)
+                if has_rz:
+                    team_stats[team]['rz_attempts'] += row.get('home_rz_attempts', 0)
+                    team_stats[team]['rz_tds'] += row.get('home_rz_tds', 0)
+
+        # Single pass: aggregate away game stats by away_team
+        away_agg = {'away_points': 'sum'}
+        if has_rz:
+            away_agg['away_rz_attempts'] = 'sum'
+            away_agg['away_rz_tds'] = 'sum'
+
+        away_grouped = games_df.groupby('away_team').agg(away_agg).fillna(0)
+
+        for team in teams:
+            if team in away_grouped.index:
+                row = away_grouped.loc[team]
+                team_stats[team]['total_points'] += row.get('away_points', 0)
+                if has_rz:
+                    team_stats[team]['rz_attempts'] += row.get('away_rz_attempts', 0)
+                    team_stats[team]['rz_tds'] += row.get('away_rz_tds', 0)
+
+        # Count games per team (single pass each)
+        home_counts = games_df.groupby('home_team').size()
+        away_counts = games_df.groupby('away_team').size()
+        for team in teams:
+            team_stats[team]['n_games'] = (
+                home_counts.get(team, 0) + away_counts.get(team, 0)
+            )
+
+        # Calculate ratings for all teams
+        results = {}
+        for team in teams:
+            stats = team_stats[team]
+            games_played = stats['n_games']
+
+            if stats['rz_attempts'] == 0:
+                # Use scoring as proxy (same logic as calculate_from_game_stats)
+                if games_played == 0:
+                    rating = self.calculate_team_rating(team, 0, 0, 0, 0, games_played=0)
+                else:
+                    avg_points = stats['total_points'] / games_played
+                    estimated_rz_trips = avg_points / self.EXPECTED_POINTS_PER_TRIP
+                    estimated_tds = int(estimated_rz_trips * self.EXPECTED_RZ_TD_RATE)
+                    estimated_fgs = int(estimated_rz_trips * 0.25)
+
+                    rating = self.calculate_team_rating(
+                        team=team,
+                        rz_touchdowns=estimated_tds * games_played,
+                        rz_field_goals=estimated_fgs * games_played,
+                        rz_turnovers=int(estimated_rz_trips * 0.08 * games_played),
+                        rz_failed=int(estimated_rz_trips * 0.07 * games_played),
+                        games_played=games_played,
+                    )
+            else:
+                # Calculate from actual RZ data
+                rz_tds = int(stats['rz_tds'])
+                rz_attempts = int(stats['rz_attempts'])
+                rz_fgs = int(rz_attempts * 0.25)
+                rz_turnovers = int(rz_attempts * 0.08)
+                rz_failed = rz_attempts - rz_tds - rz_fgs - rz_turnovers
+
+                rating = self.calculate_team_rating(
+                    team=team,
+                    rz_touchdowns=rz_tds,
+                    rz_field_goals=max(0, rz_fgs),
+                    rz_turnovers=max(0, rz_turnovers),
+                    rz_failed=max(0, rz_failed),
+                    games_played=games_played,
+                )
+
+            results[team] = rating
+
+        return results
+
     def get_rating(self, team: str) -> Optional[FinishingDrivesRating]:
         """Get finishing drives rating for a team.
 

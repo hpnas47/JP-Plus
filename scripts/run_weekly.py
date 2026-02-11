@@ -707,21 +707,16 @@ def run_predictions(
         hfa.calculate_all_team_hfa(combined_for_hfa, team_ratings)
 
         # Special teams (simplified without detailed data)
-        # TODO: Refactor SpecialTeamsModel/FinishingDrivesModel to accept all teams
-        # at once and do a single grouped pass over current_games_df instead of
-        # N full scans. For 130+ FBS teams this is ~130x redundant DataFrame iteration.
-        # Note: Batch methods exist for play-by-play data (calculate_all_st_ratings_from_plays,
-        # calculate_all_from_plays) but not for game stats.
+        # Uses batch method for single-pass groupby instead of per-team filtering
         logger.info("Calculating special teams ratings...")
         special_teams = SpecialTeamsModel()
-        for team in team_ratings.keys():
-            special_teams.calculate_from_game_stats(team, current_games_df)
+        special_teams.calculate_all_from_game_stats(set(team_ratings.keys()), current_games_df)
 
         # Finishing drives (simplified)
+        # Uses batch method for single-pass groupby instead of per-team filtering
         logger.info("Calculating finishing drives ratings...")
         finishing = FinishingDrivesModel()
-        for team in team_ratings.keys():
-            finishing.calculate_from_game_stats(team, current_games_df)
+        finishing.calculate_all_from_game_stats(set(team_ratings.keys()), current_games_df)
 
         # Initialize adjusters
         situational = SituationalAdjuster()
