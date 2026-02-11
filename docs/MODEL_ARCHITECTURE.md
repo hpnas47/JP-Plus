@@ -306,7 +306,7 @@ The ridge regression training data **excludes plays involving FCS opponents**. W
 **Why this matters:**
 - FCS teams have too few games against FBS opponents to estimate reliable coefficients
 - Including FCS plays pollutes the regression with unreliable team strength estimates
-- FCS opponents are handled separately via the dynamic FCS Strength Estimator (10-40 pts based on prior game margins)
+- FCS opponents are handled separately via the dynamic FCS Strength Estimator (10-45 pts based on prior game margins)
 
 This is implemented in `backtest.py` by filtering plays where both offense and defense are in the FBS teams set before passing to the EFM.
 
@@ -357,7 +357,7 @@ EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments.
 | | Lookahead Spot | -1.5 pts | Rival or top-10 opponent next week |
 | | Sandwich Spot | -1.0 pts extra | BOTH letdown AND lookahead (compounding) |
 | | Rivalry Boost | +1.0 pts | Underdog in rivalry game only |
-| **Opponent/Pace** | FCS Penalty | 10-40 pts | Dynamic: Bayesian shrinkage from prior FBS-FCS margins |
+| **Opponent/Pace** | FCS Penalty | 10-45 pts | Dynamic: Bayesian shrinkage from prior FBS-FCS margins |
 | | Special Teams | ±2.5 pts max | ST differential capped to prevent outlier-driven spreads |
 | | Pace (Triple-Option) | -10% to -15% | Spread compression for low-play-count games |
 | **Manual** | QB Injury | ±3-10 pts | Flag when starting QB is out |
@@ -505,25 +505,26 @@ JP+ uses a **walk-forward-safe FCS strength estimator** that calculates per-team
 ```
 shrink_factor = n_games / (n_games + k)
 shrunk_margin = baseline + (raw_margin - baseline) * shrink_factor
-penalty = clamp(intercept + slope * shrunk_margin, min_pen, max_pen)
+avg_loss = abs(shrunk_margin)  # Convert to positive loss amount
+penalty = clamp(intercept + slope * avg_loss, min_pen, max_pen)
 ```
 
-**Default Parameters (optimized via sweep):**
+**Default Parameters (calibrated to match historical static baseline):**
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | k | 8.0 | Games for 50% trust in data |
 | baseline | -28.0 | Prior margin (FCS - FBS, negative = FCS loses) |
-| intercept | 20.0 | Penalty when margin = 0 |
-| slope | -0.5 | Penalty change per margin point |
+| intercept | 10.0 | Base penalty for elite FCS (avg_loss ≈ 0) |
+| slope | 0.8 | Penalty increase per point of avg loss |
 | min_pen | 10.0 | Floor for elite FCS |
-| max_pen | 40.0 | Ceiling for weak FCS |
+| max_pen | 45.0 | Ceiling for weak FCS |
 
 **Example Penalties:**
 | Avg Loss to FBS | Games Observed | FBS Spread Bonus | Example Teams |
 |-----------------|----------------|------------------|---------------|
-| 10 pts | 8+ | +25 pts | Strong FCS (NDSU, Montana State) |
-| 28 pts | Any | +34 pts | Average FCS (baseline) |
-| 40+ pts | Any | +40 pts | Weak FCS (capped) |
+| ~10 pts | 8+ | +18 pts | Elite FCS (NDSU, Montana State) |
+| ~28 pts | Any | +32 pts | Average FCS (baseline) |
+| 40+ pts | Any | +45 pts | Weak FCS (capped) |
 
 **Walk-Forward Safety:** Estimator only uses games from weeks < current prediction week. No data leakage.
 
@@ -942,7 +943,7 @@ python scripts/backtest.py --use-efm
 python scripts/backtest.py --use-efm --sweep
 
 # Custom parameters
-python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-k 8 --fcs-intercept 20
+python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-k 8 --fcs-intercept 10
 ```
 
 ### CLI Options
@@ -956,7 +957,9 @@ python scripts/backtest.py --years 2024 2025 --use-efm --alpha 50 --fcs-k 8 --fc
 | `--hfa` | 2.5 | Base home field advantage in points |
 | `--fcs-static` | False | Use static FCS elite list instead of dynamic estimator |
 | `--fcs-k` | 8.0 | FCS shrinkage k (games for 50% trust in data) |
-| `--fcs-intercept` | 20.0 | FCS penalty when margin = 0 (optimized via sweep) |
+| `--fcs-intercept` | 10.0 | Base FCS penalty for elite FCS (calibrated to historical baseline) |
+| `--fcs-slope` | 0.8 | FCS penalty increase per point of avg loss |
+| `--fcs-max-pen` | 45.0 | Maximum FCS penalty (capped for weak FCS) |
 | `--fcs-penalty-elite` | 18.0 | Points for elite FCS (only used with --fcs-static) |
 | `--fcs-penalty-standard` | 32.0 | Points for standard FCS (only used with --fcs-static) |
 | `--no-asymmetric-garbage` | False | Disable asymmetric garbage time (enabled by default) |
