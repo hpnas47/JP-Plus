@@ -4,6 +4,66 @@
 
 ---
 
+## Session: February 10, 2026 (Evening)
+
+### Theme: Learned Situational Adjustment (LSA) Implementation
+
+---
+
+#### Learned Situational Model — APPROVED (High-Confidence Filter)
+**Status**: Committed
+**Files**: `src/models/learned_situational.py` (new), `scripts/backtest.py`, `scripts/diagnose_lsa_features.py` (new)
+
+Implemented walk-forward ridge regression on situational residuals to replace fixed constants (bye_week_advantage=1.5, letdown_penalty=-2.0, etc.) with learned coefficients.
+
+**Architecture**:
+- 16 situational features learned from residuals (rest, bye, letdown, lookahead, sandwich, rivalry, consecutive road, game shape)
+- Multi-year pooling: ~3,000+ training samples by week 4 (pools 2022-2024 for 2025 predictions)
+- Walk-forward safe: Only trains on games before prediction week
+- EMA smoothing (beta=0.3) for coefficient stability
+
+**Alpha × Clamp Grid Sweep Results**:
+| Alpha | 3+ Edge | 5+ Edge |
+|-------|---------|---------|
+| Fixed baseline | **53.1%** | 53.7% |
+| 300 (optimal) | 52.3% | **54.9%** |
+| 500 | 52.4% | 54.9% |
+
+**Key Finding**: LSA serves as a **high-confidence filter**. It improves Top Tier (5+) performance by +1.2% while slightly reducing volume/accuracy in the lower-confidence (3+) tier. The trade-off is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge.
+
+**Defaults Set**: `alpha=300.0`, `clamp_max=4.0` (safety net)
+**CLI**: `--learned-situ` to enable (default OFF for production)
+
+---
+
+#### Rivalry Underdog Boost — DOMAIN FINDING
+**Status**: Documented (no code change yet)
+
+Forensics analysis of 108 rivalry underdog home games revealed a **handicapping fallacy**:
+
+| Metric | Value |
+|--------|-------|
+| Fixed rivalry boost applied | +1.0 pts |
+| Actual residual after boost | **-3.52 pts** |
+| LSA learned coefficient | **-3.21 pts** |
+
+**Finding**: Favorites in rivalry games tend to **WIN BIG**, not smaller. Examples:
+- Oklahoma -49 actual vs Texas when predicted -8 (residual -41)
+- Arizona -42 vs ASU when predicted -2 (residual -40)
+
+The traditional "underdogs play harder in rivalry games" is not supported by data. LSA correctly learns a negative coefficient to offset the wrong fixed boost.
+
+---
+
+#### Coefficient Clamping — IMPLEMENTED
+**Status**: Committed
+
+Added `--lsa-clamp-max` CLI parameter to enforce hard bounds on coefficients after Ridge regression.
+
+**Finding**: Clamping only matters at low alpha values. With alpha ≥ 100, Ridge regularization already keeps coefficients small enough that clamping has no additional effect.
+
+---
+
 ## Session: February 11, 2026
 
 ### Theme: FCS Vectorization + HFA Neutralization

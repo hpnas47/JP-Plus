@@ -43,6 +43,11 @@ from src.adjustments.altitude import AltitudeAdjuster
 # Infrastructure preserved in src/models/finishing_drives.py for future reactivation
 from src.models.special_teams import SpecialTeamsModel
 from src.models.fcs_strength import FCSStrengthEstimator
+from src.models.learned_situational import (
+    LearnedSituationalModel,
+    SituationalFeatures,
+    compute_situational_residual,
+)
 from src.predictions.spread_generator import SpreadGenerator
 import numpy as np
 import pandas as pd
@@ -613,7 +618,9 @@ def walk_forward_predict(
     st_early_weight: float = 1.0,
     fcs_estimator: Optional[FCSStrengthEstimator] = None,
     fcs_static: bool = False,
-) -> list[dict]:
+    # Learned Situational Adjustment (LSA) parameters
+    lsa_model: Optional[LearnedSituationalModel] = None,
+) -> tuple[list[dict], list[tuple[np.ndarray, float]]]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
     For each week from start_week onward:
@@ -647,11 +654,16 @@ def walk_forward_predict(
         hfa_global_offset: Points subtracted from ALL HFA values (for sweep testing). Default 0.0.
         fcs_estimator: Dynamic FCS strength estimator (if provided and fcs_static=False, used for penalties)
         fcs_static: If True, use static elite list instead of dynamic estimator. Default False.
+        lsa_model: Learned Situational Model for ridge regression on situational residuals.
+            If provided and trained, replaces fixed situational constants.
 
     Returns:
-        List of prediction result dictionaries
+        Tuple of (prediction_results, lsa_training_data):
+            - prediction_results: List of prediction result dictionaries
+            - lsa_training_data: List of (features_array, residual) tuples for LSA training
     """
     results = []
+    lsa_training_data = []  # Collect (features_array, residual) tuples for LSA
     max_week = games_df["week"].max()
 
     # Apply end_week limit if specified
@@ -672,6 +684,9 @@ def walk_forward_predict(
     travel_adjuster = TravelAdjuster()
     altitude_adjuster = AltitudeAdjuster()
     situational_adjuster = SituationalAdjuster()
+
+    # LSA: If model provided, train after each week's games
+    use_learned_situ = lsa_model is not None
 
     for pred_week in range(start_week, max_week + 1):
         # Training data: all plays from games before this week
@@ -865,8 +880,13 @@ def walk_forward_predict(
         # Predict this week's games (Polars iteration is faster)
         week_games = games_df.filter(pl.col("week") == pred_week)
 
+        # LSA: Train model before predictions for this week if we have enough data
+        if use_learned_situ:
+            lsa_model.train(max_week=pred_week - 1)
+
         for game in week_games.iter_rows(named=True):
             try:
+                # Standard prediction (uses fixed situational constants)
                 pred = spread_gen.predict_spread(
                     home_team=game["home_team"],
                     away_team=game["away_team"],
@@ -879,6 +899,45 @@ def walk_forward_predict(
                 )
 
                 actual_margin = game["home_points"] - game["away_points"]
+                final_spread = pred.spread
+
+                # LSA: Collect training data and optionally apply learned adjustment
+                if use_learned_situ:
+                    # Determine favorite for rivalry boost
+                    prelim_spread = team_ratings.get(game["home_team"], 0.0) - team_ratings.get(game["away_team"], 0.0)
+                    home_is_favorite = prelim_spread > 0
+
+                    # Get situational factors (same as SpreadGenerator does internally)
+                    home_factors, away_factors = situational_adjuster.get_matchup_factors(
+                        home_team=game["home_team"],
+                        away_team=game["away_team"],
+                        current_week=pred_week,
+                        schedule_df=games_df_pd,
+                        rankings=rankings,
+                        home_is_favorite=home_is_favorite,
+                        historical_rankings=historical_rankings,
+                        game_date=game.get("start_date"),
+                    )
+
+                    # Convert to feature vector
+                    features = SituationalFeatures.from_situational_factors(home_factors, away_factors)
+
+                    # Compute residual for training
+                    residual = compute_situational_residual(
+                        actual_margin=actual_margin,
+                        predicted_spread=pred.spread,
+                        fixed_situational=pred.components.situational,
+                    )
+
+                    # Add to training data
+                    lsa_training_data.append((features.to_array(), residual))
+                    lsa_model.add_training_game(features, residual)
+
+                    # If model is trained, apply learned adjustment instead of fixed
+                    if lsa_model.is_trained():
+                        learned_situ = lsa_model.predict(features)
+                        # Replace fixed situational with learned
+                        final_spread = pred.spread - pred.components.situational + learned_situ
 
                 results.append({
                     "game_id": game["id"],  # For reliable Vegas line matching
@@ -886,10 +945,10 @@ def walk_forward_predict(
                     "week": pred_week,
                     "home_team": game["home_team"],
                     "away_team": game["away_team"],
-                    "predicted_spread": pred.spread,
+                    "predicted_spread": final_spread,
                     "actual_margin": actual_margin,
-                    "error": pred.spread - actual_margin,
-                    "abs_error": abs(pred.spread - actual_margin),
+                    "error": final_spread - actual_margin,
+                    "abs_error": abs(final_spread - actual_margin),
                     # P2.11: Track correlated adjustment stack (HFA + travel + altitude)
                     "correlated_stack": pred.components.correlated_stack,
                     "hfa": pred.components.home_field,
@@ -902,7 +961,7 @@ def walk_forward_predict(
             except Exception as e:
                 logger.debug(f"Error predicting {game['away_team']} @ {game['home_team']}: {e}")
 
-    return results
+    return results, lsa_training_data
 
 
 def calculate_ats_results(
@@ -2147,6 +2206,13 @@ def _process_single_season(
     fcs_slope: float = 0.8,
     fcs_intercept: float = 10.0,
     fcs_hfa: float = 0.0,
+    # Learned Situational Adjustment (LSA) parameters
+    use_learned_situ: bool = False,
+    lsa_alpha: float = 300.0,
+    lsa_min_games: int = 150,
+    lsa_ema: float = 0.3,
+    lsa_clamp_max: Optional[float] = 4.0,
+    lsa_prior_data: Optional[list] = None,  # Prior years' training data
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2193,8 +2259,26 @@ def _process_single_season(
             intercept=fcs_intercept,
         )
 
+    # Create LSA model if enabled
+    lsa_model = None
+    if use_learned_situ:
+        from pathlib import Path
+        persist_dir = Path(__file__).parent.parent / "data" / "learned_situ_coefficients"
+        lsa_model = LearnedSituationalModel(
+            ridge_alpha=lsa_alpha,
+            min_games=lsa_min_games,
+            ema_beta=lsa_ema,
+            clamp_max=lsa_clamp_max,
+            persist_dir=persist_dir,
+        )
+        lsa_model.reset(year)
+        # Seed with prior years' training data
+        if lsa_prior_data:
+            lsa_model.seed_with_prior_data(lsa_prior_data)
+            logger.debug(f"LSA seeded with {len(lsa_prior_data)} prior games for {year}")
+
     # Walk-forward predictions
-    predictions = walk_forward_predict(
+    predictions, lsa_training_data = walk_forward_predict(
         games_df,
         efficiency_plays_df,
         fbs_teams,
@@ -2222,6 +2306,7 @@ def _process_single_season(
         st_early_weight=st_early_weight,
         fcs_estimator=fcs_estimator,
         fcs_static=fcs_static,
+        lsa_model=lsa_model,
     )
 
     # Calculate ATS
@@ -2233,7 +2318,7 @@ def _process_single_season(
     year_df = pd.DataFrame(predictions)
     year_mae = year_df["abs_error"].mean() if not year_df.empty else None
 
-    return year, predictions, ats_results, year_mae
+    return year, predictions, ats_results, year_mae, lsa_training_data
 
 
 def run_backtest(
@@ -2274,6 +2359,12 @@ def run_backtest(
     fcs_slope: float = 0.8,
     fcs_intercept: float = 10.0,
     fcs_hfa: float = 0.0,
+    # Learned Situational Adjustment (LSA) parameters
+    use_learned_situ: bool = False,
+    lsa_alpha: float = 300.0,
+    lsa_min_games: int = 150,
+    lsa_ema: float = 0.3,
+    lsa_clamp_max: Optional[float] = 4.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2310,6 +2401,10 @@ def run_backtest(
         fcs_max_pen: Maximum penalty for weak FCS. Default 45.0.
         fcs_slope: Penalty increase per point of avg loss. Default 0.8.
         fcs_intercept: Base penalty (elite FCS with 0 avg loss). Default 10.0.
+        use_learned_situ: Enable learned situational adjustment via ridge regression. Default False.
+        lsa_alpha: LSA ridge regularization strength. Default 10.0.
+        lsa_min_games: Minimum games before LSA is used. Default 150.
+        lsa_ema: LSA coefficient smoothing factor. Default 0.3.
 
     Returns:
         Dictionary with backtest results
@@ -2396,9 +2491,36 @@ def run_backtest(
         fcs_slope=fcs_slope,
         fcs_intercept=fcs_intercept,
         fcs_hfa=fcs_hfa,
+        # LSA params
+        use_learned_situ=use_learned_situ,
+        lsa_alpha=lsa_alpha,
+        lsa_min_games=lsa_min_games,
+        lsa_ema=lsa_ema,
+        lsa_clamp_max=lsa_clamp_max,
     )
 
-    if len(years) > 1:
+    # LSA requires sequential processing: prior years' data feeds later years
+    if use_learned_situ:
+        logger.info(f"LSA enabled: processing {len(years)} seasons sequentially for multi-year pooling")
+        lsa_prior_data = []  # Accumulate training data across years
+
+        for year in sorted(years):
+            logger.debug(f"Backtesting {year} season (LSA prior data: {len(lsa_prior_data)} games)...")
+            year_val, predictions, ats_results, year_mae, year_lsa_data = _process_single_season(
+                year=year,
+                season_data=season_data[year],
+                lsa_prior_data=lsa_prior_data,  # Pass accumulated data
+                **season_kwargs,
+            )
+            all_predictions.extend(predictions)
+            if ats_results is not None:
+                all_ats.append(ats_results)
+            if year_mae is not None:
+                logger.debug(f"{year_val} MAE: {year_mae:.2f}")
+            # Accumulate this year's training data for next year
+            lsa_prior_data.extend(year_lsa_data)
+
+    elif len(years) > 1:
         # Parallel execution: each season runs in its own process
         n_workers = min(len(years), os.cpu_count() or 4)
         logger.info(f"Running {len(years)} seasons in parallel ({n_workers} workers)")
@@ -2416,7 +2538,7 @@ def run_backtest(
 
             for future in futures:
                 try:
-                    year_val, predictions, ats_results, year_mae = future.result()
+                    year_val, predictions, ats_results, year_mae, _ = future.result()
                     all_predictions.extend(predictions)
                     if ats_results is not None:
                         all_ats.append(ats_results)
@@ -2430,7 +2552,7 @@ def run_backtest(
         # Single year: sequential execution (no multiprocessing overhead)
         for year in years:
             logger.debug(f"Backtesting {year} season...")
-            year_val, predictions, ats_results, year_mae = _process_single_season(
+            year_val, predictions, ats_results, year_mae, _ = _process_single_season(
                 year=year,
                 season_data=season_data[year],
                 **season_kwargs,
@@ -2955,6 +3077,36 @@ def main():
         action="store_true",
         help="Force refresh all data from API (bypasses cache completely)",
     )
+    # Learned Situational Adjustment (LSA) parameters
+    parser.add_argument(
+        "--learned-situ",
+        action="store_true",
+        help="Use learned situational via ridge regression (experimental, default OFF = fixed baseline)",
+    )
+    parser.add_argument(
+        "--lsa-alpha",
+        type=float,
+        default=300.0,
+        help="LSA ridge alpha for regularization. Default: 300.0",
+    )
+    parser.add_argument(
+        "--lsa-min-games",
+        type=int,
+        default=150,
+        help="LSA minimum training games before switching from fixed. Default: 150",
+    )
+    parser.add_argument(
+        "--lsa-ema",
+        type=float,
+        default=0.3,
+        help="LSA EMA smoothing beta (0.3 = 30%% new, 70%% prior). Default: 0.3",
+    )
+    parser.add_argument(
+        "--lsa-clamp-max",
+        type=float,
+        default=4.0,
+        help="LSA coefficient clamp magnitude (e.g., 3.0 clamps to [-3, +3]). Default: 4.0",
+    )
 
     args = parser.parse_args()
 
@@ -3009,6 +3161,8 @@ def main():
     print(f"  ST shrinkage:       {st_shrink_status}")
     st_cap_status = f"±{args.st_spread_cap} pts" if args.st_spread_cap and args.st_spread_cap > 0 else "disabled"
     print(f"  ST spread cap:      {st_cap_status}")
+    lsa_status = f"enabled (alpha={args.lsa_alpha}, min_games={args.lsa_min_games}, ema={args.lsa_ema})" if args.learned_situ else "disabled (fixed baseline)"
+    print(f"  Learned situational: {lsa_status}")
     print("=" * 60 + "\n")
 
     results = run_backtest(
@@ -3046,6 +3200,12 @@ def main():
         fcs_slope=args.fcs_slope,
         fcs_intercept=args.fcs_intercept,
         fcs_hfa=args.fcs_hfa,
+        # Learned Situational Adjustment (LSA) params
+        use_learned_situ=args.learned_situ,
+        lsa_alpha=args.lsa_alpha,
+        lsa_min_games=args.lsa_min_games,
+        lsa_ema=args.lsa_ema,
+        lsa_clamp_max=args.lsa_clamp_max,
     )
 
     # P3.4: Print results with ATS data for sanity report

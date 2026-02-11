@@ -6,6 +6,7 @@ Active models (EFM pipeline):
 - PreseasonPriors: Preseason ratings and blending
 - TotalsModel: Opponent-adjusted scoring for over/under betting
 - FCSStrengthEstimator: Walk-forward safe FCS penalty estimation with Bayesian shrinkage
+- LearnedSituationalModel: Ridge regression on situational residuals (experimental, --learned-situ)
 
 Shelved models (kept for backward compatibility):
 - FinishingDrivesModel: Replaced by RZ Leverage weighting in EFM (4 backtest rejections)
@@ -17,6 +18,12 @@ from .special_teams import SpecialTeamsModel
 from .preseason_priors import PreseasonPriors
 from .totals_model import TotalsModel, TotalsRating, TotalsPrediction
 from .fcs_strength import FCSStrengthEstimator, FCSTeamStrength
+from .learned_situational import (
+    LearnedSituationalModel,
+    SituationalFeatures,
+    LearnedSituationalCoefficients,
+    compute_situational_residual,
+)
 
 __all__ = [
     "EfficiencyFoundationModel",
@@ -28,4 +35,8 @@ __all__ = [
     "TotalsPrediction",
     "FCSStrengthEstimator",
     "FCSTeamStrength",
+    "LearnedSituationalModel",
+    "SituationalFeatures",
+    "LearnedSituationalCoefficients",
+    "compute_situational_residual",
 ]
