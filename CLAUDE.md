@@ -57,12 +57,12 @@
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.17 | 16.67 | 50.8% | 52.1% |
-| Phase 1 (Calibration) | 1–3 | 960 | 14.82 | — | 47.9% | 49.1% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.50** | **15.82** | **52.1%** | **53.4%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.41 | — | 47.4% | 48.3% |
-| 3+ Edge (Core) | 4–15 | 1,416 | — | — | 53.9% (763-653) | 55.4% (805-648) |
-| 5+ Edge (Core) | 4–15 | 867 | — | — | 54.4% (472-395) | 57.5% (520-384) |
+| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.32 | 16.94 | 50.9% | 51.5% |
+| Phase 1 (Calibration) | 1–3 | 992 | 15.30 | — | 48.7% | 48.4% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.53** | **15.87** | **52.0%** | **52.8%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.37 | — | 48.0% | 50.0% |
+| 3+ Edge (Core) | 4–15 | 1,428 | — | — | 53.5% (750-651) | 55.7% (794-631) |
+| 5+ Edge (Core) | 4–15 | 873 | — | — | 54.3% (463-390) | 57.7% (519-381) |
 
 ### LSA Enhancement (Optional: `--learned-situ`)
 
@@ -70,8 +70,8 @@ Learned Situational Adjustment replaces fixed situational constants with ridge-l
 
 | Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
 |------|-----------------|-----------------|----------|
-| Fixed (default) | **53.1%** (800-708) | 53.7% (498-429) | Standard production |
-| LSA enabled | 52.3% (772-704) | **54.9%** (483-397) | High-conviction filtering |
+| Fixed (default) | **53.5%** (750-651) | 54.3% (463-390) | Standard production |
+| LSA enabled | 52.8% (723-647) | **55.6%** (450-359) | High-conviction filtering |
 
 **LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`
 
@@ -145,7 +145,7 @@ Learned Situational Adjustment replaces fixed situational constants with ridge-l
 ## 📊 Quant Auditor (The Analyst)
 - **Role:** Weight optimization, MAE/ATS validation, and **redundancy detection**.
 - **Success Metrics (Core Phase, Weeks 4–15, 2,485 games):**
-    - **MAE Baseline:** 12.5 (Strict Tolerance: +0.02).
+    - **MAE Baseline:** 12.53 (Strict Tolerance: +0.02).
     - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 54.0%.
 - **Redundancy Protocol:** For any new signal, you must report the **Correlation Coefficient** against existing PPA/IsoPPP metrics.
 - **Validation Slices (Mandatory):**

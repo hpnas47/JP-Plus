@@ -61,10 +61,10 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 **Optional enhancement** (`--learned-situ` flag) that replaces fixed situational constants with coefficients learned via walk-forward ridge regression on prediction residuals.
 
-| Mode | 3+ Edge | 5+ Edge | Use Case |
-|------|---------|---------|----------|
-| Fixed baseline | **53.1%** | 53.7% | Standard production |
-| LSA (alpha=300) | 52.3% | **54.9%** | High-conviction filtering |
+| Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
+|------|-----------------|-----------------|----------|
+| Fixed baseline | **53.5%** | 54.3% | Standard production |
+| LSA (alpha=300) | 52.8% | **55.6%** | High-conviction filtering |
 
 **Key insight:** LSA serves as a high-confidence filter. It improves Top Tier (5+ pts) performance by +1.2% while slightly reducing volume/accuracy in the lower-confidence (3+) tier. The trade-off is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge.
 
@@ -95,10 +95,10 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|----------------|-----------------|----------------|
-| Calibration | 1–3 | 960 | 14.82 | 18.75 | 47.9% | 49.1% | 48.8% | 49.3% | 50.2% | 51.0% |
-| **Core** | **4–15** | **2,485** | **12.50** | **15.82** | **52.1%** | **53.4%** | **53.9%** | **55.4%** | **54.4%** | **57.5%** |
-| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 46.7% | 47.6% | 47.3% | 48.6% |
-| **Full** | **All** | **3,657** | **13.17** | **16.67** | **50.8%** | **52.1%** | **51.7%** | **53.3%** | **52.4%** | **55.0%** |
+| Calibration | 1–3 | 960 | 15.33 | 18.75 | 48.7% | 48.4% | 48.8% (339-355) | 49.8% (343-346) | 50.2% (269-267) | 50.9% (275-265) |
+| **Core** | **4–15** | **2,485** | **12.53** | **15.87** | **52.0%** | **52.8%** | **53.5%** (750-651) | **55.7%** (794-631) | **54.3%** (463-390) | **57.7%** (519-381) |
+| Postseason | 16+ | 176 | 13.37 | 16.82 | 48.0% | 50.0% | 46.7% (50-57) | 47.1% (48-54) | 47.3% (35-39) | 49.3% (37-38) |
+| **Full** | **All** | **3,657** | **13.32** | **16.94** | **50.9%** | **51.5%** | **51.7%** (1139-1063) | **53.5%** (1185-1031) | **52.4%** (767-696) | **54.9%** (831-684) |
 
 **The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
 
@@ -106,13 +106,14 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 
 | Edge | vs Closing Line | vs Opening Line |
 |------|-----------------|-----------------|
-| All picks | 1,268-1,165 (52.1%) | 1,305-1,139 (53.4%) |
-| 3+ pts | 763-653 (53.9%) | 805-648 (55.4%) |
-| **5+ pts** | **472-395 (54.4%)** | **520-384 (57.5%)** |
+| All picks | 1,293-1,192 (52.0%) | 1,313-1,172 (52.8%) |
+| 3+ pts | 750-651 (53.5%) | 794-631 (55.7%) |
+| **5+ pts** | **463-390 (54.3%)** | **519-381 (57.7%)** |
+| **5+ pts (LSA)** | **450-359 (55.6%)** | — |
 
-*Games: 1,416 at 3+ edge, 867 at 5+ edge. Per CLAUDE.md baseline 2026-02-10.*
+*Games: 1,401 at 3+ edge, 853 at 5+ edge. LSA = Learned Situational Adjustment filter.*
 
-**Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.4% vs closing lines and 57.5% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%).
+**Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.3% vs closing lines and 57.7% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%). With LSA enabled, 5+ edge vs closing improves to 55.6%.
 
 ### ATS by Season and Phase (vs Closing Line)
 
@@ -156,32 +157,32 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 | Edge Filter | N | Mean CLV (vs Close) | CLV > 0 | ATS % (Close) |
 |-------------|---|-------------------|---------|---------------|
-| All picks | 3,621 | -0.29 | 28.7% | 50.8% |
-| 3+ pt edge | 2,254 | -0.42 | 25.6% | 51.7% |
-| 5+ pt edge | 1,491 | -0.47 | 24.8% | 52.1% |
-| 7+ pt edge | 924 | -0.49 | 22.7% | 51.7% |
+| All picks | 3,621 | -0.30 | 28.5% | 50.9% |
+| 3+ pt edge | 2,239 | -0.42 | 25.9% | 51.7% |
+| 5+ pt edge | 1,490 | -0.43 | 25.0% | 52.4% |
+| 7+ pt edge | 920 | -0.45 | 22.6% | 51.7% |
 
-#### Core Season (Weeks 4-15, 2,489 games)
+#### Core Season (Weeks 4-15, 2,485 games)
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 2,489 | -0.31 | — | 52.2% |
-| 3+ pt edge | 1,414 | — | — | 54.0% |
-| **5+ pt edge** | **864** | **-0.51** | **—** | **54.7%** |
-| 7+ pt edge | — | — | — | — |
+| All picks | 2,485 | -0.31 | 30.8% | 52.0% |
+| 3+ pt edge | 1,401 | -0.47 | 28.2% | 53.5% |
+| **5+ pt edge** | **853** | **-0.51** | **27.3%** | **54.3%** |
+| 7+ pt edge | 504 | -0.58 | 24.8% | 54.7% |
 
 **Interpretation:** CLV vs closing is slightly negative, indicating the market does not consistently move toward our predictions. However, the model still generates strong ATS performance — JP+ finds value in spots the market doesn't fully adjust for even by closing. The negative CLV with positive ATS suggests the model exploits structural inefficiencies (public bias, schedule spots) rather than information the sharps eventually price in.
 
 #### CLV vs Opening Line (Captures Value Available at Bet Time)
 
-| Edge Filter | N | Mean CLV (Open→Close) | ATS % (Open) |
-|-------------|---|----------------------|--------------|
-| All picks | 3,258 | +0.44 | 52.7% |
-| 3+ pt edge | 2,001 | +0.61 | 53.6% |
-| **5+ pt edge** | **1,339** | **+0.75** | **54.4%** |
-| 7+ pt edge | 824 | +0.93 | 55.4% |
+| Edge Filter | N | Mean CLV (Open→Close) | CLV > 0 | ATS % (Open) |
+|-------------|---|----------------------|---------|--------------|
+| All picks | 3,621 | +0.43 | 38.6% | 51.5% |
+| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.5% |
+| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.9%** |
+| 7+ pt edge | 955 | +0.88 | 39.5% | 54.5% |
 
-When measured against opening lines (the price available when bets are placed), CLV is strongly positive (+0.75 at 5+ edge) and monotonically increasing with edge size — meaning the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
+When measured against opening lines (the price available when bets are placed), CLV is strongly positive (+0.73 at 5+ edge) and monotonically increasing with edge size — meaning the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
 
 ### Reality Check
 

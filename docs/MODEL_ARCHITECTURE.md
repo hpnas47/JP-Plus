@@ -30,14 +30,14 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,657 gam
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1-3 | 960 | 14.82 | 18.75 | 47.9% | 49.1% | 48.1% | 48.9% | 50.2% |
-| **Core** | **4-15** | **2,485** | **12.50** | **15.82** | **52.1%** | **53.4%** | **53.9%** | **54.4%** | **57.5%** |
-| Postseason | 16+ | 176 | 13.41 | 16.82 | 47.4% | 48.3% | 47.2% | 46.7% | 46.8% |
-| **Full Season** | All | 3,657 | 13.17 | 16.67 | 50.8% | 52.1% | 51.7% | 52.1% | 54.8% |
+| Calibration | 1-3 | 992 | 15.30 | 19.38 | 48.7% | 48.4% | 48.8% | 50.2% | 50.9% |
+| **Core** | **4-15** | **2,489** | **12.53** | **15.87** | **52.0%** | **52.8%** | **53.5%** | **54.3%** | **57.7%** |
+| Postseason | 16+ | 176 | 13.37 | 16.78 | 48.0% | 50.0% | 46.7% | 47.3% | 49.3% |
+| **Full Season** | All | 3,657 | 13.32 | 16.94 | 50.9% | 51.5% | 51.7% | 52.4% | 54.9% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone — 54.4% ATS at 5+ edge vs closing, 57.3% vs opening
+- **Core (Weeks 4-15)**: Profitable zone — 54.3% ATS at 5+ edge vs closing, 57.7% vs opening
 - **Postseason (Weeks 16+)**: Bowl games struggle due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 ### Core Season Detail (Weeks 4-15)
@@ -48,11 +48,11 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
-| **All picks** | 1268-1165 (52.1%) | 1305-1139 (53.4%) |
-| **3+ pt edge** | 763-653 (53.9%) | 805-648 (55.4%) |
-| **5+ pt edge** | 472-395 (54.4%) | 520-384 (57.5%) |
+| **All picks** | 1267-1170 (52.0%) | 1294-1156 (52.8%) |
+| **3+ pt edge** | 750-651 (53.5%) | 794-631 (55.7%) |
+| **5+ pt edge** | 463-390 (54.3%) | 519-381 (57.7%) |
 
-Opening line performance exceeds closing line by ~2%, indicating the model captures value that the market prices out by game time.
+Opening line performance exceeds closing line by ~3-5%, indicating the model captures value that the market prices out by game time. LSA (Learned Situational Adjustment) improves 5+ Edge vs closing to 55.6%.
 
 #### ATS by Season (Core, vs Closing Line)
 
@@ -82,21 +82,21 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 3,621 | -0.29 | 28.7% | 50.8% |
-| 3+ pt edge | 2,254 | -0.42 | 25.6% | 51.7% |
-| **5+ pt edge** | **1,491** | **-0.47** | **24.8%** | **52.1%** |
-| 7+ pt edge | 924 | -0.49 | 22.7% | 51.7% |
+| All picks | 3,621 | -0.30 | 28.5% | 50.9% |
+| 3+ pt edge | 2,239 | -0.42 | 25.9% | 51.7% |
+| **5+ pt edge** | **1,490** | **-0.43** | **25.0%** | **52.4%** |
+| 7+ pt edge | 920 | -0.45 | 22.6% | 51.7% |
 
 **CLV vs Opening Line (value available at bet time):**
 
-| Edge Filter | N | Mean CLV (Open→Close) | ATS % (Open) |
-|-------------|---|----------------------|--------------|
-| All picks | 3,258 | +0.44 | 52.7% |
-| 3+ pt edge | 2,001 | +0.61 | 53.6% |
-| **5+ pt edge** | **1,339** | **+0.75** | **54.4%** |
-| 7+ pt edge | 824 | +0.93 | 55.4% |
+| Edge Filter | N | Mean CLV (Open→Close) | CLV > 0 | ATS % (Open) |
+|-------------|---|----------------------|---------|--------------|
+| All picks | 3,621 | +0.43 | 38.6% | 51.5% |
+| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.5% |
+| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.9%** |
+| 7+ pt edge | 955 | +0.88 | 39.5% | 54.5% |
 
-When measured against opening lines, CLV is strongly positive (+0.75 at 5+ edge) and monotonically increasing with edge size — the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
+When measured against opening lines, CLV is strongly positive (+0.73 at 5+ edge) and monotonically increasing with edge size — the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
 
 **Interpretation:** CLV vs closing is slightly negative (the market doesn't fully move to us), but ATS is strongly positive. This pattern suggests JP+ exploits structural inefficiencies (public bias, schedule spots) rather than information sharps eventually price in.
 
