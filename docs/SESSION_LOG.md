@@ -130,9 +130,25 @@ Fixed critical bug where `abs(margin)` incorrectly penalized elite FCS teams tha
    - All exceptions caused `break`, conflating "week doesn't exist" with transient errors
    - **Fix**: `DataNotAvailableError` → break (expected); other exceptions → log warning and continue
 
-6. **Per-team ST/FD loops** — TODO added
+6. **Per-team ST/FD loops** — IMPLEMENTED batch methods
    - 130+ FBS teams × full DataFrame scan = ~130x redundant iteration
-   - Added TODO noting batch methods exist only for play-by-play, not game stats
+   - Added `calculate_all_from_game_stats()` to SpecialTeamsModel and FinishingDrivesModel
+   - Uses groupby instead of per-team filtering; run_weekly.py updated to use batch methods
+
+---
+
+#### ST/FD Batch Methods for Game Stats — Performance Enhancement
+**Status**: Committed (`4e6366b`)
+**Files**: `src/models/special_teams.py`, `src/models/finishing_drives.py`, `scripts/run_weekly.py`
+
+Added batch methods for game-stats calculation path (used by run_weekly.py when play-by-play unavailable):
+- `SpecialTeamsModel.calculate_all_from_game_stats(teams, games_df)`
+- `FinishingDrivesModel.calculate_all_from_game_stats(teams, games_df)`
+
+**Before**: Per-team loops with 260+ DataFrame filter operations (130 teams × 2 filters each)
+**After**: 4 groupby operations total (home/away for each model)
+
+Backtest unaffected (uses play-by-play batch methods). Production run_weekly.py now ~130x faster for ST/FD calculation.
 
 ---
 
