@@ -43,6 +43,7 @@ from src.adjustments.altitude import AltitudeAdjuster
 # Infrastructure preserved in src/models/finishing_drives.py for future reactivation
 from src.models.special_teams import SpecialTeamsModel
 from src.models.fcs_strength import FCSStrengthEstimator
+from src.adjustments.qb_continuous import QBContinuousAdjuster
 from src.models.learned_situational import (
     LearnedSituationalModel,
     SituationalFeatures,
@@ -644,6 +645,14 @@ def walk_forward_predict(
     # LSA training data sources (for turnover adjustment and Vegas filter)
     turnover_df: Optional[pl.DataFrame] = None,
     betting_df: Optional[pl.DataFrame] = None,
+    # QB Continuous Rating parameters
+    use_qb_continuous: bool = False,
+    qb_shrinkage_k: float = 200.0,
+    qb_cap: float = 3.0,
+    qb_scale: float = 4.0,
+    qb_prior_decay: float = 0.3,
+    qb_use_prior_season: bool = True,
+    qb_phase1_only: bool = False,
 ) -> tuple[list[dict], list[tuple]]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -708,6 +717,21 @@ def walk_forward_predict(
     travel_adjuster = TravelAdjuster()
     altitude_adjuster = AltitudeAdjuster()
     situational_adjuster = SituationalAdjuster()
+
+    # QB Continuous: Initialize once, build data incrementally each week
+    # The adjuster caches QB data by week and builds incrementally
+    qb_continuous_adjuster = None
+    if use_qb_continuous:
+        logger.info(f"QB Continuous enabled: initializing for {year} season")
+        qb_continuous_adjuster = QBContinuousAdjuster(
+            year=year,
+            shrinkage_k=qb_shrinkage_k,
+            qb_cap=qb_cap,
+            qb_scale=qb_scale,
+            prior_decay=qb_prior_decay,
+            use_prior_season=qb_use_prior_season,
+            phase1_only=qb_phase1_only,
+        )
 
     # LSA: If model provided, train after each week's games
     use_learned_situ = lsa_model is not None
@@ -888,6 +912,10 @@ def walk_forward_predict(
             fcs_estimator.update_from_games(games_df, fbs_teams, through_week=pred_week - 1)
             active_fcs_estimator = fcs_estimator
 
+        # QB Continuous: Build data through pred_week - 1 (walk-forward safe)
+        if qb_continuous_adjuster is not None:
+            qb_continuous_adjuster.build_qb_data(through_week=pred_week - 1)
+
         # Build spread generator with EFM ratings
         # Note: travel/altitude/situational are stateless (reused from outside loop)
         # special_teams is retrained each week (fresh instance)
@@ -905,6 +933,7 @@ def walk_forward_predict(
             st_spread_cap=st_spread_cap,  # Margin-level ST capping (Approach B)
             st_early_season_weight=st_early_weight,  # Early-season ST weighting (Approach C)
             fcs_estimator=active_fcs_estimator,  # Dynamic FCS penalties (None = use static)
+            qb_continuous=qb_continuous_adjuster,  # Continuous QB rating adjustment
         )
 
         # Predict this week's games (Polars iteration is faster)
@@ -2850,6 +2879,14 @@ def _process_single_season(
     lsa_weighted_training: bool = False,
     lsa_weight_spread: float = 17.0,
     lsa_min_training_games: int = 30,
+    # QB Continuous Rating parameters
+    use_qb_continuous: bool = False,
+    qb_shrinkage_k: float = 200.0,
+    qb_cap: float = 3.0,
+    qb_scale: float = 4.0,
+    qb_prior_decay: float = 0.3,
+    qb_use_prior_season: bool = True,
+    qb_phase1_only: bool = False,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2956,6 +2993,14 @@ def _process_single_season(
         lsa_model=lsa_model,
         turnover_df=turnover_df,
         betting_df=betting_df,
+        # QB Continuous Rating params
+        use_qb_continuous=use_qb_continuous,
+        qb_shrinkage_k=qb_shrinkage_k,
+        qb_cap=qb_cap,
+        qb_scale=qb_scale,
+        qb_prior_decay=qb_prior_decay,
+        qb_use_prior_season=qb_use_prior_season,
+        qb_phase1_only=qb_phase1_only,
     )
 
     # Calculate ATS
@@ -3023,6 +3068,14 @@ def run_backtest(
     lsa_weighted_training: bool = False,
     lsa_weight_spread: float = 17.0,
     lsa_min_training_games: int = 30,
+    # QB Continuous Rating parameters
+    use_qb_continuous: bool = False,
+    qb_shrinkage_k: float = 200.0,
+    qb_cap: float = 3.0,
+    qb_scale: float = 4.0,
+    qb_prior_decay: float = 0.3,
+    qb_use_prior_season: bool = True,
+    qb_phase1_only: bool = False,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -3164,6 +3217,14 @@ def run_backtest(
         lsa_weighted_training=lsa_weighted_training,
         lsa_weight_spread=lsa_weight_spread,
         lsa_min_training_games=lsa_min_training_games,
+        # QB Continuous Rating params
+        use_qb_continuous=use_qb_continuous,
+        qb_shrinkage_k=qb_shrinkage_k,
+        qb_cap=qb_cap,
+        qb_scale=qb_scale,
+        qb_prior_decay=qb_prior_decay,
+        qb_use_prior_season=qb_use_prior_season,
+        qb_phase1_only=qb_phase1_only,
     )
 
     # LSA requires sequential processing: prior years' data feeds later years
@@ -3862,6 +3923,51 @@ def main():
         default=0.50,
         help="HFA offset for close line evaluation. Default: 0.50",
     )
+    # QB Continuous Rating System
+    parser.add_argument(
+        "--qb-continuous",
+        action="store_true",
+        help="Enable continuous QB rating system (always-on QB quality adjustment). Default: disabled",
+    )
+    parser.add_argument(
+        "--no-qb-continuous",
+        action="store_true",
+        help="Explicitly disable QB continuous (for clarity when comparing)",
+    )
+    parser.add_argument(
+        "--qb-shrinkage-k",
+        type=float,
+        default=200.0,
+        help="QB shrinkage parameter (higher = more shrinkage). Default: 200",
+    )
+    parser.add_argument(
+        "--qb-cap",
+        type=float,
+        default=3.0,
+        help="QB point adjustment cap. Default: 3.0",
+    )
+    parser.add_argument(
+        "--qb-scale",
+        type=float,
+        default=4.0,
+        help="QB PPA-to-points scaling factor. Default: 4.0",
+    )
+    parser.add_argument(
+        "--qb-prior-decay",
+        type=float,
+        default=0.3,
+        help="Prior season decay factor (0-1). Default: 0.3",
+    )
+    parser.add_argument(
+        "--no-qb-prior-season",
+        action="store_true",
+        help="Disable prior season data for QB Week 1 projections",
+    )
+    parser.add_argument(
+        "--qb-phase1-only",
+        action="store_true",
+        help="Only apply QB adjustment for weeks 1-3 (skip Core weeks 4+)",
+    )
     # Dual-Cap Sweep Mode
     parser.add_argument(
         "--sweep-dual-st-cap",
@@ -4044,6 +4150,8 @@ def main():
     print(f"  ST spread cap:      {st_cap_status}")
     lsa_status = f"enabled (alpha={args.lsa_alpha}, min_games={args.lsa_min_games}, ema={args.lsa_ema})" if args.learned_situ else "disabled (fixed baseline)"
     print(f"  Learned situational: {lsa_status}")
+    qb_status = f"enabled (k={args.qb_shrinkage_k}, cap=±{args.qb_cap}, scale={args.qb_scale})" if args.qb_continuous else "disabled"
+    print(f"  QB continuous:      {qb_status}")
     print("=" * 60 + "\n")
 
     results = run_backtest(
@@ -4096,6 +4204,14 @@ def main():
         lsa_weighted_training=args.lsa_weighted_training,
         lsa_weight_spread=args.lsa_weight_spread,
         lsa_min_training_games=args.lsa_min_training_games,
+        # QB Continuous Rating params
+        use_qb_continuous=args.qb_continuous and not args.no_qb_continuous,
+        qb_shrinkage_k=args.qb_shrinkage_k,
+        qb_cap=args.qb_cap,
+        qb_scale=args.qb_scale,
+        qb_prior_decay=args.qb_prior_decay,
+        qb_use_prior_season=not args.no_qb_prior_season,
+        qb_phase1_only=args.qb_phase1_only,
     )
 
     # P3.4: Print results with ATS data for sanity report

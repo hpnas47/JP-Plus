@@ -21,6 +21,7 @@ from src.adjustments.travel import TravelAdjuster
 from config.teams import TRIPLE_OPTION_TEAMS
 from src.adjustments.altitude import AltitudeAdjuster
 from src.adjustments.qb_adjustment import QBInjuryAdjuster
+from src.adjustments.qb_continuous import QBContinuousAdjuster
 from src.adjustments.aggregator import AdjustmentAggregator, TravelBreakdown
 from src.adjustments.diagnostics import (
     AdjustmentStack,
@@ -226,6 +227,7 @@ class SpreadGenerator:
         fcs_penalty_standard: Optional[float] = None,
         elite_fcs_teams: Optional[set[str]] = None,
         qb_adjuster: Optional[QBInjuryAdjuster] = None,
+        qb_continuous: Optional[QBContinuousAdjuster] = None,
         aggregator: Optional[AdjustmentAggregator] = None,
         track_diagnostics: bool = False,
         global_cap: float = 7.0,
@@ -247,7 +249,8 @@ class SpreadGenerator:
             fcs_penalty_elite: Points for elite FCS teams (default: 18.0, used if no fcs_estimator)
             fcs_penalty_standard: Points for standard FCS teams (default: 32.0, used if no fcs_estimator)
             elite_fcs_teams: Set of elite FCS team names (default: ELITE_FCS_TEAMS, used if no fcs_estimator)
-            qb_adjuster: QB injury adjuster (optional, for QB-out adjustments)
+            qb_adjuster: QB injury adjuster (optional, for manual QB-out adjustments)
+            qb_continuous: Continuous QB rating adjuster (optional, for always-on QB quality)
             aggregator: AdjustmentAggregator for consolidated smoothing (default: creates new)
             track_diagnostics: If True, track adjustment stacks for P2.11 analysis
             global_cap: Maximum total adjustment (default: 7.0)
@@ -275,8 +278,12 @@ class SpreadGenerator:
         self.fcs_penalty_elite = fcs_penalty_elite if fcs_penalty_elite is not None else self.DEFAULT_FCS_PENALTY_ELITE
         self.fcs_penalty_standard = fcs_penalty_standard if fcs_penalty_standard is not None else self.DEFAULT_FCS_PENALTY_STANDARD
 
-        # QB injury adjuster (optional)
+        # QB adjusters (optional)
+        # qb_adjuster: Manual injury override (--qb-out flag)
+        # qb_continuous: Always-on continuous QB rating system
+        # Note: If both are provided, manual override takes precedence for flagged teams
         self.qb_adjuster = qb_adjuster
+        self.qb_continuous = qb_continuous
 
         # Consolidated adjustment aggregator (four-bucket smoothing)
         self.aggregator = aggregator or AdjustmentAggregator(global_cap=global_cap)
@@ -611,10 +618,18 @@ class SpreadGenerator:
             + components.finishing_drives
         )
 
-        # QB injury adjustment (when starter is flagged as out)
+        # QB adjustment
+        # Priority order:
+        # 1. qb_continuous (always-on continuous rating, handles manual overrides internally)
+        # 2. qb_adjuster (legacy binary injury adjustment)
         # Applied before pace adjustment so triple-option compression
         # correctly dampens QB impact in low-possession games
-        if self.qb_adjuster:
+        if self.qb_continuous:
+            components.qb_adjustment = self.qb_continuous.get_adjustment(
+                home_team, away_team, pred_week=week
+            )
+            spread += components.qb_adjustment
+        elif self.qb_adjuster:
             components.qb_adjustment = self.qb_adjuster.get_adjustment(
                 home_team, away_team
             )
