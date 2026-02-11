@@ -143,7 +143,6 @@ class QBQuality:
     qb_value_raw: float = 0.0  # Mean-centered PPA (vs FBS average)
     qb_value_shrunk: float = 0.0  # After shrinkage
     qb_points: float = 0.0  # Final point adjustment (capped)
-    qb_points_effective: float = 0.0  # After uncertainty dampening
 
     # Uncertainty
     qb_uncertainty: float = 1.0  # 0 = certain, 1 = very uncertain
@@ -416,7 +415,20 @@ class QBContinuousAdjuster:
         logger.info(f"QB data built through week {through_week}")
 
     def _load_prior_season(self, prior_year: int) -> None:
-        """Load prior season QB data for preseason priors."""
+        """Load prior season QB data for preseason priors.
+
+        Note: Guard ensures prior_year < self.year to prevent data leakage
+        if module is misconfigured with incorrect year settings.
+        """
+        # Walk-forward safety guard: prevent data leakage from future seasons
+        if prior_year >= self.year:
+            logger.warning(
+                f"Prior year {prior_year} >= current year {self.year}, skipping prior season load "
+                "to prevent data leakage"
+            )
+            self._prior_season_loaded = True
+            return
+
         logger.info(f"Loading prior season QB data from {prior_year}")
 
         # Fetch end-of-season PPA for prior year (all weeks)
@@ -697,10 +709,6 @@ class QBContinuousAdjuster:
         # Compute uncertainty
         quality.qb_uncertainty = self._compute_uncertainty(proj)
 
-        # Apply uncertainty dampening
-        dampening_factor = 0.5  # How much uncertainty reduces adjustment
-        quality.qb_points_effective = quality.qb_points * (1.0 - dampening_factor * quality.qb_uncertainty)
-
         self._qualities[key] = quality
         return quality
 
@@ -739,10 +747,11 @@ class QBContinuousAdjuster:
             - 1 = QB quality fully baked in (use residual adjustment only)
 
         Schedule:
-            Weeks 1-3: Ramp 0.0 → 1.0 (additive early, fully baked by week 4)
-            Week 4+:   1.0 (fully baked, residual only)
+            Week 1: Starts ramping (~0.25)
+            Week 3: ~0.5 (mid-point)
+            Week 4+: 1.0 (fully baked, residual only)
         """
-        if pred_week <= BAKING_WEEK_START:
+        if pred_week < BAKING_WEEK_START:
             return 0.0
         elif pred_week <= BAKING_WEEK_MID:
             # Ramp from 0.0 to ~0.5 over weeks 1-3
@@ -782,6 +791,7 @@ class QBContinuousAdjuster:
             return 0.0
 
         # Compute weighted average of QB values
+        # Uses same shrinkage basis as _compute_qb_quality (current + prior * decay)
         total_db = 0
         weighted_sum = 0.0
 
@@ -792,16 +802,36 @@ class QBContinuousAdjuster:
 
             # Compute this QB's value (same logic as _compute_qb_quality but per-QB)
             avg_ppa = stats.avg_ppa
-            qb_value_raw = avg_ppa - self.fbs_avg_ppa
 
-            # Apply shrinkage based on this QB's sample size
-            shrink_factor = db / (db + self.shrinkage_k)
+            # Check for prior season data to match shrinkage basis with _compute_qb_quality
+            prior_db = 0
+            prior_ppa = 0.0
+            if self.use_prior_season:
+                prior_stats = self._prior_season_stats.get((player_id, self.year - 1))
+                if prior_stats:
+                    prior_db = prior_stats.total_dropbacks
+                    prior_ppa = prior_stats.avg_ppa
+
+            # Compute effective dropbacks and weighted PPA (matches _compute_qb_quality)
+            prior_contribution = prior_db * self.prior_decay if prior_db > 0 else 0
+            n_eff = db + prior_contribution
+
+            if n_eff > 0:
+                # Weighted average PPA incorporating prior season
+                weighted_ppa = (avg_ppa * db + prior_ppa * prior_contribution) / n_eff
+            else:
+                weighted_ppa = avg_ppa
+
+            qb_value_raw = weighted_ppa - self.fbs_avg_ppa
+
+            # Apply shrinkage based on effective sample size (matches _compute_qb_quality)
+            shrink_factor = n_eff / (n_eff + self.shrinkage_k)
             qb_value_shrunk = qb_value_raw * shrink_factor
 
             # Scale to points (no cap for team average)
             qb_points = qb_value_shrunk * self.qb_scale
 
-            # Weight by dropbacks
+            # Weight by current season dropbacks for team average
             total_db += db
             weighted_sum += qb_points * db
 
@@ -846,11 +876,12 @@ class QBContinuousAdjuster:
         if team in self._qb_out_adjustments:
             return self._qb_out_adjustments[team]
 
-        # Default: use current starter quality as basis for drop-off estimate
-        quality = self._compute_qb_quality(team, self._data_built_through_week + 1)
-        # Assume backup is ~0.2 PPA worse
+        # Manual QB-out adjustment represents the fixed starter-to-backup drop-off.
+        # This is independent of the starter's absolute quality level — losing a great
+        # starter or a mediocre starter both result in the same backup quality penalty.
+        # Assume backup is ~0.2 PPA worse than starter (scaled to points).
         backup_drop = 0.2 * self.qb_scale
-        return -min(self.qb_cap, backup_drop + quality.qb_points_effective)
+        return -min(self.qb_cap, backup_drop)
 
     # ========================================================================
     # Main Interface
@@ -990,13 +1021,13 @@ class QBContinuousAdjuster:
         else:
             unc_min = unc_p25 = unc_med = unc_p75 = unc_max = 0
 
-        # Top/bottom qb_points_effective
+        # Top/bottom qb_points
         all_qualities = []
         for d in week_diagnostics:
             if d.home_quality:
-                all_qualities.append((d.home_team, d.home_quality.qb_points_effective))
+                all_qualities.append((d.home_team, d.home_quality.qb_points))
             if d.away_quality:
-                all_qualities.append((d.away_team, d.away_quality.qb_points_effective))
+                all_qualities.append((d.away_team, d.away_quality.qb_points))
 
         all_qualities.sort(key=lambda x: x[1], reverse=True)
         top_3 = all_qualities[:3]
@@ -1037,7 +1068,6 @@ class QBContinuousAdjuster:
                 'qb_value_raw': quality.qb_value_raw,
                 'qb_value_shrunk': quality.qb_value_shrunk,
                 'qb_points': quality.qb_points,
-                'qb_points_effective': quality.qb_points_effective,
                 'qb_uncertainty': quality.qb_uncertainty,
                 'n_effective_db': quality.projection.n_effective_db if quality.projection else 0,
                 'unknown_starter': quality.projection.unknown_starter if quality.projection else True,
