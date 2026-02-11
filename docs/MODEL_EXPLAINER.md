@@ -60,7 +60,7 @@ JP+ applies game-specific adjustments for factors that affect the spread beyond 
 
 All adjustments pass through a smoothing layer to prevent over-prediction when multiple factors stack.
 
-### QB Continuous Rating (DEFAULT)
+### QB Continuous Rating
 
 **The Problem:** In early-season games (Weeks 1-3), the EFM doesn't have enough play-by-play data to accurately capture QB quality. A team starting an elite QB vs a team starting a first-time starter will look similar until the efficiency numbers accumulate.
 
@@ -100,7 +100,7 @@ Key differences:
 - **LSA is regularized (alpha=300)** — Prevents overfitting by keeping coefficients close to zero unless strong evidence exists
 - **LSA clamps extremes** — Maximum ±4.0 pt adjustment to prevent outlier-driven predictions
 
-### Edge-Aware Production Mode (DEFAULT in 2026)
+### Edge-Aware Production Mode
 
 The prediction engine automatically selects Fixed or LSA based on **timing and edge size**. No flags needed — this is the default behavior.
 
