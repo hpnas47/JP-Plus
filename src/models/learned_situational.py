@@ -407,13 +407,24 @@ class LearnedSituationalModel:
         # Log summary
         nonzero_count = sum(1 for v in self._coefficients.values() if abs(v) > 0.1)
         logger.debug(
-            f"LSA trained: {n_games} games, week {max_week}, "
-            f"{nonzero_count} features > 0.1 magnitude"
+            "LSA trained: %d games, week %d, %d features > 0.1 magnitude",
+            n_games,
+            max_week,
+            nonzero_count,
         )
+
+        # Validate year before persisting
+        if self._year is None:
+            logger.warning(
+                "LSA train() called before reset() - year not set, skipping persistence"
+            )
+            result_year = 0
+        else:
+            result_year = self._year
 
         # Build result object
         result = LearnedSituationalCoefficients(
-            year=self._year or 0,
+            year=result_year,
             max_week=max_week,
             n_games=n_games,
             alpha=self.ridge_alpha,
@@ -421,8 +432,8 @@ class LearnedSituationalModel:
             coefficients=dict(self._coefficients),
         )
 
-        # Persist to disk if configured
-        if self.persist_dir is not None:
+        # Persist to disk if configured (only if year is valid)
+        if self.persist_dir is not None and self._year is not None:
             self._persist_coefficients(result)
 
         return result

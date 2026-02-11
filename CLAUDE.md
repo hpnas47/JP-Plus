@@ -53,16 +53,16 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-10)
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-11)
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.32 | 16.94 | 50.9% | 51.5% |
-| Phase 1 (Calibration) | 1–3 | 992 | 15.30 | — | 48.7% | 48.4% |
-| **Phase 2 (Core)** | **4–15** | **2,489** | **12.53** | **15.87** | **52.0%** | **52.8%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.37 | — | 48.0% | 50.0% |
-| 3+ Edge (Core) | 4–15 | 1,428 | — | — | 53.5% (750-651) | 55.7% (794-631) |
-| 5+ Edge (Core) | 4–15 | 873 | — | — | 54.3% (463-390) | 57.7% (519-381) |
+| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.32 | 16.93 | 50.7% | 51.6% |
+| Phase 1 (Calibration) | 1–3 | 992 | 15.30 | — | 48.8% | 48.4% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.53** | **15.87** | **51.7%** | **53.0%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.38 | — | 48.0% | 49.4% |
+| 3+ Edge (Core) | 4–15 | 1,421 | — | — | 53.4% (744-650) | 55.6% (795-634) |
+| 5+ Edge (Core) | 4–15 | 869 | — | — | 54.5% (463-386) | 57.0% (514-387) |
 
 ### LSA Enhancement (Optional: `--learned-situ`)
 
@@ -153,4 +153,4 @@ Learned Situational Adjustment replaces fixed situational constants with ridge-l
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
 
-<!-- Last validated: 2026-02-10 by generate_docs.py -->
+<!-- Last validated: 2026-02-11 by generate_docs.py -->
