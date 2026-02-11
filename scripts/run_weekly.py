@@ -146,6 +146,17 @@ def parse_args():
         default=300.0,
         help="LSA ridge alpha for regularization. Default: 300.0",
     )
+    parser.add_argument(
+        "--dual-spread",
+        action="store_true",
+        help="Output BOTH fixed and LSA spreads. Recommends fixed for opening bets (4+ days out), LSA for closing (< 4 days).",
+    )
+    parser.add_argument(
+        "--lsa-threshold-days",
+        type=int,
+        default=4,
+        help="Days before game to switch from fixed to LSA. Default: 4 (use fixed Sun-Tue, LSA Wed-Sat).",
+    )
     return parser.parse_args()
 
 
@@ -526,6 +537,8 @@ def run_predictions(
     min_edge: float = 3.0,
     use_learned_situ: bool = False,
     lsa_alpha: float = 300.0,
+    dual_spread: bool = False,
+    lsa_threshold_days: int = 4,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -716,11 +729,15 @@ def run_predictions(
             historical_rankings=historical_rankings,
         )
 
-        # Apply LSA adjustments if enabled
-        if use_learned_situ:
+        # Store fixed spreads before any LSA modification (for dual-spread mode)
+        fixed_spreads = {pred.game_id: pred.spread for pred in predictions}
+
+        # Dual-spread mode: compute BOTH fixed and LSA spreads
+        lsa_spreads = {}
+        if dual_spread or use_learned_situ:
             lsa_coefficients = load_lsa_coefficients(year)
             if lsa_coefficients:
-                logger.info(f"Applying LSA adjustments to {len(predictions)} predictions...")
+                logger.info(f"Computing LSA adjustments for {len(predictions)} predictions...")
                 for pred in predictions:
                     # Compute LSA adjustment
                     lsa_adj = apply_lsa_adjustment(
@@ -732,18 +749,61 @@ def run_predictions(
                         historical_rankings=historical_rankings,
                         week=week,
                     )
-                    # Replace fixed situational with learned
-                    # New spread = old spread - fixed_situ + learned_situ
+                    # Calculate LSA spread
                     fixed_situ = pred.components.situational if hasattr(pred, 'components') else 0.0
-                    pred.spread = pred.spread - fixed_situ + lsa_adj
-                    # Update component for transparency
-                    if hasattr(pred, 'components') and hasattr(pred.components, 'situational'):
-                        object.__setattr__(pred.components, 'situational', lsa_adj)
-                logger.info(f"LSA adjustments applied (mean shift: {sum(p.spread for p in predictions)/len(predictions):.2f})")
+                    lsa_spread = pred.spread - fixed_situ + lsa_adj
+                    lsa_spreads[pred.game_id] = lsa_spread
+
+                    # If use_learned_situ (not dual), apply LSA to prediction
+                    if use_learned_situ and not dual_spread:
+                        pred.spread = lsa_spread
+                        if hasattr(pred, 'components') and hasattr(pred.components, 'situational'):
+                            object.__setattr__(pred.components, 'situational', lsa_adj)
+
+                if use_learned_situ and not dual_spread:
+                    logger.info(f"LSA adjustments applied (mean shift: {sum(p.spread for p in predictions)/len(predictions):.2f})")
+                else:
+                    logger.info(f"LSA spreads computed for dual-spread mode")
             else:
-                logger.warning("LSA enabled but no coefficients found - using fixed situational")
+                logger.warning("LSA coefficients not found - using fixed situational only")
+                # Fill lsa_spreads with fixed values as fallback
+                lsa_spreads = fixed_spreads.copy()
 
         predictions_df = spread_gen.predictions_to_dataframe(predictions)
+
+        # Add dual-spread columns if enabled
+        if dual_spread:
+            from datetime import datetime, timedelta
+
+            # Add fixed and LSA spread columns
+            predictions_df['jp_spread_fixed'] = predictions_df['game_id'].map(fixed_spreads)
+            predictions_df['jp_spread_lsa'] = predictions_df['game_id'].map(lsa_spreads)
+
+            # Calculate days until game and recommendation
+            today = datetime.now().date()
+            def get_recommendation(row):
+                try:
+                    # Parse game date (format: "YYYY-MM-DD" or similar)
+                    if 'start_date' in row and pd.notna(row['start_date']):
+                        game_date = pd.to_datetime(row['start_date']).date()
+                        days_until = (game_date - today).days
+                        # Use fixed for opening bets (4+ days out), LSA for closing
+                        if days_until >= lsa_threshold_days:
+                            return 'fixed'
+                        else:
+                            return 'lsa'
+                except Exception:
+                    pass
+                return 'fixed'  # Default to fixed if can't determine
+
+            predictions_df['bet_timing_rec'] = predictions_df.apply(get_recommendation, axis=1)
+            predictions_df['jp_spread_recommended'] = predictions_df.apply(
+                lambda row: row['jp_spread_fixed'] if row['bet_timing_rec'] == 'fixed' else row['jp_spread_lsa'],
+                axis=1
+            )
+
+            logger.info(f"Dual-spread mode: {sum(predictions_df['bet_timing_rec'] == 'fixed')} games recommend fixed, "
+                       f"{sum(predictions_df['bet_timing_rec'] == 'lsa')} recommend LSA (threshold: {lsa_threshold_days} days)")
 
         # Vegas comparison
         logger.info(f"Fetching Vegas lines and comparing (min_edge={min_edge})...")
@@ -853,8 +913,11 @@ def main():
 
     # LSA mode
     use_learned_situ = args.learned_situ
+    dual_spread = args.dual_spread
     if use_learned_situ:
         logger.info(f"LSA enabled: alpha={args.lsa_alpha}")
+    if dual_spread:
+        logger.info(f"Dual-spread mode: outputting both fixed and LSA spreads (threshold: {args.lsa_threshold_days} days)")
 
     logger.info(f"Running predictions for {year} Week {week} (min_edge={min_edge})")
 
@@ -869,6 +932,8 @@ def main():
         min_edge=min_edge,
         use_learned_situ=use_learned_situ,
         lsa_alpha=args.lsa_alpha,
+        dual_spread=dual_spread,
+        lsa_threshold_days=args.lsa_threshold_days,
     )
 
     if results["success"]:
