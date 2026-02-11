@@ -64,13 +64,27 @@
 | 3+ Edge (Core) | 4–15 | 1,416 | — | — | 53.9% (763-653) | 55.4% (805-648) |
 | 5+ Edge (Core) | 4–15 | 867 | — | — | 54.4% (472-395) | 57.5% (520-384) |
 
+### LSA Enhancement (Optional: `--learned-situ`)
+
+Learned Situational Adjustment replaces fixed situational constants with ridge-learned coefficients. Acts as a **high-confidence filter** — improves 5+ Edge at cost of 3+ Edge.
+
+| Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
+|------|-----------------|-----------------|----------|
+| Fixed (default) | **53.1%** (800-708) | 53.7% (498-429) | Standard production |
+| LSA enabled | 52.3% (772-704) | **54.9%** (483-397) | High-conviction filtering |
+
+**LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`
+
+### Model Configuration
+
 - **Audit:** 41/48 items fixed (P0-P3). 7 deferred. Fixlists archived in `docs/Completed Audit Fixlists/`.
 - **EFM Weights:** SR=45%, IsoPPP=45%, Turnovers=10% (Explosiveness Uplift from 54/36/10).
 - **HFA Global Offset:** -0.50 pts applied to all HFA values (calibrated Feb 2026). Reduces systematic home bias from +0.90 to +0.46.
 - **RZ Leverage:** Play-level weighting in EFM (2.0x inside 10, 1.5x inside 20). Replaces shelved Finishing Drives model (4 rejections, 70-80% overlap with IsoPPP).
 - **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
-- **ST Spread Cap:** ±2.5 pts (APPROVED 2026-02-10). Caps ST differential's effect on spread without shrinking ratings toward zero. Improves Core 5+ Edge 53.7%→54.0% with minimal spread compression.
-- **FCS Strength Estimator:** Dynamic, walk-forward-safe FCS penalties (APPROVED 2026-02-10). Replaces static elite list with Bayesian shrinkage (k=8, intercept=20). Penalty range [10, 40] pts. CLI: `--fcs-static` for baseline comparison.
+- **ST Spread Cap:** ±2.5 pts (APPROVED 2026-02-10). Caps ST differential's effect on spread without shrinking ratings toward zero.
+- **FCS Strength Estimator:** Dynamic, walk-forward-safe FCS penalties (APPROVED 2026-02-10). Replaces static elite list with Bayesian shrinkage (k=8, baseline=-28, intercept=10, slope=0.8). Penalty range [10, 45] pts. CLI: `--fcs-static` for baseline comparison.
+- **LSA:** Optional high-confidence filter (APPROVED 2026-02-10). Learns situational coefficients via ridge regression on residuals. Improves 5+ Edge +1.2% at cost of 3+ Edge -0.8%. CLI: `--learned-situ` to enable.
 
 ## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
 
