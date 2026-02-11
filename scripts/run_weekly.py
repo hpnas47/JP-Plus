@@ -36,8 +36,10 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import requests
+
 from config.settings import get_settings
-from src.api.cfbd_client import CFBDClient, DataNotAvailableError
+from src.api.cfbd_client import CFBDClient, DataNotAvailableError, APIRateLimitError
 from src.data.validators import DataValidator
 from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
@@ -301,19 +303,27 @@ def fetch_upcoming_games(
 ) -> list[dict]:
     """Fetch upcoming games for prediction.
 
+    Only returns games that haven't been played yet (no scores).
+    Completed games are skipped to avoid predicting already-known outcomes.
+
     Args:
         client: API client
         year: Season year
         week: Week to predict
 
     Returns:
-        List of game dictionaries
+        List of game dictionaries (unplayed games only)
     """
     games = client.get_games(year, week)
     upcoming = []
+    skipped = 0
 
     for game in games:
-        # Include games without scores (not yet played)
+        # Skip completed games (already have scores)
+        if game.home_points is not None and game.away_points is not None:
+            skipped += 1
+            continue
+
         upcoming.append({
             "id": game.id,
             "home_team": game.home_team,
@@ -322,7 +332,9 @@ def fetch_upcoming_games(
             "start_date": game.start_date,
         })
 
-    logger.info(f"Found {len(upcoming)} games for week {week}")
+    if skipped > 0:
+        logger.debug(f"Skipped {skipped} completed games for week {week}")
+    logger.info(f"Found {len(upcoming)} upcoming games for week {week}")
     return upcoming
 
 
@@ -407,10 +419,13 @@ def build_schedule_df(
                     "home_points": game.home_points,
                     "away_points": game.away_points,
                 })
+        except DataNotAvailableError:
+            # Week doesn't exist yet - stop fetching
+            break
         except Exception as e:
             # Log transient errors but continue fetching remaining weeks
             # (rate limits, timeouts should not truncate the schedule)
-            logger.warning(f"Error fetching week {week} schedule: {e}")
+            logger.warning(f"Error fetching schedule week {week}: {e}")
             continue
 
     if all_games:
@@ -425,6 +440,22 @@ PLAY_COLUMNS = [
     "yards_gained", "ppa", "play_type", "period",
     "home_score", "away_score", "yards_to_goal",
 ]
+
+# Polars schema for play-by-play data (used for empty DataFrame creation)
+PLAY_SCHEMA = {
+    "game_id": pl.Int64,
+    "offense": pl.Utf8,
+    "defense": pl.Utf8,
+    "down": pl.Int64,
+    "distance": pl.Float64,
+    "yards_gained": pl.Float64,
+    "ppa": pl.Float64,
+    "play_type": pl.Utf8,
+    "period": pl.Int64,
+    "home_score": pl.Int64,
+    "away_score": pl.Int64,
+    "yards_to_goal": pl.Float64,
+}
 
 
 def _fetch_week_plays_from_api(client: CFBDClient, year: int, w: int) -> pl.DataFrame:
@@ -446,26 +477,15 @@ def _fetch_week_plays_from_api(client: CFBDClient, year: int, w: int) -> pl.Data
             "away_score": play.away_score,
             "yards_to_goal": getattr(play, "yards_to_goal", None),
         })
-    return pl.DataFrame(plays_data, schema={
-        "game_id": pl.Int64,
-        "offense": pl.Utf8,
-        "defense": pl.Utf8,
-        "down": pl.Int64,
-        "distance": pl.Float64,
-        "yards_gained": pl.Float64,
-        "ppa": pl.Float64,
-        "play_type": pl.Utf8,
-        "period": pl.Int64,
-        "home_score": pl.Int64,
-        "away_score": pl.Int64,
-        "yards_to_goal": pl.Float64,
-    })
+    return pl.DataFrame(plays_data, schema=PLAY_SCHEMA)
 
 
 def _fetch_plays(
     client: CFBDClient, year: int, week: int, use_delta_cache: bool
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """Fetch play-by-play data, using week-level cache when enabled.
+
+    Returns a Polars DataFrame for efficient filtering before Pandas conversion.
 
     When use_delta_cache=True:
         - Loads weeks [1, week-2] from disk cache (cache hits)
@@ -486,8 +506,8 @@ def _fetch_plays(
             except Exception as e:
                 logger.warning(f"Error fetching plays for week {w}: {e}")
         if all_dfs:
-            return pl.concat(all_dfs).to_pandas()
-        return pd.DataFrame(columns=PLAY_COLUMNS)
+            return pl.concat(all_dfs)
+        return pl.DataFrame(schema=PLAY_SCHEMA)
 
     # --- Delta cache path ---
     cache = WeekDataCache()
@@ -538,8 +558,8 @@ def _fetch_plays(
             logger.warning(f"Error fetching plays for week {fetch_week}: {e}")
 
     if all_dfs:
-        return pl.concat(all_dfs).to_pandas()
-    return pd.DataFrame(columns=PLAY_COLUMNS)
+        return pl.concat(all_dfs)
+    return pl.DataFrame(schema=PLAY_SCHEMA)
 
 
 def run_predictions(
@@ -590,21 +610,24 @@ def run_predictions(
     # Ensure output directory exists
     settings.outputs_dir.mkdir(parents=True, exist_ok=True)
 
+    # P0: Fail fast for invalid weeks (prevents infinite wait loop)
+    # CFB season: weeks 0-15 regular, 16-17 postseason (bowls + CFP)
+    MAX_CFB_WEEK = 18  # Week 17 is national championship, week 18+ doesn't exist
+    if week > MAX_CFB_WEEK:
+        raise ValueError(
+            f"Week {week} exceeds maximum CFB week ({MAX_CFB_WEEK}). "
+            f"CFB season ends at week 17 (national championship). "
+            f"Did you mean a different week?"
+        )
+
+    # Initialize API client
+    logger.info("Initializing API client...")
+    client = CFBDClient()
+
+    # === DATA FETCHING SECTION ===
+    # Wrap API calls in narrow exception handler for network/availability errors.
+    # Programming errors (TypeError, KeyError, etc.) propagate naturally.
     try:
-        # Initialize API client
-        logger.info("Initializing API client...")
-        client = CFBDClient()
-
-        # P0: Fail fast for invalid weeks (prevents infinite wait loop)
-        # CFB season: weeks 0-15 regular, 16-17 postseason (bowls + CFP)
-        MAX_CFB_WEEK = 18  # Week 17 is national championship, week 18+ doesn't exist
-        if week > MAX_CFB_WEEK:
-            raise ValueError(
-                f"Week {week} exceeds maximum CFB week ({MAX_CFB_WEEK}). "
-                f"CFB season ends at week 17 (national championship). "
-                f"Did you mean a different week?"
-            )
-
         # Wait for data if requested
         if wait_for_data:
             logger.info(f"Checking data availability for {year} week {week}...")
@@ -619,6 +642,9 @@ def run_predictions(
         logger.info("Fetching FBS teams...")
         fbs_teams_list = client.get_fbs_teams(year)
         fbs_teams = {t.school for t in fbs_teams_list}
+
+        if not fbs_teams:
+            raise ValueError(f"No FBS teams returned for {year}. Check API key and year.")
         logger.info(f"Loaded {len(fbs_teams)} FBS teams")
 
         # Fetch current season data
@@ -639,12 +665,19 @@ def run_predictions(
 
         # Fetch play-by-play data for EFM
         logger.info("Fetching play-by-play data for efficiency model...")
-        plays_df = _fetch_plays(client, year, week, use_delta_cache)
-        # Filter to FBS-only plays (matches backtest.py:640-644 pattern)
-        pre_filter = len(plays_df)
-        plays_df = plays_df[
-            plays_df["offense"].isin(fbs_teams) & plays_df["defense"].isin(fbs_teams)
-        ]
+        plays_pl = _fetch_plays(client, year, week, use_delta_cache)
+        # Filter to FBS-only plays in Polars (more efficient than Pandas)
+        # then convert to Pandas for sklearn compatibility
+        pre_filter = plays_pl.height
+        fbs_teams_list = list(fbs_teams)  # Convert set to list for Polars is_in()
+        plays_df = (
+            plays_pl
+            .filter(
+                pl.col("offense").is_in(fbs_teams_list)
+                & pl.col("defense").is_in(fbs_teams_list)
+            )
+            .to_pandas()
+        )
         logger.info(
             f"Loaded {len(plays_df)} FBS plays for EFM training "
             f"({pre_filter - len(plays_df)} FCS plays excluded)"
@@ -674,6 +707,11 @@ def run_predictions(
         hfa.calculate_all_team_hfa(combined_for_hfa, team_ratings)
 
         # Special teams (simplified without detailed data)
+        # TODO: Refactor SpecialTeamsModel/FinishingDrivesModel to accept all teams
+        # at once and do a single grouped pass over current_games_df instead of
+        # N full scans. For 130+ FBS teams this is ~130x redundant DataFrame iteration.
+        # Note: Batch methods exist for play-by-play data (calculate_all_st_ratings_from_plays,
+        # calculate_all_from_plays) but not for game stats.
         logger.info("Calculating special teams ratings...")
         special_teams = SpecialTeamsModel()
         for team in team_ratings.keys():
@@ -735,169 +773,171 @@ def run_predictions(
             logger.warning(f"Could not load historical rankings: {e}")
             historical_rankings = None
 
-        # Generate predictions
-        logger.info(f"Generating predictions for {len(upcoming_games)} games...")
-        predictions = spread_gen.predict_week(
-            games=upcoming_games,
-            week=week,
-            schedule_df=schedule_df,
-            rankings=None,  # Current rankings (could also fetch AP/CFP here)
-            historical_rankings=historical_rankings,
+    except (DataNotAvailableError, APIRateLimitError, requests.RequestException) as e:
+        # Handle data availability and network errors gracefully
+        logger.error(f"Data fetching failed: {e}")
+        if notifier:
+            notifier.notify_failure(f"Data fetching failed: {e}", year, week)
+        return {"success": False, "error": str(e)}
+
+    # === MODEL FITTING AND PREDICTION SECTION ===
+    # No broad exception handling here - programming errors (TypeError, KeyError, etc.)
+    # should propagate naturally so they surface as real bugs.
+
+    # Generate predictions
+    logger.info(f"Generating predictions for {len(upcoming_games)} games...")
+    predictions = spread_gen.predict_week(
+        games=upcoming_games,
+        week=week,
+        schedule_df=schedule_df,
+        rankings=None,  # Current rankings (could also fetch AP/CFP here)
+        historical_rankings=historical_rankings,
+    )
+
+    # Store fixed spreads before any LSA modification (for dual-spread mode)
+    fixed_spreads = {pred.game_id: pred.spread for pred in predictions}
+
+    # Dual-spread mode: compute BOTH fixed and LSA spreads
+    lsa_spreads = {}
+    lsa_adjustments = []  # Track adjustments for proper logging
+    if dual_spread or use_learned_situ:
+        lsa_coefficients = load_lsa_coefficients(year)
+        if lsa_coefficients:
+            logger.info(f"Computing LSA adjustments for {len(predictions)} predictions...")
+            for pred in predictions:
+                # Compute LSA adjustment
+                lsa_adj = apply_lsa_adjustment(
+                    prediction=pred,
+                    lsa_coefficients=lsa_coefficients,
+                    situational=situational,
+                    schedule_df=schedule_df,
+                    rankings=None,
+                    historical_rankings=historical_rankings,
+                    week=week,
+                )
+                lsa_adjustments.append(lsa_adj)
+
+                # Calculate LSA spread: replace fixed situational with learned
+                fixed_situ = pred.components.situational
+                lsa_spread = pred.spread - fixed_situ + lsa_adj
+                lsa_spreads[pred.game_id] = lsa_spread
+
+                # If use_learned_situ (not dual), apply LSA to prediction
+                if use_learned_situ and not dual_spread:
+                    pred.spread = lsa_spread
+                    pred.components.situational = lsa_adj
+
+            # Log mean of actual LSA adjustments (not mean of final spreads)
+            mean_lsa = sum(lsa_adjustments) / len(lsa_adjustments) if lsa_adjustments else 0.0
+            if use_learned_situ and not dual_spread:
+                logger.info(f"LSA adjustments applied (mean adjustment: {mean_lsa:+.2f} pts)")
+            else:
+                logger.info(f"LSA spreads computed for dual-spread mode (mean adjustment: {mean_lsa:+.2f} pts)")
+        else:
+            logger.warning("LSA coefficients not found - using fixed situational only")
+            # Fill lsa_spreads with fixed values as fallback
+            lsa_spreads = fixed_spreads.copy()
+
+    predictions_df = spread_gen.predictions_to_dataframe(predictions)
+
+    # Add dual-spread columns if enabled
+    if dual_spread:
+        from datetime import datetime, timedelta
+
+        # Add fixed and LSA spread columns
+        predictions_df['jp_spread_fixed'] = predictions_df['game_id'].map(fixed_spreads)
+        predictions_df['jp_spread_lsa'] = predictions_df['game_id'].map(lsa_spreads)
+
+        # Calculate days until game and recommendation
+        today = datetime.now().date()
+        def get_recommendation(row):
+            try:
+                # Parse game date (format: "YYYY-MM-DD" or similar)
+                if 'start_date' in row and pd.notna(row['start_date']):
+                    game_date = pd.to_datetime(row['start_date']).date()
+                    days_until = (game_date - today).days
+                    # Use fixed for opening bets (4+ days out), LSA for closing
+                    if days_until >= lsa_threshold_days:
+                        return 'fixed'
+                    else:
+                        return 'lsa'
+            except Exception:
+                pass
+            return 'fixed'  # Default to fixed if can't determine
+
+        predictions_df['bet_timing_rec'] = predictions_df.apply(get_recommendation, axis=1)
+        predictions_df['jp_spread_recommended'] = predictions_df.apply(
+            lambda row: row['jp_spread_fixed'] if row['bet_timing_rec'] == 'fixed' else row['jp_spread_lsa'],
+            axis=1
         )
 
-        # Store fixed spreads before any LSA modification (for dual-spread mode)
-        fixed_spreads = {pred.game_id: pred.spread for pred in predictions}
+        logger.info(f"Dual-spread mode: {sum(predictions_df['bet_timing_rec'] == 'fixed')} games recommend fixed, "
+                   f"{sum(predictions_df['bet_timing_rec'] == 'lsa')} recommend LSA (threshold: {lsa_threshold_days} days)")
 
-        # Dual-spread mode: compute BOTH fixed and LSA spreads
-        lsa_spreads = {}
-        lsa_adjustments = []  # Track adjustments for proper logging
-        if dual_spread or use_learned_situ:
-            lsa_coefficients = load_lsa_coefficients(year)
-            if lsa_coefficients:
-                logger.info(f"Computing LSA adjustments for {len(predictions)} predictions...")
-                for pred in predictions:
-                    # Compute LSA adjustment
-                    lsa_adj = apply_lsa_adjustment(
-                        prediction=pred,
-                        lsa_coefficients=lsa_coefficients,
-                        situational=situational,
-                        schedule_df=schedule_df,
-                        rankings=None,
-                        historical_rankings=historical_rankings,
-                        week=week,
-                    )
-                    lsa_adjustments.append(lsa_adj)
+    # Vegas comparison
+    logger.info(f"Fetching Vegas lines and comparing (min_edge={min_edge})...")
+    vegas = VegasComparison(client=client, value_threshold=min_edge)
+    vegas.fetch_lines(year, week)
 
-                    # Calculate LSA spread: replace fixed situational with learned
-                    fixed_situ = pred.components.situational
-                    lsa_spread = pred.spread - fixed_situ + lsa_adj
-                    lsa_spreads[pred.game_id] = lsa_spread
+    comparison_df = vegas.generate_comparison_df(predictions)
+    value_plays = vegas.identify_value_plays(predictions)
+    value_plays_df = vegas.value_plays_to_dataframe(value_plays)
 
-                    # If use_learned_situ (not dual), apply LSA to prediction
-                    if use_learned_situ and not dual_spread:
-                        pred.spread = lsa_spread
-                        pred.components.situational = lsa_adj
+    # P3.7: Generate reports (skip with --no-reports for faster testing)
+    excel_path = None
+    html_path = None
 
-                # Log mean of actual LSA adjustments (not mean of final spreads)
-                mean_lsa = sum(lsa_adjustments) / len(lsa_adjustments) if lsa_adjustments else 0.0
-                if use_learned_situ and not dual_spread:
-                    logger.info(f"LSA adjustments applied (mean adjustment: {mean_lsa:+.2f} pts)")
-                else:
-                    logger.info(f"LSA spreads computed for dual-spread mode (mean adjustment: {mean_lsa:+.2f} pts)")
-            else:
-                logger.warning("LSA coefficients not found - using fixed situational only")
-                # Fill lsa_spreads with fixed values as fallback
-                lsa_spreads = fixed_spreads.copy()
+    if generate_reports:
+        logger.info("Generating reports...")
 
-        predictions_df = spread_gen.predictions_to_dataframe(predictions)
+        # Excel report
+        excel_exporter = ExcelExporter()
+        excel_path = excel_exporter.export(
+            predictions_df=comparison_df,
+            value_plays_df=value_plays_df,
+            ratings_df=ratings_df,
+            year=year,
+            week=week,
+        )
 
-        # Add dual-spread columns if enabled
-        if dual_spread:
-            from datetime import datetime, timedelta
+        # HTML report
+        html_reporter = HTMLReporter()
+        html_path = html_reporter.generate(
+            predictions_df=comparison_df,
+            value_plays_df=value_plays_df,
+            ratings_df=ratings_df,
+            year=year,
+            week=week,
+        )
 
-            # Add fixed and LSA spread columns
-            predictions_df['jp_spread_fixed'] = predictions_df['game_id'].map(fixed_spreads)
-            predictions_df['jp_spread_lsa'] = predictions_df['game_id'].map(lsa_spreads)
+        logger.info(f"Excel report: {excel_path}")
+        logger.info(f"HTML report: {html_path}")
+    else:
+        logger.info("Skipping report generation (--no-reports)")
 
-            # Calculate days until game and recommendation
-            today = datetime.now().date()
-            def get_recommendation(row):
-                try:
-                    # Parse game date (format: "YYYY-MM-DD" or similar)
-                    if 'start_date' in row and pd.notna(row['start_date']):
-                        game_date = pd.to_datetime(row['start_date']).date()
-                        days_until = (game_date - today).days
-                        # Use fixed for opening bets (4+ days out), LSA for closing
-                        if days_until >= lsa_threshold_days:
-                            return 'fixed'
-                        else:
-                            return 'lsa'
-                except Exception:
-                    pass
-                return 'fixed'  # Default to fixed if can't determine
+    # Send success notifications
+    if notifier:
+        notifier.notify_success(
+            year=year,
+            week=week,
+            games_predicted=len(predictions),
+            value_plays=len(value_plays),
+            report_path=excel_path,
+        )
 
-            predictions_df['bet_timing_rec'] = predictions_df.apply(get_recommendation, axis=1)
-            predictions_df['jp_spread_recommended'] = predictions_df.apply(
-                lambda row: row['jp_spread_fixed'] if row['bet_timing_rec'] == 'fixed' else row['jp_spread_lsa'],
-                axis=1
-            )
+    logger.info("Prediction run complete!")
+    logger.info(f"Games predicted: {len(predictions)}")
+    logger.info(f"Value plays: {len(value_plays)}")
 
-            logger.info(f"Dual-spread mode: {sum(predictions_df['bet_timing_rec'] == 'fixed')} games recommend fixed, "
-                       f"{sum(predictions_df['bet_timing_rec'] == 'lsa')} recommend LSA (threshold: {lsa_threshold_days} days)")
-
-        # Vegas comparison
-        logger.info(f"Fetching Vegas lines and comparing (min_edge={min_edge})...")
-        vegas = VegasComparison(client=client, value_threshold=min_edge)
-        vegas.fetch_lines(year, week)
-
-        comparison_df = vegas.generate_comparison_df(predictions)
-        value_plays = vegas.identify_value_plays(predictions)
-        value_plays_df = vegas.value_plays_to_dataframe(value_plays)
-
-        # P3.7: Generate reports (skip with --no-reports for faster testing)
-        excel_path = None
-        html_path = None
-
-        if generate_reports:
-            logger.info("Generating reports...")
-
-            # Excel report
-            excel_exporter = ExcelExporter()
-            excel_path = excel_exporter.export(
-                predictions_df=comparison_df,
-                value_plays_df=value_plays_df,
-                ratings_df=ratings_df,
-                year=year,
-                week=week,
-            )
-
-            # HTML report
-            html_reporter = HTMLReporter()
-            html_path = html_reporter.generate(
-                predictions_df=comparison_df,
-                value_plays_df=value_plays_df,
-                ratings_df=ratings_df,
-                year=year,
-                week=week,
-            )
-
-            logger.info(f"Excel report: {excel_path}")
-            logger.info(f"HTML report: {html_path}")
-        else:
-            logger.info("Skipping report generation (--no-reports)")
-
-        # Send success notifications
-        if notifier:
-            notifier.notify_success(
-                year=year,
-                week=week,
-                games_predicted=len(predictions),
-                value_plays=len(value_plays),
-                report_path=excel_path,
-            )
-
-        logger.info("Prediction run complete!")
-        logger.info(f"Games predicted: {len(predictions)}")
-        logger.info(f"Value plays: {len(value_plays)}")
-
-        return {
-            "success": True,
-            "year": year,
-            "week": week,
-            "games_predicted": len(predictions),
-            "value_plays": len(value_plays),
-            "excel_path": str(excel_path) if excel_path else None,
-            "html_path": str(html_path) if html_path else None,
-        }
-
-    except Exception as e:
-        logger.exception(f"Prediction run failed: {e}")
-        if notifier:
-            notifier.notify_failure(str(e), year, week)
-        return {
-            "success": False,
-            "error": str(e),
-        }
+    return {
+        "success": True,
+        "year": year,
+        "week": week,
+        "games_predicted": len(predictions),
+        "value_plays": len(value_plays),
+        "excel_path": str(excel_path) if excel_path else None,
+        "html_path": str(html_path) if html_path else None,
+    }
 
 
 def main():
