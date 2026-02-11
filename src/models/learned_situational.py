@@ -264,8 +264,9 @@ class LearnedSituationalModel:
         self.clamp_max = clamp_max
         self.persist_dir = persist_dir
 
-        # Training data: list of (features_array, residual) tuples
-        self._training_data: list[tuple[np.ndarray, float]] = []
+        # Training data: parallel lists for efficient numpy stacking
+        self._X_train: list[np.ndarray] = []  # Feature rows
+        self._y_train: list[float] = []  # Residuals
 
         # Current learned coefficients (dict[feature_name -> coefficient])
         self._coefficients: Optional[dict[str, float]] = None
@@ -313,11 +314,14 @@ class LearnedSituationalModel:
             prior_training_data: List of (features_array, residual) tuples
         """
         # Prepend prior data, preserving any current-season games already added
-        self._training_data = list(prior_training_data) + self._training_data
+        prior_X = [t[0] for t in prior_training_data]
+        prior_y = [t[1] for t in prior_training_data]
+        self._X_train = prior_X + self._X_train
+        self._y_train = prior_y + self._y_train
         logger.debug(
             "LSA seeded with %d prior games (%d total)",
             len(prior_training_data),
-            len(self._training_data),
+            len(self._X_train),
         )
 
     def add_training_game(
@@ -331,7 +335,8 @@ class LearnedSituationalModel:
             features: Situational feature vector for the game
             residual: actual_margin - base_margin_no_situ
         """
-        self._training_data.append((features.to_array(), residual))
+        self._X_train.append(features.to_array())
+        self._y_train.append(residual)
 
     def train(self, max_week: int) -> Optional[LearnedSituationalCoefficients]:
         """Train ridge regression on accumulated training data.
@@ -347,17 +352,17 @@ class LearnedSituationalModel:
         """
         self._max_week = max_week
 
-        n_games = len(self._training_data)
+        n_games = len(self._X_train)
         if n_games < self.min_games:
             logger.debug(
-                f"LSA: {n_games} games < min {self.min_games}, skipping training"
+                "LSA: %d games < min %d, skipping training", n_games, self.min_games
             )
             self._is_trained = False
             return None
 
-        # Build feature matrix and target vector
-        X = np.array([fd[0] for fd in self._training_data])
-        y = np.array([fd[1] for fd in self._training_data])
+        # Build feature matrix and target vector (efficient stack)
+        X = np.vstack(self._X_train)
+        y = np.array(self._y_train)
 
         # Fit ridge regression
         model = Ridge(alpha=self.ridge_alpha, fit_intercept=True)
@@ -456,12 +461,9 @@ class LearnedSituationalModel:
         if not self._is_trained or self._coefficients is None:
             raise ValueError("LSA model not trained - use is_trained() to check")
 
-        X = features.to_array()
-        adjustment = self._intercept
-        for i, name in enumerate(FEATURE_NAMES):
-            adjustment += self._coefficients[name] * X[i]
-
-        return adjustment
+        x = features.to_array()
+        coef_array = np.array([self._coefficients[name] for name in FEATURE_NAMES])
+        return float(self._intercept + np.dot(coef_array, x))
 
     def is_trained(self) -> bool:
         """Check if model is ready for prediction."""
@@ -472,8 +474,12 @@ class LearnedSituationalModel:
         return dict(self._coefficients) if self._coefficients else None
 
     def get_training_data(self) -> list[tuple[np.ndarray, float]]:
-        """Get accumulated training data (for passing to next season)."""
-        return list(self._training_data)
+        """Get accumulated training data (for passing to next season).
+
+        Returns tuple format for backward compatibility with seed_with_prior_data().
+        Note: Consider using parallel list format (X, y) for new code.
+        """
+        return list(zip(self._X_train, self._y_train))
 
     def _check_sign_flips(self) -> None:
         """Check for coefficient sign flips vs expected and log warnings."""
@@ -521,6 +527,17 @@ def compute_situational_residual(
     The residual is computed by removing the fixed situational adjustment
     from the prediction and comparing to actual margin.
 
+    Sign conventions (all from home perspective):
+        actual_margin = home_points - away_points (positive = home win)
+        predicted_spread = positive means model favors home
+        fixed_situational = positive means situational favored home
+
+    The residual captures what the base model (without situational) missed:
+        residual = actual_margin - (predicted_spread - fixed_situational)
+
+    If residual is positive, the actual margin exceeded the base prediction,
+    suggesting situational factors helped the home team more than expected.
+
     Args:
         actual_margin: Actual home margin (home_points - away_points)
         predicted_spread: Full predicted spread including situational
@@ -529,6 +546,5 @@ def compute_situational_residual(
     Returns:
         Residual = actual_margin - base_margin_no_situ
     """
-    # base_margin_no_situ = predicted_spread - fixed_situational
     base_margin_no_situ = predicted_spread - fixed_situational
     return actual_margin - base_margin_no_situ
