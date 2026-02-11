@@ -201,7 +201,7 @@ For ongoing seasons, opening and closing lines are captured from [The Odds API](
 - **Provider priority**: FanDuel (posts first), DraftKings, BetMGM, Caesars, Bovada
 
 **Capture scripts:**
-- `scripts/weekly_odds_capture.py --opening` (run Sunday ~6 PM ET)
+- `scripts/weekly_odds_capture.py --opening` (run Sunday ~8 AM ET)
 - `scripts/weekly_odds_capture.py --closing` (run Saturday ~9 AM ET)
 
 **Data storage:** SQLite database at `data/odds_api_lines.db`
@@ -487,7 +487,7 @@ Teams playing their second consecutive road game receive a -1.5 pt penalty. Trav
 
 The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
 
-**Sandwich Spot:** The most dangerous scheduling spot in CFB. When a team is coming off a massive emotional win (letdown) AND has a massive game on deck next week (lookahead), the unranked team in the middle is the "meat" of the sandwich. Analysis showed sandwich teams cover only **36.4% ATS** (4/11 games). Total penalty: -4.5 to -5.0 pts.
+**Sandwich Spot:** The most dangerous scheduling spot in CFB. When a team is coming off a massive emotional win (letdown) AND has a massive game on deck next week (lookahead), the unranked team in the middle is the "meat" of the sandwich. This is a rare spot (requires BOTH conditions simultaneously), with initial analysis showing sandwich teams cover ~36% ATS. Total penalty: -4.5 to -5.0 pts. *Note: Small sample size due to rarity of both conditions triggering together.*
 
 **Historical Rankings:** Letdown detection uses **ranking at time of game**, not current ranking. JP+ fetches AP poll week-by-week from CFBD `/rankings` endpoint. Example: If Oregon beat #2 Ohio State in Week 7 (who later dropped to #20), Week 8 still shows letdown spot.
 
@@ -869,7 +869,7 @@ Pedigree scores are calculated from historical coaching records:
 |----------|--------|------|-----|----------|--------------|----------|
 | Florida 2025 (Sumrall) | #8 | #45 | 37 | 1.25 | 60/40 → 30/70 | +2 to +4 pts |
 | Indiana 2024 (Cignetti) | #50 | #85 | 35 | 1.25 | 60/40 → 30/70 | +2 to +4 pts |
-| LSU 2025 (Kiffin) | #6 | #15 | 9 | 1.30 | 60/40 → 48/52 | +0.5 pts |
+| LSU 2026 (Kiffin) | #6 | #15 | 9 | 1.30 | 60/40 → 48/52 | +0.5 pts |
 | Alabama 2024 (DeBoer) | #3 | #5 | 2 | 1.30 | No change | 0 pts |
 
 **Key insight:** First-time HCs (like Brent Key at Georgia Tech, Deion Sanders at Colorado) are **excluded entirely** from the adjustment. We have no basis to predict they'll improve the program, so they receive no boost. The model won't predict their breakout, but it also won't penalize the program.
