@@ -519,11 +519,11 @@ penalty = clamp(intercept + slope * shrunk_margin, min_pen, max_pen)
 | max_pen | 40.0 | Ceiling for weak FCS |
 
 **Example Penalties:**
-| FCS Margin | Games | Penalty | Example Teams |
-|------------|-------|---------|---------------|
-| -10 | 8+ | ~25 pts | Strong FCS (NDSU, Montana State) |
-| -28 | Any | ~34 pts | Average FCS (baseline) |
-| -40+ | Any | 40 pts | Weak FCS (capped) |
+| Avg Loss to FBS | Games Observed | FBS Spread Bonus | Example Teams |
+|-----------------|----------------|------------------|---------------|
+| 10 pts | 8+ | +25 pts | Strong FCS (NDSU, Montana State) |
+| 28 pts | Any | +34 pts | Average FCS (baseline) |
+| 40+ pts | Any | +40 pts | Weak FCS (capped) |
 
 **Walk-Forward Safety:** Estimator only uses games from weeks < current prediction week. No data leakage.
 
