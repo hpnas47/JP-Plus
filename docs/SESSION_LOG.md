@@ -4833,3 +4833,77 @@ python scripts/weekly_odds_capture.py --closing
 ---
 
 *End of session*
+
+---
+
+## Session: February 11, 2026 (Late Evening)
+
+### Theme: QB Continuous Bug Fixes + Production Script Hardening
+
+---
+
+#### QB Continuous Module Fixes — COMMITTED
+**Status**: Committed (`a127e3d`)
+**Files**: `src/adjustments/qb_continuous.py`
+
+Fixed 5 issues in the QB continuous rating system:
+
+1. **_get_manual_adjustment formula fix**: The backup drop-off calculation incorrectly added starter quality, which meant losing a bad starter appeared beneficial. Changed to pure starter-to-backup drop-off (`-min(qb_cap, backup_drop)`) independent of starter absolute quality.
+
+2. **Shrinkage basis mismatch fix**: `_compute_team_avg_qb_value` used only current season dropbacks for shrinkage, but `_compute_qb_quality` used n_effective_db (current + prior × decay). This caused residuals to not cancel properly for stable starters. Fixed by incorporating prior season data in team average calculation.
+
+3. **Baking factor off-by-one fix**: Week 1 was stuck at 0.0 baking factor because condition was `<= BAKING_WEEK_START` with BAKING_WEEK_START=1. Changed to `< BAKING_WEEK_START` so week 1 begins ramping.
+
+4. **Removed qb_points_effective field**: This field was computed but never used in the actual spread adjustment path (get_adjustment uses qb_points with its own dampening). Removed from dataclass and all references to eliminate confusion.
+
+5. **Walk-forward safety guard**: Added check in `_load_prior_season` to verify `prior_year < self.year` before fetching, preventing data leakage if module is misconfigured.
+
+---
+
+#### Production Script Fixes — COMMITTED
+**Status**: Committed (`b9fab34`)
+**Files**: `scripts/run_weekly.py`, `scripts/qb_calibration.py`
+
+**run_weekly.py (4 fixes):**
+
+1. **Week 1 QB initialization bug**: `build_qb_data(through_week=0)` triggered early return before `_load_prior_season` was called, leaving week 1 with zero QB adjustment. Fixed with `max(1, week - 1)`.
+
+2. **Vegas spread sign convention documentation**: Added comprehensive comment block explaining:
+   - jp_spread: Positive (+) = home team favored
+   - vegas_spread: Negative (-) = home team favored
+   - edge = (-jp_spread) - vegas_spread
+   - Added debug log line for convention verification in production.
+
+3. **rankings=None behavior documentation**: Explained that current-week AP/CFP poll rankings are not fetched, disabling letdown/lookahead detection. **Critical note**: LSA coefficients were trained with this same behavior—if future version fetches rankings, LSA must be retrained.
+
+4. **Legacy LSA path safety**: Added log line for legacy mode (`"LSA applied directly to N predictions (legacy mode)"`) and documented the two LSA application modes (legacy vs edge-aware).
+
+**qb_calibration.py (4 fixes):**
+
+1. **Removed qb_points_effective references**: Field was removed from QBQuality; updated section 6 to analyze qb_points only.
+
+2. **Week 1 build_qb_data bug**: Same fix as run_weekly.py—`max(1, pred_week - 1)`.
+
+3. **Dummy "Opponent" team pollution**: Changed from `get_adjustment(team, "Opponent")` to `_compute_qb_quality(team)` directly, preventing thousands of junk entries in calibration DataFrame.
+
+4. **API rate limiting**: Added 2-second delay between years to prevent hitting CFBD limits on multi-year calibration runs.
+
+---
+
+#### Summary of QB Continuous State
+
+The QB Continuous system is now fully hardened:
+- Walk-forward safe with temporal guards
+- Prior season data loads correctly for week 1
+- Residual adjustment logic uses consistent shrinkage basis
+- Calibration script produces clean data without dummy entries
+- Production script has clear sign convention documentation
+
+**Production Defaults (2026):**
+- `--qb-continuous --qb-phase1-only` enabled by default
+- Phase 1 (weeks 1-3): QB adjustment applied (+0.6% 5+ Edge improvement)
+- Phase 2 (weeks 4-15): QB adjustment disabled (avoids double-counting with EFM)
+
+---
+
+*End of session*
