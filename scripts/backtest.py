@@ -2116,6 +2116,10 @@ def _process_single_season(
     use_opening_line: bool,
     hfa_global_offset: float = 0.0,
     ooc_credibility_weight: float = 0.0,
+    st_shrink_enabled: bool = False,
+    st_k_fg: float = 6.0,
+    st_k_punt: float = 6.0,
+    st_k_ko: float = 6.0,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2130,6 +2134,14 @@ def _process_single_season(
 
     # Each worker starts with a fresh ridge cache
     clear_ridge_cache()
+
+    # Configure ST shrinkage settings for this worker process
+    # Each spawned worker has its own settings singleton instance
+    settings = get_settings()
+    settings.st_shrink_enabled = st_shrink_enabled
+    settings.st_k_fg = st_k_fg
+    settings.st_k_punt = st_k_punt
+    settings.st_k_ko = st_k_ko
 
     # Extract fields from SeasonData (named access prevents positional bugs)
     games_df = season_data.games_df
@@ -2204,6 +2216,10 @@ def run_backtest(
     force_refresh: bool = False,
     hfa_global_offset: float = 0.0,
     ooc_credibility_weight: float = 0.0,
+    st_shrink_enabled: bool = False,
+    st_k_fg: float = 6.0,
+    st_k_punt: float = 6.0,
+    st_k_ko: float = 6.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2229,6 +2245,10 @@ def run_backtest(
         use_season_cache: Whether to use disk cache for season data (default True)
         force_refresh: If True, bypass all caches and force fresh API calls (default False)
         hfa_global_offset: Points subtracted from ALL HFA values (for sweep testing). Default 0.0.
+        st_shrink_enabled: Whether to apply Empirical Bayes shrinkage to ST ratings (default True)
+        st_k_fg: Shrinkage k for FG component (attempts needed to trust rating fully). Default 20.0.
+        st_k_punt: Shrinkage k for punt component. Default 15.0.
+        st_k_ko: Shrinkage k for kickoff component. Default 15.0.
 
     Returns:
         Dictionary with backtest results
@@ -2300,6 +2320,10 @@ def run_backtest(
         use_opening_line=use_opening_line,
         hfa_global_offset=hfa_global_offset,
         ooc_credibility_weight=ooc_credibility_weight,
+        st_shrink_enabled=st_shrink_enabled,
+        st_k_fg=st_k_fg,
+        st_k_punt=st_k_punt,
+        st_k_ko=st_k_ko,
     )
 
     if len(years) > 1:
@@ -2754,6 +2778,30 @@ def main():
         action="store_true",
         help="Use opening lines for ATS calculation instead of closing lines",
     )
+    # ST Shrinkage parameters (REJECTED: disabled by default, infrastructure preserved)
+    parser.add_argument(
+        "--st-shrink",
+        action="store_true",
+        help="Enable ST Empirical Bayes shrinkage (REJECTED: degrades ATS, disabled by default)",
+    )
+    parser.add_argument(
+        "--st-k-fg",
+        type=float,
+        default=6.0,
+        help="ST shrinkage k for FG (attempts needed to trust rating fully). Default: 6.0",
+    )
+    parser.add_argument(
+        "--st-k-punt",
+        type=float,
+        default=6.0,
+        help="ST shrinkage k for punt (punts needed to trust rating fully). Default: 6.0",
+    )
+    parser.add_argument(
+        "--st-k-ko",
+        type=float,
+        default=6.0,
+        help="ST shrinkage k for kickoff (events needed to trust rating fully). Default: 6.0",
+    )
     parser.add_argument(
         "--no-diagnostics",
         action="store_true",
@@ -2822,6 +2870,8 @@ def main():
     print(f"  EFM weights:        SR={args.efficiency_weight}, IsoPPP={args.explosiveness_weight}, TO={args.turnover_weight}")
     print(f"  Asymmetric GT:      {not args.no_asymmetric_garbage}")
     print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
+    st_shrink_status = f"enabled (k_fg={args.st_k_fg}, k_punt={args.st_k_punt}, k_ko={args.st_k_ko})" if args.st_shrink else "disabled (default)"
+    print(f"  ST shrinkage:       {st_shrink_status}")
     print("=" * 60 + "\n")
 
     results = run_backtest(
@@ -2844,6 +2894,10 @@ def main():
         season_data=season_data,  # Use pre-fetched data
         hfa_global_offset=args.hfa_offset,
         ooc_credibility_weight=args.ooc_cred_weight,
+        st_shrink_enabled=args.st_shrink,
+        st_k_fg=args.st_k_fg,
+        st_k_punt=args.st_k_punt,
+        st_k_ko=args.st_k_ko,
     )
 
     # P3.4: Print results with ATS data for sanity report

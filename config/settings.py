@@ -54,6 +54,17 @@ class Settings:
     # Travel Adjustment
     timezone_adjustment: float = 0.5  # points per timezone crossed
 
+    # Special Teams Shrinkage (Empirical Bayes toward league average)
+    # REJECTED (2026-02-10): All k values tested degraded ATS despite slight MAE improvement.
+    # k=6-8 maintained 5+ Edge but degraded 3+ Edge and All games. Per "Edge > Accuracy" rule, disabled.
+    # Infrastructure preserved for future experimentation via CLI --st-k-fg/--st-k-punt/--st-k-ko.
+    st_shrink_enabled: bool = False  # Master toggle for ST shrinkage (DISABLED)
+    # Opportunity-based k-parameters (shrink = n / (n + k))
+    # Higher k = more shrinkage; lower k = less shrinkage
+    st_k_fg: float = 6.0  # FG attempts needed to trust rating fully
+    st_k_punt: float = 6.0  # Punts needed to trust rating fully
+    st_k_ko: float = 6.0  # Kickoff events needed to trust rating fully
+
     # Vegas Comparison
     value_threshold: float = field(
         default_factory=lambda: float(os.getenv("VALUE_THRESHOLD", "3.0"))

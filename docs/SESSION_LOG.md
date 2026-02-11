@@ -4,6 +4,47 @@
 
 ---
 
+## Session: February 10, 2026 (Evening)
+
+### Theme: ST Empirical Bayes Shrinkage + Bug Fixes
+
+---
+
+#### ST Empirical Bayes Shrinkage — REJECTED
+**Status**: Infrastructure committed, feature disabled by default
+
+Implemented opportunity-based Empirical Bayes shrinkage for Special Teams ratings:
+- Formula: `shrunk = raw * (n / (n + k))` where n = opportunities, k = trust threshold
+- Tracks FG attempts, punts, and kickoff events per team
+- CLI args: `--st-shrink`, `--st-k-fg`, `--st-k-punt`, `--st-k-ko`
+
+**9-value k sweep results** (Core weeks 4-15):
+| k | 5+ Edge | vs Baseline |
+|---|---------|-------------|
+| No shrink | 53.7% (502-433) | — |
+| k=4 | 53.6% (490-425) | -0.1% |
+| k=6 | 53.7% (490-422) | 0% |
+| k=8 | 53.7% (484-418) | 0% |
+| k=10+ | 53.2-53.4% | -0.3 to -0.5% |
+
+**Rejection reason**: While k=6-8 maintain 5+ Edge, they degrade 3+ Edge (53.3% → 52.6%) and All games (52.0% → 51.5%). Shrinkage compresses spreads toward zero, reducing disagreement with Vegas — the opposite of what we want.
+
+**Failure mode**: Spread compression — pulling extreme values toward mean kills edge.
+
+**Infrastructure preserved**: `--st-shrink` flag enables for future experimentation. Default k=6 if enabled.
+
+---
+
+#### Bug Fixes — COMMITTED (earlier in session)
+
+1. **Pace adjustment ordering**: FCS penalty now applied after pace compression
+2. **Venue smoothing**: Soft cap applied to venue stack only, not full environmental stack
+3. **Priors weight sum**: Week 0 branch now uses `1.0 - effective_talent_weight` (was 0.95)
+4. **Rating dtype**: `rating` column moved to FLOAT32 (was incorrectly INT16)
+5. **Pick'em lines**: betting_lines.py uses `x if x is not None else y` instead of `x or y`
+
+---
+
 ## Session: February 10, 2026
 
 ### Theme: Weather Capture Infrastructure + Totals Backtest Export + Week Detection Fix

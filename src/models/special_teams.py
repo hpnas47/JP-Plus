@@ -8,6 +8,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from config.settings import get_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,6 +21,9 @@ class SpecialTeamsRating:
     contribution per game compared to a league-average unit.
 
     Positive = gains points vs average, Negative = costs points vs average.
+
+    Shrinkage: When enabled, components are shrunk toward 0 (league average)
+    based on sample size using Empirical Bayes: shrunk = raw * (n / (n + k))
     """
 
     team: str
@@ -27,6 +32,25 @@ class SpecialTeamsRating:
     kickoff_rating: float  # Kickoff coverage + return value in points per game
     overall_rating: float  # Total ST marginal contribution (sum of components)
     is_complete: bool = False  # P2.3: True only when all 3 components are populated
+
+    # Raw (unshrunk) values for diagnostics
+    raw_fg_rating: float = 0.0
+    raw_punt_rating: float = 0.0
+    raw_kickoff_rating: float = 0.0
+    raw_overall_rating: float = 0.0
+
+    # Opportunity counts (for shrinkage calculation)
+    n_fg_attempts: int = 0  # FG attempts
+    n_punts: int = 0  # Punt attempts
+    n_kickoff_events: int = 0  # Total kickoff events (coverage + returns)
+
+    # Shrinkage factors (n / (n + k)), range [0, 1]
+    shrink_fg: float = 1.0
+    shrink_punt: float = 1.0
+    shrink_ko: float = 1.0
+
+    # Whether shrinkage was applied
+    shrinkage_applied: bool = False
 
 
 class SpecialTeamsModel:
@@ -68,6 +92,8 @@ class SpecialTeamsModel:
     def __init__(self) -> None:
         """Initialize the special teams model."""
         self.team_ratings: dict[str, SpecialTeamsRating] = {}
+        # Track opportunities per team per component (for shrinkage calculation)
+        self._opportunities: dict[str, dict[str, int]] = {}  # team -> {fg: n, punt: n, ko: n}
 
     def calculate_from_game_stats(
         self,
@@ -328,6 +354,7 @@ class SpecialTeamsModel:
         # P2.3: is_complete=False — callers should use calculate_all_st_ratings_from_plays()
         for team in team_fg.index:
             per_game_rating = team_fg.loc[team, "per_game_rating"]
+            n_attempts = int(team_fg.loc[team, "attempts"])
             self.team_ratings[team] = SpecialTeamsRating(
                 team=team,
                 field_goal_rating=per_game_rating,
@@ -336,6 +363,10 @@ class SpecialTeamsModel:
                 overall_rating=per_game_rating,  # FG-only
                 is_complete=False,
             )
+            # Track FG opportunities for shrinkage
+            if team not in self._opportunities:
+                self._opportunities[team] = {"fg": 0, "punt": 0, "ko": 0}
+            self._opportunities[team]["fg"] = n_attempts
 
         # P3.9: Debug level for per-week logging
         logger.debug(
@@ -499,6 +530,13 @@ class SpecialTeamsModel:
 
         # Vectorized per-game rating calculation
         team_punts["per_game_rating"] = team_punts["total_value"] / team_punts["estimated_games"]
+
+        # Track punt opportunities for shrinkage
+        for team in team_punts.index:
+            n_punts = int(team_punts.loc[team, "punt_count"])
+            if team not in self._opportunities:
+                self._opportunities[team] = {"fg": 0, "punt": 0, "ko": 0}
+            self._opportunities[team]["punt"] = n_punts
 
         # Convert to dict (dictionary comprehension ~10x faster than iterrows)
         punt_ratings = team_punts["per_game_rating"].to_dict()
@@ -691,6 +729,14 @@ class SpecialTeamsModel:
         else:
             return_ratings = {}
 
+        # Track kickoff opportunities for shrinkage
+        # Coverage side: total_kicks per kicking team (offense)
+        # Return side: return_count per returning team (defense)
+        coverage_opps = coverage_agg["total_kicks"].to_dict() if "total_kicks" in coverage_agg.columns else {}
+        return_opps = {}
+        if not non_tb_plays.empty and "return_count" in return_agg.columns:
+            return_opps = return_agg["return_count"].to_dict()
+
         # Combine coverage and return ratings
         # DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(set(coverage_ratings.keys()) | set(return_ratings.keys()))
@@ -699,6 +745,14 @@ class SpecialTeamsModel:
             coverage = coverage_ratings.get(team, 0.0)
             returns = return_ratings.get(team, 0.0)
             kickoff_ratings[team] = coverage + returns
+
+            # Track kickoff opportunities (coverage events + return events)
+            n_coverage = int(coverage_opps.get(team, 0))
+            n_returns = int(return_opps.get(team, 0))
+            n_ko_events = n_coverage + n_returns
+            if team not in self._opportunities:
+                self._opportunities[team] = {"fg": 0, "punt": 0, "ko": 0}
+            self._opportunities[team]["ko"] = n_ko_events
 
         # P3.9: Debug level for per-week logging
         logger.debug(
@@ -731,6 +785,9 @@ class SpecialTeamsModel:
         if plays_df.empty:
             logger.warning("Empty plays dataframe, skipping all ST rating calculations")
             return
+
+        # Clear opportunities from prior calls (handles multiple seasons in backtest)
+        self._opportunities.clear()
 
         # DATA LEAKAGE GUARD: Verify no future weeks in training data
         if max_week is not None and "week" in plays_df.columns:
@@ -776,14 +833,44 @@ class SpecialTeamsModel:
         # DETERMINISM: Sort for consistent iteration order
         all_teams = sorted(set(fg_ratings.keys()) | set(punt_ratings.keys()) | set(kickoff_ratings.keys()))
 
+        # Get shrinkage settings
+        settings = get_settings()
+        shrink_enabled = settings.st_shrink_enabled
+        k_fg = settings.st_k_fg
+        k_punt = settings.st_k_punt
+        k_ko = settings.st_k_ko
+
         for team in all_teams:
             fg_rating = fg_ratings.get(team, 0.0)
             punt_rating = punt_ratings.get(team, 0.0)
             kick_rating = kickoff_ratings.get(team, 0.0)
 
-            # Overall: sum of all components (all already in POINTS per game)
-            # Each component is a marginal point contribution vs average
-            overall = fg_rating + punt_rating + kick_rating
+            # Raw overall: sum of all components (all already in POINTS per game)
+            raw_overall = fg_rating + punt_rating + kick_rating
+
+            # Get opportunities for this team
+            opps = self._opportunities.get(team, {"fg": 0, "punt": 0, "ko": 0})
+            n_fg = opps.get("fg", 0)
+            n_punt = opps.get("punt", 0)
+            n_ko = opps.get("ko", 0)
+
+            # Calculate shrinkage factors (n / (n + k))
+            # Range [0, 1]: 0 = fully shrunk to 0, 1 = no shrinkage
+            sh_fg = n_fg / (n_fg + k_fg) if (n_fg + k_fg) > 0 else 0.0
+            sh_punt = n_punt / (n_punt + k_punt) if (n_punt + k_punt) > 0 else 0.0
+            sh_ko = n_ko / (n_ko + k_ko) if (n_ko + k_ko) > 0 else 0.0
+
+            # Apply shrinkage if enabled
+            if shrink_enabled:
+                fg_shrunk = fg_rating * sh_fg
+                punt_shrunk = punt_rating * sh_punt
+                kick_shrunk = kick_rating * sh_ko
+                overall = fg_shrunk + punt_shrunk + kick_shrunk
+            else:
+                fg_shrunk = fg_rating
+                punt_shrunk = punt_rating
+                kick_shrunk = kick_rating
+                overall = raw_overall
 
             # is_complete only if team has data in ALL three component dicts
             # (not just defaulting to 0.0 for missing components)
@@ -793,15 +880,42 @@ class SpecialTeamsModel:
 
             self.team_ratings[team] = SpecialTeamsRating(
                 team=team,
-                field_goal_rating=fg_rating,
-                punt_rating=punt_rating,
-                kickoff_rating=kick_rating,
+                # Shrunk values (used for predictions)
+                field_goal_rating=fg_shrunk,
+                punt_rating=punt_shrunk,
+                kickoff_rating=kick_shrunk,
                 overall_rating=overall,
                 is_complete=has_all_components,
+                # Raw values (for diagnostics)
+                raw_fg_rating=fg_rating,
+                raw_punt_rating=punt_rating,
+                raw_kickoff_rating=kick_rating,
+                raw_overall_rating=raw_overall,
+                # Opportunity counts
+                n_fg_attempts=n_fg,
+                n_punts=n_punt,
+                n_kickoff_events=n_ko,
+                # Shrinkage factors
+                shrink_fg=sh_fg,
+                shrink_punt=sh_punt,
+                shrink_ko=sh_ko,
+                shrinkage_applied=shrink_enabled,
             )
 
         # P3.9: Debug level for per-week logging
-        logger.debug(
-            f"Calculated complete ST ratings for {len(self.team_ratings)} teams "
-            f"(FG: {len(fg_ratings)}, Punt: {len(punt_ratings)}, Kickoff: {len(kickoff_ratings)})"
-        )
+        if shrink_enabled:
+            # Log shrinkage impact
+            raw_stds = [r.raw_overall_rating for r in self.team_ratings.values()]
+            shrunk_stds = [r.overall_rating for r in self.team_ratings.values()]
+            raw_std = np.std(raw_stds) if raw_stds else 0.0
+            shrunk_std = np.std(shrunk_stds) if shrunk_stds else 0.0
+            logger.debug(
+                f"Calculated complete ST ratings for {len(self.team_ratings)} teams "
+                f"(FG: {len(fg_ratings)}, Punt: {len(punt_ratings)}, Kickoff: {len(kickoff_ratings)}) "
+                f"| Shrinkage: raw_std={raw_std:.3f} -> shrunk_std={shrunk_std:.3f}"
+            )
+        else:
+            logger.debug(
+                f"Calculated complete ST ratings for {len(self.team_ratings)} teams "
+                f"(FG: {len(fg_ratings)}, Punt: {len(punt_ratings)}, Kickoff: {len(kickoff_ratings)})"
+            )
