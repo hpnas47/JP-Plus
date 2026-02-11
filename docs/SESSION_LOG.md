@@ -4,6 +4,64 @@
 
 ---
 
+## Session: February 11, 2026 (Afternoon)
+
+### Theme: Edge-Aware LSA Default + Dual-Cap Infrastructure
+
+---
+
+#### Edge-Aware LSA Mode — NOW DEFAULT — COMMITTED
+**Status**: Committed (`b337c1a`)
+**Files**: `scripts/run_weekly.py`, `CLAUDE.md`
+
+Made edge-aware LSA the default behavior for 2026 production. No flags needed.
+
+**Automatic Mode Selection:**
+| Timing | Edge | Mode | ATS |
+|--------|------|------|-----|
+| Opening (4+ days) | Any | Fixed | 56.5% (5+) |
+| Closing (<4 days) | 5+ pts | LSA | 55.1% |
+| Closing (<4 days) | 3-5 pts | Fixed | 52.9% |
+
+**CLI Changes:**
+- `--no-lsa` flag added to disable edge-aware mode
+- `--learned-situ` and `--dual-spread` kept as legacy (now no-ops, behavior is default)
+
+**Usage:** Just run `python scripts/run_weekly.py` — engine handles timing/edge logic automatically.
+
+---
+
+#### Dual-Cap Mode Infrastructure — TESTED, NO IMPROVEMENT — COMMITTED
+**Status**: Committed (`b337c1a`)
+**Files**: `scripts/backtest.py`, `src/predictions/spread_generator.py`, `src/adjustments/home_field.py`
+
+Built infrastructure to test per-timing ST cap and HFA offset parameters.
+
+**Hypothesis:** Different ST caps might be optimal for open vs close line evaluation.
+
+**Implementation:**
+- Added `special_teams_raw` and `home_field_raw` fields to SpreadComponents
+- Added `skip_offset` parameter to HomeFieldAdvantage.get_hfa()
+- Added `assemble_spread_vectorized()` for efficient spread reassembly
+- Added `--dual-cap-mode`, `--sweep-dual-st-cap` CLI flags
+
+**LOO-CV Sweep Results (2022-2025, Core weeks 4-15):**
+| Timing | Aggregate 5+ Edge | Best Cap | Stability |
+|--------|-------------------|----------|-----------|
+| Open | 56.5% | 2.0 | Unstable (varies 2.0/none by year) |
+| Close | 54.3% | 1.5 | Unstable (varies 1.5/2.5 by year) |
+
+**Conclusion:** No stable improvement over single-cap baseline (57.0% open, 54.5% close). Year-to-year variance indicates noise, not signal. Infrastructure preserved for future testing but not recommended for production.
+
+---
+
+#### CLAUDE.md Baseline Update — COMMITTED
+**Status**: Committed (`b337c1a`)
+
+Updated with edge-aware production mode documentation and current validated metrics.
+
+---
+
 ## Session: February 11, 2026 (Morning-2)
 
 ### Theme: Bug Fixes & Documentation

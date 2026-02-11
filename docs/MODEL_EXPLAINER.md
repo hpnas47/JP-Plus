@@ -59,52 +59,47 @@ JP+ applies game-specific adjustments for factors that affect the spread beyond 
 
 All adjustments pass through a smoothing layer to prevent over-prediction when multiple factors stack.
 
-### Learned Situational Adjustment (LSA) — High-Confidence Filter
+### Edge-Aware Production Mode (DEFAULT in 2026)
 
-**Optional enhancement** (`--learned-situ` flag) that replaces fixed situational constants with coefficients learned via walk-forward ridge regression on prediction residuals.
+The prediction engine automatically selects Fixed or LSA situational adjustments based on **timing and edge size**. No flags needed — this is the default behavior.
 
-| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) | Use Case |
-|------|-----------------|----------------|-----------------|----------------|----------|
-| Fixed baseline | **53.4%** | **55.6%** | 54.5% | **57.0%** | Standard production |
-| LSA + TO-adj | 52.5% | 55.5% | **55.8%** | 56.5% | High-conviction filtering |
+| Bet Timing | Edge Size | Mode | Historical ATS |
+|------------|-----------|------|----------------|
+| Opening (4+ days) | Any | Fixed | **56.5%** at 5+ |
+| Closing (<4 days) | **5+ pts** | LSA | **55.1%** at 5+ |
+| Closing (<4 days) | 3-5 pts | Fixed | **52.9%** at 3+ |
 
-**Turnover Adjustment:** LSA training residuals are adjusted for turnover margin to remove ~4 pts/turnover noise. Formula: `adjusted_residual = raw_residual - (turnover_margin × 4.0)`. This improves coefficient stability and 5+ Edge by +0.2pp vs unadjusted LSA.
+**Why this works:**
+- **Opening lines** — Fixed dominates because market hasn't yet priced in all information
+- **Closing lines, high conviction (5+)** — LSA's learned coefficients better filter situational noise
+- **Closing lines, moderate conviction (3-5)** — Fixed beats LSA (52.9% vs 52.0%)
 
-**Key insight:** LSA serves as a high-confidence filter for closing lines. It improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while slightly reducing 3+ performance. However, LSA slightly hurts opening line performance (57.0% → 56.5% at 5+), suggesting fixed situational adjustments better capture value that the market hasn't yet priced in.
+**Full Fixed vs LSA Comparison:**
 
-**Recommendation:** Use LSA for closing line bets; use fixed baseline for opening line bets.
-
-**Configuration:** `alpha=300.0`, `clamp_max=4.0`, `adjust_for_turnovers=True` (default ON)
-
-#### Dynamic Bet Timing Mode (Edge-Aware)
-
-The `--dual-spread` flag enables smart switching between fixed and LSA based on **both** timing and edge size:
-
-| Bet Timing | Edge Size | Recommendation | Historical ATS |
-|------------|-----------|----------------|----------------|
-| Opening (4+ days) | Any | Fixed | 57.0% at 5+ |
-| Closing (<4 days) | **5+ pts** | LSA | 55.8% at 5+ |
-| Closing (<4 days) | 3-5 pts | Fixed | 53.4% at 3+ |
-
-**Key insight:** LSA improves 5+ Edge but *degrades* 3+ Edge (52.5% vs 53.4%). The dual-spread engine now considers edge size, only recommending LSA for high-conviction (5+ pt) closing line bets.
+| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
+|------|-----------------|----------------|-----------------|----------------|
+| Fixed | **52.9%** | **55.1%** | 54.0% | **56.5%** |
+| LSA | 52.0% | 54.9% | **55.1%** | 55.9% |
 
 **CLI Usage:**
 ```bash
-# Standard mode (fixed only)
-python3 scripts/run_weekly.py --year 2025 --week 12
+# Default behavior - edge-aware mode (no flags needed)
+python3 scripts/run_weekly.py --year 2026 --week 5
 
-# Dual-spread with recommendations
-python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread
+# Disable LSA entirely (use Fixed for all bets)
+python3 scripts/run_weekly.py --year 2026 --week 5 --no-lsa
 
-# Custom threshold (e.g., 3 days instead of 4)
-python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread --lsa-threshold-days 3
+# Custom timing threshold (e.g., 3 days instead of 4)
+python3 scripts/run_weekly.py --year 2026 --week 5 --lsa-threshold-days 3
 ```
 
-**Output columns (dual-spread mode):**
+**Output columns:**
 - `jp_spread_fixed` — Spread using fixed situational constants
 - `jp_spread_lsa` — Spread using learned coefficients
-- `bet_timing_rec` — "fixed" or "lsa" based on days to game
+- `bet_timing_rec` — "fixed" or "lsa" based on timing and edge
 - `jp_spread_recommended` — The spread matching the recommendation
+
+**LSA Configuration:** `alpha=300.0`, `clamp_max=4.0`, `adjust_for_turnovers=True`
 
 *For detailed adjustment values and formulas, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 

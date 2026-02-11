@@ -549,14 +549,14 @@ Examples: Oklahoma -49 actual vs Texas when predicted -8 (residual -41), Arizona
 
 **Trade-off:** LSA improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while reducing 3+ Edge by -0.9pp (53.4% → 52.5%). This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
 
-#### Dual-Spread Mode (Edge-Aware Bet Timing)
+#### Edge-Aware Production Mode (DEFAULT in 2026)
 
-**Problem:** LSA excels at 5+ edge closing lines (55.8%) but *degrades* 3+ edge (52.5% vs 53.4% fixed). Fixed excels at opening lines (57.0% at 5+). How do we get the best of both?
+**Problem:** LSA excels at 5+ edge closing lines but *degrades* 3+ edge. Fixed excels at opening lines. How do we get the best of both?
 
-**Solution:** The `--dual-spread` flag considers **both** timing and edge size:
+**Solution:** Edge-aware mode is now the **default behavior** in `run_weekly.py`. No flags needed — the engine automatically selects Fixed or LSA based on timing and edge size:
 
 ```python
-# Implementation in run_weekly.py
+# Implementation in run_weekly.py (automatic, no flags needed)
 if days_until_game >= lsa_threshold_days:  # Default: 4 days
     recommendation = "fixed"   # Opening line: always fixed
 elif abs(edge_lsa) >= 5.0:
@@ -566,23 +566,29 @@ else:
 ```
 
 **Performance by Timing + Edge:**
-| Bet Timing | Edge Size | Recommended | ATS % | Rationale |
-|------------|-----------|-------------|-------|-----------|
-| Opening (4+ days) | Any | Fixed | **57.0%** (5+) | Raw market inefficiency not yet priced |
-| Closing (<4 days) | **5+ pts** | LSA | **55.8%** | LSA's filter excels at high conviction |
-| Closing (<4 days) | 3-5 pts | Fixed | **53.4%** | Fixed beats LSA at 3+ edge (53.4% vs 52.5%) |
+| Bet Timing | Edge Size | Mode | ATS % | Rationale |
+|------------|-----------|------|-------|-----------|
+| Opening (4+ days) | Any | Fixed | **56.5%** (5+) | Raw market inefficiency not yet priced |
+| Closing (<4 days) | **5+ pts** | LSA | **55.1%** | LSA's filter excels at high conviction |
+| Closing (<4 days) | 3-5 pts | Fixed | **52.9%** | Fixed beats LSA at 3+ edge |
 
 **CLI:**
 ```bash
-python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread
-python3 scripts/run_weekly.py --year 2025 --week 12 --dual-spread --lsa-threshold-days 3
+# Default behavior - edge-aware mode (no flags needed)
+python3 scripts/run_weekly.py --year 2026 --week 5
+
+# Disable LSA entirely (use Fixed for all bets)
+python3 scripts/run_weekly.py --year 2026 --week 5 --no-lsa
+
+# Custom timing threshold
+python3 scripts/run_weekly.py --year 2026 --week 5 --lsa-threshold-days 3
 ```
 
 **Output Columns:**
 - `jp_spread_fixed` — Prediction using fixed situational constants
 - `jp_spread_lsa` — Prediction using learned coefficients
-- `bet_timing_rec` — "fixed" or "lsa" based on `days_until_game >= threshold`
-- `jp_spread_recommended` — The spread matching the timing recommendation
+- `bet_timing_rec` — "fixed" or "lsa" based on timing and edge
+- `jp_spread_recommended` — The spread matching the recommendation
 
 ---
 
