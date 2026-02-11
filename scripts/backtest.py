@@ -981,6 +981,16 @@ def walk_forward_predict(
                     # P3.4: Track ratings for sanity check
                     "home_rating": team_ratings.get(game["home_team"], 0.0),
                     "away_rating": team_ratings.get(game["away_team"], 0.0),
+                    # Dual-cap mode: raw component values for spread reassembly
+                    "special_teams_raw": pred.components.special_teams_raw,
+                    "home_field_raw": pred.components.home_field_raw,
+                    "base_margin": pred.components.base_margin,
+                    "situational": pred.components.situational,
+                    "fcs_adj": pred.components.fcs_adjustment,
+                    "pace_adj": pred.components.pace_adjustment,
+                    "qb_adj": pred.components.qb_adjustment,
+                    "special_teams": pred.components.special_teams,
+                    "env_score": pred.components.env_score,
                 })
             except Exception as e:
                 logger.debug(f"Error predicting {game['away_team']} @ {game['home_team']}: {e}")
@@ -1110,6 +1120,580 @@ def calculate_ats_results(
         )
 
     return df
+
+
+def assemble_spread(
+    base_margin: float,
+    home_field_raw: float,
+    situational: float,
+    travel: float,
+    altitude: float,
+    special_teams_raw: float,
+    fcs_adj: float,
+    pace_adj: float,
+    qb_adj: float,
+    env_score: float,
+    st_cap: Optional[float] = 2.5,
+    hfa_offset: float = 0.50,
+) -> float:
+    """Assemble spread from raw components with given caps/offsets.
+
+    This is a pure function for dual-cap mode: given raw component values,
+    reassemble the spread with different ST cap and HFA offset parameters.
+
+    Args:
+        base_margin: EFM ratings differential (home - away)
+        home_field_raw: Raw HFA before global offset
+        situational: Situational adjustment (bye weeks, letdown, etc.)
+        travel: Travel penalty (already smoothed via aggregator)
+        altitude: Altitude penalty (already smoothed via aggregator)
+        special_teams_raw: Raw ST differential before cap
+        fcs_adj: FCS team penalty
+        pace_adj: Triple-option pace compression
+        qb_adj: QB injury adjustment
+        env_score: Full environmental score from aggregator
+        st_cap: Cap on ST differential (None or 0 = no cap)
+        hfa_offset: Points subtracted from raw HFA (global offset)
+
+    Returns:
+        Assembled spread (positive = home favored)
+    """
+    # Apply HFA offset (with floor at 0.5)
+    hfa = max(0.5, home_field_raw - hfa_offset) if home_field_raw > 0 else 0.0
+
+    # Apply ST cap
+    if st_cap and st_cap > 0:
+        st = max(-st_cap, min(st_cap, special_teams_raw))
+    else:
+        st = special_teams_raw
+
+    # Reassemble spread
+    # Note: env_score includes HFA + travel + altitude (already smoothed)
+    # We need to compute the delta from using different HFA offset
+    # The original spread used: env_score (which includes smoothed HFA from home_field_raw - offset)
+    # For reassembly, we substitute the new HFA value
+    #
+    # Original spread = base_margin + env_score + situational + st + fcs + pace + qb
+    # where env_score = smoothed(hfa + travel + altitude) + rest + consec
+    #
+    # For dual-cap, we can't perfectly reconstruct the smoothing without the aggregator,
+    # so we use a simpler approach: just adjust the HFA and ST components relative to
+    # what was already in the spread.
+    #
+    # Actually, the cleanest approach: since we store all components, we rebuild from scratch
+    # But we need the smoothing factor from aggregator... which we don't have.
+    #
+    # Simpler: the spread is already computed with the original cap/offset.
+    # For dual-cap reassembly, we need to store the original predicted_spread and adjust it.
+    #
+    # Delta approach:
+    # new_spread = original_spread - old_st + new_st - old_hfa + new_hfa
+    #
+    # This function is called from vectorized code, so we need a different approach.
+    # Let's just compute a simple sum (ignoring smoothing for now, as it's a minor effect):
+
+    return (
+        base_margin
+        + hfa
+        + situational
+        + travel
+        + altitude
+        + st
+        + fcs_adj
+        + pace_adj
+        + qb_adj
+    )
+
+
+def assemble_spread_vectorized(
+    pred_df: pd.DataFrame,
+    st_cap: Optional[float] = 2.5,
+    hfa_offset: float = 0.50,
+) -> np.ndarray:
+    """Vectorized spread assembly for dual-cap mode.
+
+    Given a DataFrame with raw component columns, reassemble spreads with
+    the specified ST cap and HFA offset.
+
+    The challenge: original spread includes smoothed env_score from aggregator,
+    which we can't recompute here. Instead, we compute the delta from changing
+    the ST cap and HFA offset, and apply that to the original spread.
+
+    Delta = (new_st - old_st) + (new_hfa - old_hfa)
+    new_spread = original_spread + delta
+
+    Args:
+        pred_df: DataFrame with columns: predicted_spread, special_teams_raw,
+                 special_teams, home_field_raw, hfa
+        st_cap: Cap on ST differential (None or 0 = no cap)
+        hfa_offset: Points subtracted from raw HFA
+
+    Returns:
+        Array of reassembled spreads
+    """
+    # Get raw and original values
+    st_raw = pred_df["special_teams_raw"].values
+    st_original = pred_df["special_teams"].values
+    hfa_raw = pred_df["home_field_raw"].values
+    hfa_original = pred_df["hfa"].values
+    original_spread = pred_df["predicted_spread"].values
+
+    # Compute new ST (with new cap)
+    if st_cap and st_cap > 0:
+        st_new = np.clip(st_raw, -st_cap, st_cap)
+    else:
+        st_new = st_raw
+
+    # Compute new HFA (with new offset)
+    # Apply floor at 0.5 for non-neutral games (hfa_raw > 0)
+    hfa_new = np.where(
+        hfa_raw > 0,
+        np.maximum(0.5, hfa_raw - hfa_offset),
+        0.0
+    )
+
+    # Compute deltas
+    st_delta = st_new - st_original
+    hfa_delta = hfa_new - hfa_original
+
+    # Apply deltas to original spread
+    return original_spread + st_delta + hfa_delta
+
+
+def calculate_dual_ats_results(
+    predictions: list[dict],
+    betting_df: pl.DataFrame,
+    st_cap_open: float,
+    st_cap_close: float,
+    hfa_offset_open: float,
+    hfa_offset_close: float,
+) -> pd.DataFrame:
+    """Calculate ATS for all 4 timing combinations in dual-cap mode.
+
+    Evaluates spreads reassembled with different ST cap and HFA offset
+    parameters against both opening and closing lines.
+
+    Combinations evaluated:
+    1. open-tuned spread vs open line (primary)
+    2. close-tuned spread vs close line (primary)
+    3. open-tuned spread vs close line (diagnostic: does open-tuning beat sharp close?)
+    4. close-tuned spread vs open line (diagnostic: cross-validation)
+
+    Args:
+        predictions: List of prediction dicts with raw component values
+        betting_df: Polars DataFrame with Vegas lines
+        st_cap_open: ST cap for open-tuned spread
+        st_cap_close: ST cap for close-tuned spread
+        hfa_offset_open: HFA offset for open-tuned spread
+        hfa_offset_close: HFA offset for close-tuned spread
+
+    Returns:
+        DataFrame with ATS results for all 4 combinations
+    """
+    if not predictions:
+        return pd.DataFrame()
+
+    # Convert to DataFrames
+    pred_df = pd.DataFrame(predictions)
+    betting_pd = betting_df.to_pandas()
+
+    # Merge predictions with betting data
+    merged = pred_df.merge(
+        betting_pd[["game_id", "spread_open", "spread_close"]],
+        on="game_id",
+        how="left",
+    )
+
+    # Filter to games with both lines
+    has_open = merged["spread_open"].notna()
+    has_close = merged["spread_close"].notna()
+    df = merged[has_open & has_close].copy()
+
+    if len(df) == 0:
+        logger.warning("No predictions matched with both open and close lines for dual-cap eval")
+        return pd.DataFrame()
+
+    # Reassemble spreads with open-tuned and close-tuned parameters
+    spread_open_tuned = assemble_spread_vectorized(df, st_cap_open, hfa_offset_open)
+    spread_close_tuned = assemble_spread_vectorized(df, st_cap_close, hfa_offset_close)
+
+    # Store reassembled spreads
+    df["spread_open_tuned"] = spread_open_tuned
+    df["spread_close_tuned"] = spread_close_tuned
+
+    # Get Vegas spreads
+    vegas_open = df["spread_open"].values
+    vegas_close = df["spread_close"].values
+    actual_margin = df["actual_margin"].values
+
+    # Convert model spreads to Vegas convention (our: +home, Vegas: -home)
+    model_open_vegas = -spread_open_tuned
+    model_close_vegas = -spread_close_tuned
+
+    # Calculate edges for all 4 combinations
+    # Edge = model_spread - vegas_spread (positive = model picks away more than Vegas)
+    edge_open_vs_open = model_open_vegas - vegas_open
+    edge_close_vs_close = model_close_vegas - vegas_close
+    edge_open_vs_close = model_open_vegas - vegas_close  # Diagnostic
+    edge_close_vs_open = model_close_vegas - vegas_open  # Diagnostic
+
+    # Determine picks (edge < 0 = model likes home more)
+    pick_open_open = edge_open_vs_open < 0  # Home pick
+    pick_close_close = edge_close_vs_close < 0
+    pick_open_close = edge_open_vs_close < 0
+    pick_close_open = edge_close_vs_open < 0
+
+    # Calculate ATS results for each combination
+    # Home covers if actual_margin + vegas_spread > 0
+    home_cover_open = actual_margin + vegas_open
+    home_cover_close = actual_margin + vegas_close
+
+    # ATS win: if picking home, home must cover; if picking away, home must NOT cover
+    df["ats_open_open"] = np.where(pick_open_open, home_cover_open > 0, home_cover_open < 0)
+    df["ats_close_close"] = np.where(pick_close_close, home_cover_close > 0, home_cover_close < 0)
+    df["ats_open_close"] = np.where(pick_open_close, home_cover_close > 0, home_cover_close < 0)
+    df["ats_close_open"] = np.where(pick_close_open, home_cover_open > 0, home_cover_open < 0)
+
+    # Track pushes
+    df["push_open"] = home_cover_open == 0
+    df["push_close"] = home_cover_close == 0
+
+    # Store edges for filtering
+    df["edge_open_open"] = np.abs(edge_open_vs_open)
+    df["edge_close_close"] = np.abs(edge_close_vs_close)
+    df["edge_open_close"] = np.abs(edge_open_vs_close)
+    df["edge_close_open"] = np.abs(edge_close_vs_open)
+
+    # Store picks
+    df["pick_open_open"] = np.where(pick_open_open, "HOME", "AWAY")
+    df["pick_close_close"] = np.where(pick_close_close, "HOME", "AWAY")
+
+    return df
+
+
+def print_dual_cap_report(
+    dual_df: pd.DataFrame,
+    st_cap_open: float,
+    st_cap_close: float,
+    hfa_offset_open: float,
+    hfa_offset_close: float,
+    start_week: int = 4,
+    end_week: int = 15,
+) -> None:
+    """Print dual-cap ATS report with all 4 timing combinations.
+
+    Args:
+        dual_df: DataFrame from calculate_dual_ats_results
+        st_cap_open/close: ST cap parameters
+        hfa_offset_open/close: HFA offset parameters
+        start_week/end_week: Filter to Core phase
+    """
+    # Filter to Core weeks
+    core_df = dual_df[(dual_df["week"] >= start_week) & (dual_df["week"] <= end_week)]
+
+    if len(core_df) == 0:
+        print("No games in Core phase for dual-cap report")
+        return
+
+    print("\n" + "=" * 80)
+    print("DUAL-CAP MODE ATS RESULTS (Core Weeks 4-15)")
+    print("=" * 80)
+    print(f"  Open-tuned params:  ST cap = {st_cap_open}, HFA offset = {hfa_offset_open}")
+    print(f"  Close-tuned params: ST cap = {st_cap_close}, HFA offset = {hfa_offset_close}")
+    print("-" * 80)
+
+    def calc_wilson_ci(wins: int, total: int, z: float = 1.96) -> tuple[float, float]:
+        """Calculate Wilson score confidence interval."""
+        if total == 0:
+            return (0.0, 0.0)
+        p = wins / total
+        denom = 1 + z * z / total
+        center = (p + z * z / (2 * total)) / denom
+        spread = z * np.sqrt((p * (1 - p) + z * z / (4 * total)) / total) / denom
+        return (center - spread, center + spread)
+
+    def calc_roi(wins: int, losses: int) -> float:
+        """Calculate ROI assuming -110 odds."""
+        if wins + losses == 0:
+            return 0.0
+        profit = wins * 100 - losses * 110
+        wagered = (wins + losses) * 110
+        return (profit / wagered) * 100 if wagered > 0 else 0.0
+
+    def print_combo_stats(df: pd.DataFrame, edge_col: str, ats_col: str, push_col: str, label: str):
+        """Print ATS stats for one combination at multiple edge thresholds."""
+        print(f"\n{label}:")
+        for edge_thresh in [0, 3, 5]:
+            if edge_thresh > 0:
+                subset = df[df[edge_col] >= edge_thresh]
+                label_str = f"  {edge_thresh}+ Edge"
+            else:
+                subset = df
+                label_str = "  All Picks"
+
+            wins = subset[ats_col].sum()
+            pushes = subset[push_col].sum()
+            losses = len(subset) - wins - pushes
+            total = wins + losses
+            pct = wins / total * 100 if total > 0 else 0.0
+            roi = calc_roi(wins, losses)
+            ci_low, ci_high = calc_wilson_ci(wins, total)
+
+            print(f"{label_str:12} | {wins:3}-{losses:3} ({pct:5.1f}%) | ROI: {roi:+5.1f}% | 95% CI: [{ci_low*100:.1f}%, {ci_high*100:.1f}%] | N={total}")
+
+    # Primary combinations
+    print_combo_stats(core_df, "edge_open_open", "ats_open_open", "push_open",
+                      "Open-Tuned vs Open Line (PRIMARY)")
+    print_combo_stats(core_df, "edge_close_close", "ats_close_close", "push_close",
+                      "Close-Tuned vs Close Line (PRIMARY)")
+
+    # Diagnostic combinations
+    print_combo_stats(core_df, "edge_open_close", "ats_open_close", "push_close",
+                      "Open-Tuned vs Close Line (DIAG)")
+    print_combo_stats(core_df, "edge_close_open", "ats_close_open", "push_open",
+                      "Close-Tuned vs Open Line (DIAG)")
+
+    print("\n" + "-" * 80)
+    print("INTERPRETATION:")
+    print("  - If open-tuned beats close line better than close-tuned, timing split justified")
+    print("  - If close-tuned beats open line better than open-tuned, timing split NOT justified")
+    print("=" * 80)
+
+
+def run_dual_cap_sweep(
+    all_predictions: list[dict],
+    betting_df: pl.DataFrame,
+    years: list[int],
+    st_cap_grid: list,
+    hfa_offset: float = 0.50,
+    start_week: int = 4,
+    end_week: int = 15,
+    min_bets: int = 30,
+) -> tuple[pd.DataFrame, dict, dict]:
+    """Run LOO-CV sweep to find optimal per-timing ST caps.
+
+    For each holdout year, use the other years to find the best ST cap,
+    then evaluate on the holdout year. This prevents overfitting to
+    a single year's quirks.
+
+    Args:
+        all_predictions: List of prediction dicts from run_backtest
+        betting_df: Polars DataFrame with betting lines
+        years: List of years in the backtest
+        st_cap_grid: List of ST cap values to try (None = no cap)
+        hfa_offset: Fixed HFA offset (0.50 default)
+        start_week: Start of Core phase
+        end_week: End of Core phase
+        min_bets: Minimum bets at 5+ edge to be selectable
+
+    Returns:
+        (sweep_results_df, stability_analysis, best_params)
+    """
+    # Convert predictions to DataFrame
+    pred_df = pd.DataFrame(all_predictions)
+    betting_pd = betting_df.to_pandas()
+
+    # Merge with betting data once
+    merged = pred_df.merge(
+        betting_pd[["game_id", "spread_open", "spread_close"]],
+        on="game_id",
+        how="left",
+    )
+    # Filter to games with both lines and Core weeks
+    has_lines = merged["spread_open"].notna() & merged["spread_close"].notna()
+    core_mask = (merged["week"] >= start_week) & (merged["week"] <= end_week)
+    df = merged[has_lines & core_mask].copy()
+
+    if len(df) == 0:
+        logger.warning("No games matched for dual-cap sweep")
+        return pd.DataFrame(), {}, {}
+
+    results = []
+    stability = {"open": {}, "close": {}}
+
+    for holdout_year in years:
+        # Split data
+        train_mask = df["year"] != holdout_year
+        holdout_mask = df["year"] == holdout_year
+        train_df = df[train_mask]
+        holdout_df = df[holdout_mask].copy()
+
+        if len(holdout_df) < 50:
+            logger.info(f"Skipping {holdout_year}: only {len(holdout_df)} holdout games")
+            continue
+
+        # Sweep all ST cap combinations on training data
+        best_open_cap = 2.5
+        best_close_cap = 2.5
+        best_open_roi = -float("inf")
+        best_close_roi = -float("inf")
+
+        for st_cap_open in st_cap_grid:
+            for st_cap_close in st_cap_grid:
+                # Reassemble spreads with these caps
+                spread_open = assemble_spread_vectorized(train_df, st_cap_open, hfa_offset)
+                spread_close = assemble_spread_vectorized(train_df, st_cap_close, hfa_offset)
+
+                # Calculate edges
+                vegas_open = train_df["spread_open"].values
+                vegas_close = train_df["spread_close"].values
+                actual_margin = train_df["actual_margin"].values
+
+                edge_open = np.abs(-spread_open - vegas_open)
+                edge_close = np.abs(-spread_close - vegas_close)
+
+                # ATS for open-tuned vs open
+                mask_5_open = edge_open >= 5
+                if mask_5_open.sum() >= min_bets:
+                    subset = train_df[mask_5_open]
+                    home_cover = actual_margin[mask_5_open] + vegas_open[mask_5_open]
+                    pick_home = (-spread_open[mask_5_open] - vegas_open[mask_5_open]) < 0
+                    ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
+                    wins = ats_win.sum()
+                    losses = len(subset) - wins - (home_cover == 0).sum()
+                    roi_open = (wins * 100 - losses * 110) / ((wins + losses) * 110) * 100 if (wins + losses) > 0 else 0
+
+                    if roi_open > best_open_roi:
+                        best_open_roi = roi_open
+                        best_open_cap = st_cap_open
+
+                # ATS for close-tuned vs close
+                mask_5_close = edge_close >= 5
+                if mask_5_close.sum() >= min_bets:
+                    subset = train_df[mask_5_close]
+                    home_cover = actual_margin[mask_5_close] + vegas_close[mask_5_close]
+                    pick_home = (-spread_close[mask_5_close] - vegas_close[mask_5_close]) < 0
+                    ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
+                    wins = ats_win.sum()
+                    losses = len(subset) - wins - (home_cover == 0).sum()
+                    roi_close = (wins * 100 - losses * 110) / ((wins + losses) * 110) * 100 if (wins + losses) > 0 else 0
+
+                    if roi_close > best_close_roi:
+                        best_close_roi = roi_close
+                        best_close_cap = st_cap_close
+
+        # Track stability
+        stability["open"][holdout_year] = best_open_cap
+        stability["close"][holdout_year] = best_close_cap
+
+        # Evaluate on holdout with best caps found from training
+        spread_open_holdout = assemble_spread_vectorized(holdout_df, best_open_cap, hfa_offset)
+        spread_close_holdout = assemble_spread_vectorized(holdout_df, best_close_cap, hfa_offset)
+
+        vegas_open_h = holdout_df["spread_open"].values
+        vegas_close_h = holdout_df["spread_close"].values
+        actual_margin_h = holdout_df["actual_margin"].values
+
+        # Evaluate open-tuned vs open on holdout
+        edge_open_h = np.abs(-spread_open_holdout - vegas_open_h)
+        mask_5_open_h = edge_open_h >= 5
+        if mask_5_open_h.sum() > 0:
+            home_cover = actual_margin_h[mask_5_open_h] + vegas_open_h[mask_5_open_h]
+            pick_home = (-spread_open_holdout[mask_5_open_h] - vegas_open_h[mask_5_open_h]) < 0
+            ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
+            wins_open = ats_win.sum()
+            losses_open = mask_5_open_h.sum() - wins_open - (home_cover == 0).sum()
+        else:
+            wins_open, losses_open = 0, 0
+
+        # Evaluate close-tuned vs close on holdout
+        edge_close_h = np.abs(-spread_close_holdout - vegas_close_h)
+        mask_5_close_h = edge_close_h >= 5
+        if mask_5_close_h.sum() > 0:
+            home_cover = actual_margin_h[mask_5_close_h] + vegas_close_h[mask_5_close_h]
+            pick_home = (-spread_close_holdout[mask_5_close_h] - vegas_close_h[mask_5_close_h]) < 0
+            ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
+            wins_close = ats_win.sum()
+            losses_close = mask_5_close_h.sum() - wins_close - (home_cover == 0).sum()
+        else:
+            wins_close, losses_close = 0, 0
+
+        results.append({
+            "holdout_year": holdout_year,
+            "best_open_cap": best_open_cap if best_open_cap is not None else "none",
+            "best_close_cap": best_close_cap if best_close_cap is not None else "none",
+            "open_5plus_wins": wins_open,
+            "open_5plus_losses": losses_open,
+            "open_5plus_pct": wins_open / (wins_open + losses_open) * 100 if (wins_open + losses_open) > 0 else 0,
+            "close_5plus_wins": wins_close,
+            "close_5plus_losses": losses_close,
+            "close_5plus_pct": wins_close / (wins_close + losses_close) * 100 if (wins_close + losses_close) > 0 else 0,
+        })
+
+    results_df = pd.DataFrame(results)
+
+    # Determine overall best params (most common across folds or with best holdout performance)
+    open_caps = [r["best_open_cap"] for r in results if r["best_open_cap"]]
+    close_caps = [r["best_close_cap"] for r in results if r["best_close_cap"]]
+
+    from collections import Counter
+    best_open = Counter(open_caps).most_common(1)[0][0] if open_caps else 2.5
+    best_close = Counter(close_caps).most_common(1)[0][0] if close_caps else 2.5
+
+    # Check stability
+    open_stable = len(set(open_caps)) <= 2  # At most 2 different values
+    close_stable = len(set(close_caps)) <= 2
+
+    best_params = {
+        "st_cap_open": best_open,
+        "st_cap_close": best_close,
+        "open_stable": open_stable,
+        "close_stable": close_stable,
+    }
+
+    return results_df, stability, best_params
+
+
+def print_dual_cap_sweep_report(
+    sweep_df: pd.DataFrame,
+    stability: dict,
+    best_params: dict,
+) -> None:
+    """Print dual-cap sweep results."""
+    print("\n" + "=" * 80)
+    print("DUAL-CAP LOO-CV SWEEP RESULTS")
+    print("=" * 80)
+
+    if len(sweep_df) == 0:
+        print("No sweep results to display")
+        return
+
+    print("\nPER-FOLD RESULTS (5+ Edge):")
+    print("-" * 80)
+    print(f"{'Year':6} | {'Open Cap':8} | {'Open ATS':12} | {'Close Cap':9} | {'Close ATS':12}")
+    print("-" * 80)
+
+    for _, row in sweep_df.iterrows():
+        open_ats = f"{row['open_5plus_wins']:.0f}-{row['open_5plus_losses']:.0f} ({row['open_5plus_pct']:.1f}%)"
+        close_ats = f"{row['close_5plus_wins']:.0f}-{row['close_5plus_losses']:.0f} ({row['close_5plus_pct']:.1f}%)"
+        print(f"{row['holdout_year']:6} | {str(row['best_open_cap']):8} | {open_ats:12} | {str(row['best_close_cap']):9} | {close_ats:12}")
+
+    print("-" * 80)
+
+    # Summary
+    total_open_wins = sweep_df["open_5plus_wins"].sum()
+    total_open_losses = sweep_df["open_5plus_losses"].sum()
+    total_close_wins = sweep_df["close_5plus_wins"].sum()
+    total_close_losses = sweep_df["close_5plus_losses"].sum()
+
+    open_pct = total_open_wins / (total_open_wins + total_open_losses) * 100 if (total_open_wins + total_open_losses) > 0 else 0
+    close_pct = total_close_wins / (total_close_wins + total_close_losses) * 100 if (total_close_wins + total_close_losses) > 0 else 0
+
+    print(f"\nAGGREGATE LOO-CV PERFORMANCE:")
+    print(f"  Open 5+ Edge:  {total_open_wins:.0f}-{total_open_losses:.0f} ({open_pct:.1f}%)")
+    print(f"  Close 5+ Edge: {total_close_wins:.0f}-{total_close_losses:.0f} ({close_pct:.1f}%)")
+
+    print(f"\nRECOMMENDED PARAMS:")
+    print(f"  ST cap (open):  {best_params['st_cap_open']} {'(STABLE)' if best_params['open_stable'] else '(UNSTABLE - varies across folds)'}")
+    print(f"  ST cap (close): {best_params['st_cap_close']} {'(STABLE)' if best_params['close_stable'] else '(UNSTABLE - varies across folds)'}")
+
+    # Stability detail
+    if not best_params['open_stable'] or not best_params['close_stable']:
+        print(f"\nSTABILITY DETAIL:")
+        print(f"  Open caps by year:  {stability.get('open', {})}")
+        print(f"  Close caps by year: {stability.get('close', {})}")
+
+    print("=" * 80)
 
 
 def calculate_metrics(
@@ -2635,6 +3219,13 @@ def run_backtest(
     if ats_df is not None:
         ats_df = ats_df.sort_values(["year", "week", "game_id"]).reset_index(drop=True)
 
+    # Combine betting data from all years for dual-cap mode
+    all_betting = []
+    for year in years:
+        if year in season_data and season_data[year].betting_df is not None:
+            all_betting.append(season_data[year].betting_df)
+    combined_betting_df = pl.concat(all_betting) if all_betting else None
+
     # Calculate overall metrics
     metrics = calculate_metrics(predictions_df, ats_df)
 
@@ -2642,6 +3233,8 @@ def run_backtest(
         "predictions": predictions_df,
         "ats_results": ats_df,
         "metrics": metrics,
+        "all_predictions": all_predictions,  # For dual-cap mode
+        "betting_df": combined_betting_df,  # For dual-cap mode
     }
 
 
@@ -3219,6 +3812,60 @@ def main():
         help="Minimum games after filtering; relax filter if below. Default: 30",
     )
 
+    # Dual-Cap Mode: per-timing ST cap and HFA offset
+    parser.add_argument(
+        "--dual-cap-mode",
+        action="store_true",
+        help="Enable per-timing ST cap and HFA offset (evaluates both open and close lines)",
+    )
+    parser.add_argument(
+        "--st-cap-open",
+        type=float,
+        default=2.5,
+        help="ST spread cap for open line evaluation. Default: 2.5",
+    )
+    parser.add_argument(
+        "--st-cap-close",
+        type=float,
+        default=2.5,
+        help="ST spread cap for close line evaluation. Default: 2.5",
+    )
+    parser.add_argument(
+        "--hfa-offset-open",
+        type=float,
+        default=0.50,
+        help="HFA offset for open line evaluation. Default: 0.50",
+    )
+    parser.add_argument(
+        "--hfa-offset-close",
+        type=float,
+        default=0.50,
+        help="HFA offset for close line evaluation. Default: 0.50",
+    )
+    # Dual-Cap Sweep Mode
+    parser.add_argument(
+        "--sweep-dual-st-cap",
+        action="store_true",
+        help="Run LOO-CV sweep to find optimal per-timing ST caps",
+    )
+    parser.add_argument(
+        "--st-cap-grid",
+        type=str,
+        default="1.5,2.0,2.5,3.0,3.5,none",
+        help="Comma-separated ST cap values to sweep. 'none' = no cap. Default: 1.5,2.0,2.5,3.0,3.5,none",
+    )
+    parser.add_argument(
+        "--sweep-dual-hfa",
+        action="store_true",
+        help="Run LOO-CV sweep to find optimal per-timing HFA offsets",
+    )
+    parser.add_argument(
+        "--hfa-grid",
+        type=str,
+        default="0.25,0.50,0.75,1.00",
+        help="Comma-separated HFA offset values to sweep. Default: 0.25,0.50,0.75,1.00",
+    )
+
     args = parser.parse_args()
 
     if args.sweep:
@@ -3235,6 +3882,108 @@ def main():
         if args.output:
             sweep_df.to_csv(args.output, index=False)
             print(f"\nSweep results saved to {args.output}")
+        return
+
+    # Parse ST cap grid for sweep mode
+    def parse_cap_grid(grid_str: str) -> list:
+        """Parse comma-separated cap values. 'none' = None (no cap)."""
+        caps = []
+        for val in grid_str.split(","):
+            val = val.strip().lower()
+            if val == "none":
+                caps.append(None)
+            else:
+                caps.append(float(val))
+        return caps
+
+    # Handle dual-cap sweep mode
+    if args.sweep_dual_st_cap:
+        print("\n" + "=" * 80)
+        print("DUAL-CAP LOO-CV SWEEP MODE")
+        print("=" * 80)
+        print(f"  Years: {args.years}")
+        print(f"  ST cap grid: {args.st_cap_grid}")
+        print(f"  HFA offset: {args.hfa_offset}")
+        print(f"  Week range: {args.start_week} - {args.end_week if args.end_week else 15}")
+        print("=" * 80 + "\n")
+
+        st_cap_grid = parse_cap_grid(args.st_cap_grid)
+
+        # First, run full backtest to get predictions with raw components
+        print("Running full backtest to collect predictions...")
+        season_data = fetch_all_season_data(
+            args.years,
+            use_priors=not args.no_priors,
+            use_portal=not args.no_portal,
+            portal_scale=args.portal_scale,
+            use_cache=not args.no_cache,
+            force_refresh=args.force_refresh,
+        )
+
+        results = run_backtest(
+            years=args.years,
+            start_week=args.start_week,
+            end_week=args.end_week,
+            ridge_alpha=args.alpha,
+            use_priors=not args.no_priors,
+            hfa_value=args.hfa,
+            prior_weight=args.prior_weight,
+            efficiency_weight=args.efficiency_weight,
+            explosiveness_weight=args.explosiveness_weight,
+            turnover_weight=args.turnover_weight,
+            k_int=args.k_int,
+            k_fumble=args.k_fumble,
+            asymmetric_garbage=not args.no_asymmetric_garbage,
+            fcs_penalty_elite=args.fcs_penalty_elite,
+            fcs_penalty_standard=args.fcs_penalty_standard,
+            use_portal=not args.no_portal,
+            portal_scale=args.portal_scale,
+            use_opening_line=args.opening_line,
+            season_data=season_data,
+            hfa_global_offset=args.hfa_offset,
+            ooc_credibility_weight=args.ooc_cred_weight,
+            st_shrink_enabled=args.st_shrink,
+            st_k_fg=args.st_k_fg,
+            st_k_punt=args.st_k_punt,
+            st_k_ko=args.st_k_ko,
+            st_spread_cap=args.st_spread_cap,
+            st_early_weight=args.st_early_weight,
+            fcs_static=args.fcs_static,
+            fcs_k=args.fcs_k,
+            fcs_baseline=args.fcs_baseline,
+            fcs_min_pen=args.fcs_min_pen,
+            fcs_max_pen=args.fcs_max_pen,
+            fcs_slope=args.fcs_slope,
+            fcs_intercept=args.fcs_intercept,
+            fcs_hfa=args.fcs_hfa,
+            use_learned_situ=args.learned_situ,
+            lsa_alpha=args.lsa_alpha,
+            lsa_min_games=args.lsa_min_games,
+            lsa_ema=args.lsa_ema,
+            lsa_clamp_max=args.lsa_clamp_max,
+            lsa_adjust_turnovers=args.lsa_adjust_turnovers,
+            lsa_turnover_value=args.lsa_turnover_value,
+            lsa_filter_vegas=args.lsa_filter_vegas,
+            lsa_weighted_training=args.lsa_weighted_training,
+            lsa_weight_spread=args.lsa_weight_spread,
+            lsa_min_training_games=args.lsa_min_training_games,
+        )
+
+        # Run sweep
+        all_predictions = results["all_predictions"]
+        betting_df = results["betting_df"]
+
+        sweep_df, stability, best_params = run_dual_cap_sweep(
+            all_predictions=all_predictions,
+            betting_df=betting_df,
+            years=args.years,
+            st_cap_grid=st_cap_grid,
+            hfa_offset=args.hfa_offset,
+            start_week=args.start_week,
+            end_week=args.end_week if args.end_week else 15,
+        )
+
+        print_dual_cap_sweep_report(sweep_df, stability, best_params)
         return
 
     # Fetch data first for sanity reporting (P3.4)
@@ -3338,6 +4087,34 @@ def main():
         diagnostics=not args.no_diagnostics,
         verbose=args.verbose,
     )
+
+    # Dual-cap mode: evaluate with per-timing parameters
+    if args.dual_cap_mode:
+        all_predictions = results.get("all_predictions", [])
+        betting_df = results.get("betting_df")
+
+        if all_predictions and betting_df is not None:
+            dual_df = calculate_dual_ats_results(
+                predictions=all_predictions,
+                betting_df=betting_df,
+                st_cap_open=args.st_cap_open,
+                st_cap_close=args.st_cap_close,
+                hfa_offset_open=args.hfa_offset_open,
+                hfa_offset_close=args.hfa_offset_close,
+            )
+
+            if len(dual_df) > 0:
+                print_dual_cap_report(
+                    dual_df=dual_df,
+                    st_cap_open=args.st_cap_open,
+                    st_cap_close=args.st_cap_close,
+                    hfa_offset_open=args.hfa_offset_open,
+                    hfa_offset_close=args.hfa_offset_close,
+                    start_week=args.start_week,
+                    end_week=args.end_week if args.end_week else 15,
+                )
+        else:
+            logger.warning("Dual-cap mode: missing all_predictions or betting_df in results")
 
     # Save to CSV if requested
     if args.output:

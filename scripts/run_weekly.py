@@ -5,24 +5,23 @@ Weekly prediction runner for CFB Power Ratings Model.
 Primary use case: Run Sunday AM after Saturday games.
 
 Usage:
-    python scripts/run_weekly.py
+    python scripts/run_weekly.py                    # Default: edge-aware LSA mode
     python scripts/run_weekly.py --year 2025 --week 5
-    python scripts/run_weekly.py --no-wait  # Skip data availability check
-    python scripts/run_weekly.py --sharp    # High-conviction mode (5+ edge only)
-    python scripts/run_weekly.py --min-edge 7  # Custom edge threshold
+    python scripts/run_weekly.py --no-wait          # Skip data availability check
+    python scripts/run_weekly.py --sharp            # High-conviction mode (5+ edge only)
+    python scripts/run_weekly.py --min-edge 7       # Custom edge threshold
+    python scripts/run_weekly.py --no-lsa           # Disable LSA, use Fixed only
 
-LSA (Learned Situational Adjustment) Mode:
-    python scripts/run_weekly.py --learned-situ --sharp
+Edge-Aware LSA Mode (DEFAULT for 2026):
+    The prediction engine automatically selects Fixed or LSA based on timing and edge:
+    - Opening lines (4+ days out): Fixed (56.5% at 5+ edge)
+    - Closing lines, 5+ edge: LSA (55.1% at 5+ edge)
+    - Closing lines, 3-5 edge: Fixed (52.9%)
 
-    LSA replaces fixed situational constants with learned coefficients.
-    Improves 5+ Edge from 53.7% to 54.9%. Requires pre-computed coefficients
-    from running backtest with --learned-situ flag.
+    No flags needed - this is the default behavior.
 
-    First-time setup:
-        python scripts/backtest.py --years 2022 2023 2024 2025 --learned-situ
-
-    Then weekly:
-        python scripts/run_weekly.py --learned-situ --sharp
+    First-time setup (pre-compute LSA coefficients):
+        python scripts/backtest.py --years 2022 2023 2024 2025 --learned-situ --lsa-adjust-turnovers
 """
 
 import argparse
@@ -137,24 +136,29 @@ def parse_args():
         action="store_true",
         help="Sharp betting mode: only show 5+ edge picks (shortcut for --min-edge 5)",
     )
+    # Edge-aware LSA is DEFAULT for 2026 production
+    # Automatically uses LSA for 5+ edge closing bets, Fixed otherwise
     parser.add_argument(
-        "--learned-situ",
+        "--no-lsa",
         action="store_true",
-        help="Use Learned Situational Adjustment (LSA). Trains on prior seasons + current season weeks.",
-    )
-    # Note: LSA alpha is a TRAINING-TIME parameter configured during backtest.
-    # Coefficients are pre-baked in data/learned_situ_coefficients/*.json.
-    # No alpha parameter needed at inference time.
-    parser.add_argument(
-        "--dual-spread",
-        action="store_true",
-        help="Output BOTH fixed and LSA spreads. Recommends fixed for opening bets (4+ days out), LSA for closing (< 4 days).",
+        help="Disable edge-aware LSA mode. Use Fixed situational for all bets.",
     )
     parser.add_argument(
         "--lsa-threshold-days",
         type=int,
         default=4,
         help="Days before game to switch from fixed to LSA. Default: 4 (use fixed Sun-Tue, LSA Wed-Sat).",
+    )
+    # Legacy flags (kept for backward compatibility, but edge-aware is now default)
+    parser.add_argument(
+        "--learned-situ",
+        action="store_true",
+        help="(Legacy) Explicitly enable LSA - now default behavior.",
+    )
+    parser.add_argument(
+        "--dual-spread",
+        action="store_true",
+        help="(Legacy) Enable dual-spread mode - now default behavior.",
     )
     return parser.parse_args()
 
@@ -1003,13 +1007,17 @@ def main():
         min_edge = 5.0
         logger.info("Sharp mode enabled: filtering to 5+ edge picks only")
 
-    # LSA mode
-    use_learned_situ = args.learned_situ
-    dual_spread = args.dual_spread
-    if use_learned_situ:
-        logger.info("LSA enabled (using pre-computed coefficients)")
-    if dual_spread:
-        logger.info(f"Dual-spread mode: outputting both fixed and LSA spreads (threshold: {args.lsa_threshold_days} days)")
+    # Edge-aware LSA mode (DEFAULT for 2026 production)
+    # Uses LSA for 5+ edge closing bets, Fixed otherwise
+    if args.no_lsa:
+        use_learned_situ = False
+        dual_spread = False
+        logger.info("LSA disabled (--no-lsa): using Fixed situational for all bets")
+    else:
+        # Edge-aware mode is now the default
+        use_learned_situ = True
+        dual_spread = True
+        logger.info(f"Edge-aware LSA mode (default): Fixed for opening, LSA for 5+ edge closing (threshold: {args.lsa_threshold_days} days)")
 
     logger.info(f"Running predictions for {year} Week {week} (min_edge={min_edge})")
 

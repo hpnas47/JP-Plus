@@ -64,18 +64,24 @@
 | 3+ Edge (Core) | 4–15 | 1,421 | — | — | 53.4% (744-650) | 55.6% (795-634) |
 | 5+ Edge (Core) | 4–15 | 869 | — | — | 54.5% (463-386) | 57.0% (514-387) |
 
-### LSA Enhancement (Optional: `--learned-situ`)
+### Edge-Aware Production Mode (DEFAULT in 2026)
 
-Learned Situational Adjustment replaces fixed situational constants with ridge-learned coefficients. Acts as a **high-confidence filter** — improves 5+ Edge at cost of 3+ Edge.
+The prediction engine automatically selects Fixed or LSA based on timing and edge magnitude:
 
-| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) | Use Case |
-|------|-----------------|----------------|-----------------|----------------|----------|
-| Fixed (default) | **53.4%** | **55.6%** | 54.5% | **57.0%** | Standard production |
-| LSA + TO-adj | 52.5% | 55.5% | **55.8%** | 56.5% | High-conviction filtering |
+| Timing | Edge | Mode | ATS | Rationale |
+|--------|------|------|-----|-----------|
+| **Opening** (4+ days out) | Any | Fixed | **56.5%** (5+) | Fixed dominates on less-efficient opening lines |
+| **Closing** (<4 days) | 3-5 pts | Fixed | **52.9%** | LSA degrades 3+ edge by 0.9% |
+| **Closing** (<4 days) | 5+ pts | LSA | **55.1%** | LSA improves 5+ edge by 1.1% |
 
-**LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`, `adjust_for_turnovers=True` (default ON)
+**Full LSA vs Fixed Comparison (Core Weeks 4-15):**
 
-**Turnover Adjustment:** Removes ~4 pts/turnover noise from training residuals, improving coefficient stability and 5+ Edge by +0.2pp.
+| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
+|------|-----------------|----------------|-----------------|----------------|
+| Fixed | **52.9%** (795-707) | **55.1%** (844-688) | 54.0% (498-425) | **56.5%** (551-425) |
+| LSA | 52.0% (768-708) | 54.9% (825-678) | **55.1%** (480-391) | 55.9% (523-413) |
+
+**LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`, `adjust_for_turnovers=True`
 
 ### Model Configuration
 
@@ -86,7 +92,7 @@ Learned Situational Adjustment replaces fixed situational constants with ridge-l
 - **Conference Anchor:** OOC game weighting (1.5x) + separate O/D Bayesian conference anchors (scale=0.08, prior=30, max=2.0). Fixes inter-conference bias; Big 12 intra-conference circularity remains.
 - **ST Spread Cap:** ±2.5 pts (APPROVED 2026-02-10). Caps ST differential's effect on spread without shrinking ratings toward zero.
 - **FCS Strength Estimator:** Dynamic, walk-forward-safe FCS penalties (APPROVED 2026-02-10). Replaces static elite list with Bayesian shrinkage (k=8, baseline=-28, intercept=10, slope=0.8). Penalty range [10, 45] pts. CLI: `--fcs-static` for baseline comparison.
-- **LSA:** Optional high-confidence filter (APPROVED 2026-02-10). Learns situational coefficients via ridge regression on residuals. Improves 5+ Edge (Close) +1.3% at cost of 3+ Edge -0.9%. CLI: `--learned-situ` to enable, `--dual-spread` for edge-aware timing (LSA only for 5+ edge at closing; fixed otherwise).
+- **LSA Edge-Aware Mode:** DEFAULT for 2026 production. Automatically uses LSA for 5+ edge closing bets, Fixed otherwise. No flags needed — `run_weekly.py` handles timing/edge logic automatically. CLI: `--no-lsa` to force Fixed-only mode.
 
 ## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
 

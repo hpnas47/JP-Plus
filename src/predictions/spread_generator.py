@@ -78,6 +78,9 @@ class SpreadComponents:
     pace_adjustment: float = 0.0  # Compression for triple-option teams
     qb_adjustment: float = 0.0  # Adjustment when starting QB is out
     env_score: float = 0.0  # Post-smoothing environmental stack (from aggregator)
+    # Raw values before caps/offsets (for dual-cap mode spread reassembly)
+    special_teams_raw: float = 0.0  # Raw ST differential before cap
+    home_field_raw: float = 0.0  # Raw HFA before global offset
 
     @property
     def correlated_stack(self) -> float:
@@ -512,10 +515,15 @@ class SpreadGenerator:
         # =====================================================================
 
         # Home field advantage (raw)
+        # Capture raw HFA before global offset for dual-cap mode reassembly
         if not neutral_site:
             raw_hfa = self.home_field.get_hfa_value(home_team)
+            # Get pre-offset value for dual-cap mode spread reassembly
+            hfa_pre_offset, _ = self.home_field.get_hfa(home_team, skip_offset=True)
+            components.home_field_raw = hfa_pre_offset
         else:
             raw_hfa = 0.0
+            components.home_field_raw = 0.0
 
         # Travel and altitude (raw values only; breakdown dicts discarded)
         raw_travel, _travel_breakdown = self.travel.get_total_travel_adjustment(home_team, away_team)
@@ -573,6 +581,8 @@ class SpreadGenerator:
         raw_st_diff = self.special_teams.get_matchup_differential(
             home_team, away_team
         )
+        # Store raw ST differential for dual-cap mode reassembly
+        components.special_teams_raw = raw_st_diff
         # Apply margin-level cap if configured (Approach B)
         # This caps the EFFECT on spread, not the rating itself
         if self.st_spread_cap and self.st_spread_cap > 0:

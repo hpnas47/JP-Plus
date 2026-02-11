@@ -490,6 +490,7 @@ class HomeFieldAdvantage:
         neutral_site: bool = False,
         conference: Optional[str] = None,
         apply_trajectory: bool = True,
+        skip_offset: bool = False,
     ) -> tuple[float, str]:
         """Get HFA for a specific matchup with source tracking.
 
@@ -507,6 +508,7 @@ class HomeFieldAdvantage:
             neutral_site: If True, returns 0 (no HFA)
             conference: Team's conference (for fallback to conference default)
             apply_trajectory: If True, applies trajectory modifier for rising/declining programs
+            skip_offset: If True, skip the global offset (for dual-cap mode raw value capture)
 
         Returns:
             Tuple of (HFA in points, source string describing where HFA came from)
@@ -542,7 +544,8 @@ class HomeFieldAdvantage:
             source += f"+traj({modifier:+.2f})"
 
         # Apply global offset (for HFA sweep testing)
-        if self.global_offset != 0.0:
+        # Skip if caller wants raw value for dual-cap mode spread reassembly
+        if self.global_offset != 0.0 and not skip_offset:
             base = max(0.5, base - self.global_offset)
             source += f"+offset({-self.global_offset:+.2f})"
 
