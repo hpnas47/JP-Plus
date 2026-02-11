@@ -650,8 +650,8 @@ def run_predictions(
 
         # Fetch FBS teams for FCS detection (needed before EFM)
         logger.info("Fetching FBS teams...")
-        fbs_teams_list = client.get_fbs_teams(year)
-        fbs_teams = {t.school for t in fbs_teams_list}
+        fbs_teams_raw = client.get_fbs_teams(year)  # API team objects
+        fbs_teams = {t.school for t in fbs_teams_raw}  # Set of team name strings
 
         if not fbs_teams:
             raise ValueError(f"No FBS teams returned for {year}. Check API key and year.")
@@ -679,7 +679,7 @@ def run_predictions(
         # Filter to FBS-only plays in Polars (more efficient than Pandas)
         # then convert to Pandas for sklearn compatibility
         pre_filter = plays_pl.height
-        fbs_teams_list = list(fbs_teams)  # Convert set to list for Polars is_in()
+        fbs_teams_list = list(fbs_teams)  # List of team name strings for Polars is_in()
         plays_df = (
             plays_pl
             .filter(
@@ -791,11 +791,16 @@ def run_predictions(
 
     # Generate predictions
     logger.info(f"Generating predictions for {len(upcoming_games)} games...")
+    # rankings=None: Current-week AP/CFP rankings used for letdown/lookahead detection
+    # in SituationalAdjuster. When None, these factors are inactive. The historical_rankings
+    # object provides week-by-week AP data for detecting ranked team letdown spots.
+    # This is intentional for production: letdown detection uses historical_rankings,
+    # while rankings would provide same-week poll data (not currently fetched).
     predictions = spread_gen.predict_week(
         games=upcoming_games,
         week=week,
         schedule_df=schedule_df,
-        rankings=None,  # Current rankings (could also fetch AP/CFP here)
+        rankings=None,
         historical_rankings=historical_rankings,
     )
 
@@ -811,6 +816,9 @@ def run_predictions(
             logger.info(f"Computing LSA adjustments for {len(predictions)} predictions...")
             for pred in predictions:
                 # Compute LSA adjustment
+                # rankings=None: See note at predict_week() call. LSA uses the same
+                # SituationalAdjuster, so rankings behavior is consistent. The learned
+                # coefficients were trained with historical_rankings providing the signal.
                 lsa_adj = apply_lsa_adjustment(
                     prediction=pred,
                     lsa_coefficients=lsa_coefficients,
@@ -920,6 +928,41 @@ def run_predictions(
         logger.info(f"Dual-spread mode: {n_fixed} games recommend fixed, {n_lsa} recommend LSA "
                    f"(threshold: {lsa_threshold_days} days, LSA only for 5+ edge at closing)")
 
+        # CRITICAL FIX: Recompute value plays using edge_recommended (not stale fixed-spread edge)
+        # This ensures games where LSA produces a qualifying edge are included, and games where
+        # the recommended spread (which may be LSA) has a smaller edge are excluded.
+        value_plays_mask = comparison_df['edge_recommended'].abs() >= min_edge
+        value_plays_df = comparison_df[value_plays_mask].copy()
+
+        # Add columns expected by Excel/HTML exporters (same schema as vegas.value_plays_to_dataframe)
+        value_plays_df['side'] = value_plays_df['edge_recommended'].apply(
+            lambda e: 'HOME' if e < 0 else 'AWAY'
+        )
+        value_plays_df['team'] = value_plays_df.apply(
+            lambda row: row['home_team'] if row['side'] == 'HOME' else row['away_team'],
+            axis=1
+        )
+        # Use recommended spread/edge for display
+        value_plays_df['model_spread'] = value_plays_df['jp_spread_recommended']
+        value_plays_df['edge'] = value_plays_df['edge_recommended'].abs()
+        value_plays_df['edge_signed'] = value_plays_df['edge_recommended']
+        value_plays_df['analysis'] = value_plays_df.apply(
+            lambda row: (
+                f"Model has {row['team']} as {abs(row['edge_recommended']):.1f} points better "
+                f"than Vegas ({row['jp_spread_recommended']:.1f} vs {row['vegas_spread']:.1f})"
+            ),
+            axis=1
+        )
+
+        # Sort by edge magnitude (highest edge first)
+        value_plays_df = value_plays_df.sort_values('edge', ascending=False).reset_index(drop=True)
+
+        # Log the recomputed value play count
+        logger.info(f"Value plays (edge-aware): {len(value_plays_df)} games with {min_edge}+ pts edge")
+
+    # Compute value play count for downstream consumers
+    value_plays_count = len(value_plays_df)
+
     # P3.7: Generate reports (skip with --no-reports for faster testing)
     excel_path = None
     html_path = None
@@ -958,20 +1001,20 @@ def run_predictions(
             year=year,
             week=week,
             games_predicted=len(predictions),
-            value_plays=len(value_plays),
+            value_plays=value_plays_count,
             report_path=excel_path,
         )
 
     logger.info("Prediction run complete!")
     logger.info(f"Games predicted: {len(predictions)}")
-    logger.info(f"Value plays: {len(value_plays)}")
+    logger.info(f"Value plays: {value_plays_count}")
 
     return {
         "success": True,
         "year": year,
         "week": week,
         "games_predicted": len(predictions),
-        "value_plays": len(value_plays),
+        "value_plays": value_plays_count,
         "excel_path": str(excel_path) if excel_path else None,
         "html_path": str(html_path) if html_path else None,
     }
