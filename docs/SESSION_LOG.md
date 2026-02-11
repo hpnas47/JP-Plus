@@ -136,6 +136,113 @@ Default behavior (no `game_date`) unchanged — assumes DST is active.
 
 ---
 
+### Theme: Bug Fix Sweep (Evening Session)
+
+Multiple architectural bugs identified and fixed. All fixes validated via backtest with no regression.
+
+---
+
+#### Add Totals Preseason Priors to 2026 Production Planning — COMMITTED
+**Commit**: `53ec79e`
+
+Added feature spec to MODEL_ARCHITECTURE.md for enabling week 0/1 totals predictions:
+- End-of-season snapshot of totals ratings to carry forward
+- 30-40% regression to mean (teams regress toward league average)
+- Blending schedule: 100% prior in week 0-1 → fades to ~30% by week 4
+- Roster continuity adjustment for high-churn teams
+- Implementation: `src/models/totals_priors.py`, `scripts/save_totals_priors.py`
+
+---
+
+#### Fix Pace Adjustment Incorrectly Compressing FCS Penalty — COMMITTED
+**Commit**: `d537fc3`
+
+**The Bug:** `_get_pace_adjustment()` was applied to the full spread including FCS penalty. If Army hosts an FCS team, the 32-point FCS penalty got compressed by 10%, subtracting 3.2 points from the spread.
+
+**The Fix:** Reorder spread calculation so pace adjustment is applied BEFORE FCS penalty:
+1. Calculate efficiency-derived spread (ratings + adjustments + ST)
+2. Apply pace compression (10% toward zero)
+3. THEN add FCS penalty (uncompressed)
+
+---
+
+#### Fix Venue Smoothing Incorrectly Triggered by Rest/Consecutive — COMMITTED
+**Commit**: `7befaf7`
+
+**The Bug:** `env_smoothing_factor = env_score / raw_env_stack` where `raw_env_stack` included rest and consecutive_road. Negative situational values could mask the venue stack, and positive ones could trigger smoothing on venue components that hadn't changed.
+
+Example:
+- HFA=3.5, travel=2.0, altitude=1.5, rest=-2.0 → factor=1.0 (no smoothing)
+- HFA=3.5, travel=2.0, altitude=1.5, rest=+0.5 → factor=0.67 (venue over-smoothed)
+
+**The Fix:**
+- Calculate `raw_venue_stack` = HFA + travel + altitude only
+- Apply soft cap to venue stack, calculate `venue_smoothing_factor`
+- Add rest and consecutive_road linearly after venue smoothing
+- Use `venue_smoothing_factor` for component pro-rata allocation
+
+---
+
+#### Fix blend_with_inseason Weights Not Summing to 1.0 — COMMITTED
+**Commit**: `c77dbb2`
+
+**The Bug:** The `games_played <= 0` branch set `prior_weight = 0.95 - talent_weight` with `inseason_weight = 0.0`, summing to only 0.95. This silently compressed all preseason ratings by 5%, shrinking early-season spreads by ~1.5 points on 30-point mismatches.
+
+**The Fix:** `prior_weight = 1.0 - effective_talent_weight` at week 0.
+
+Added assertion after all branches to prevent future regressions:
+```python
+assert abs(prior_weight + inseason_weight + effective_talent_weight - 1.0) < 1e-9
+```
+
+---
+
+#### Fix Kickoff Rating Unit Mismatch — COMMITTED
+**Commit**: `3a61220`
+
+**The Bug:** In `calculate_kickoff_ratings_from_plays`:
+1. `tb_bonus` was a rate difference (e.g., 0.10) multiplied by kicks_per_game, double-counting volume
+2. `return_saved` was per-return points scaled by total kicks including touchbacks
+
+**The Fix:**
+- `tb_bonus`: `(tb_rate - 0.60) × kicks / games × 0.15` → pts/game
+- `return_saved`: `(23 - avg_return) × 0.04 × returns / games` → pts/game
+- `coverage_rating` = direct sum (both already pts/game, no further multiplication)
+
+Added unit comments on all intermediate columns: `[dimensionless]`, `[kicks]`, `[games]`, `[yards/return]`, `[pts/return]`, `[returns/game]`, `[pts/game]`
+
+---
+
+#### Fix Rating Column Dtype: float32 not int16 — COMMITTED
+**Commit**: `1073d07`
+
+**The Bug:** `config/dtypes.py` listed `rating` in INT16_COLUMNS with comment "Recruit rating (0-100)", but 247Sports ratings are floats in 0.0-1.0 range (e.g., 0.8834). If `optimize_dtypes()` was applied to portal data, ratings truncated to 0, collapsing all transfers to floor quality factor (0.1).
+
+**The Fix:**
+- Move `rating` from INT16_COLUMNS → FLOAT32_COLUMNS
+- Add warning comment: "0.0-1.0 scale, e.g., 0.8834 — NOT integer 0-100"
+- Disambiguate `distance` and `yards_to_goal` with "Play-by-play:" prefix
+
+---
+
+#### Fix Pick'em Line (0.0) Being Discarded in get_merged_lines — COMMITTED
+**Commit**: `05a6387`
+
+**The Bug:** Python's `or` operator treats 0.0 as falsy, so `odds_line.spread_open or cfbd_line.spread_open` silently discarded the Odds API value when it was a pick'em (0.0) and substituted the CFBD value.
+
+**The Fix:** Replace all `x or y` fallback patterns with explicit None checks:
+```python
+spread_open=(
+    odds_line.spread_open if odds_line.spread_open is not None
+    else cfbd_line.spread_open
+)
+```
+Applied to: `spread_open`, `spread_close`, `home_team`, `away_team`, `sportsbook`
+
+Audited `get_odds_api_lines` — uses direct assignment, no `or`-based fallbacks.
+
+---
+
 ## Session: February 9, 2026
 
 ### Theme: MAE Regression Investigation + FCS Safeguard Bug Fix + Smoothed Stack Property + Sign Convention Hardening + Performance Hardening + Infrastructure Hardening + Vectorization Sweep
