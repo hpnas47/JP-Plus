@@ -176,13 +176,13 @@ def calculate_ou_ats(
         Tuple of (wins, losses, pushes)
     """
     valid = preds_df[preds_df[vegas_col].notna()].copy()
-    valid['edge'] = abs(valid['predicted_total'] - valid[vegas_col])
+    valid['edge'] = abs(valid['adjusted_total'] - valid[vegas_col])
     valid = valid[valid['edge'] >= edge_min]
 
     wins, losses, pushes = 0, 0, 0
 
     for r in valid.itertuples():
-        jp_total = r.predicted_total
+        jp_total = r.adjusted_total
         vegas_total = getattr(r, vegas_col)
         actual = r.actual_total
 
@@ -251,8 +251,8 @@ def main():
     # Export to CSV if requested
     if args.output:
         # Add edge columns for convenience
-        preds_df['edge_close'] = preds_df['predicted_total'] - preds_df['vegas_total_close']
-        preds_df['edge_open'] = preds_df['predicted_total'] - preds_df['vegas_total_open']
+        preds_df['edge_close'] = preds_df['adjusted_total'] - preds_df['vegas_total_close']
+        preds_df['edge_open'] = preds_df['adjusted_total'] - preds_df['vegas_total_open']
 
         # Add play column (OVER/UNDER based on edge)
         preds_df['play'] = preds_df['edge_close'].apply(

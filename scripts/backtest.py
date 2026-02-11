@@ -855,8 +855,9 @@ def walk_forward_predict(
                     train_st_pd, max_week=pred_week - 1
                 )
                 # Integrate special teams ratings into EFM for O/D/ST breakdown (diagnostic only)
-                for team, st_rating in special_teams.team_ratings.items():
-                    efm.set_special_teams_rating(team, st_rating.overall_rating)
+                if not use_pure_priors:
+                    for team, st_rating in special_teams.team_ratings.items():
+                        efm.set_special_teams_rating(team, st_rating.overall_rating)
 
         # Update FCS estimator with games from prior weeks (walk-forward safe)
         # Only update if we have an estimator and not using static mode
@@ -2200,8 +2201,8 @@ def print_data_sanity_report(season_data: dict, years: list[int], verbose: bool 
                 print(f"    ⚠ Missing regular-season play weeks: {sorted(missing_play_weeks)}")
             if postseason_game_weeks:
                 print(f"    Postseason: {len(postseason_game_weeks)} pseudo-week(s), plays in {len(postseason_play_weeks)} week(s)")
-            if priors:
-                print(f"    Preseason priors: {len(priors.preseason_ratings)} teams")
+            if sd.priors:
+                print(f"    Preseason priors: {len(sd.priors.preseason_ratings)} teams")
 
     # P3.9: Compact summary for non-verbose (warnings only)
     if not verbose:
