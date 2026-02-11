@@ -205,6 +205,9 @@ class LearnedSituationalCoefficients:
     alpha: float
     intercept: float
     coefficients: dict[str, float] = field(default_factory=dict)
+    # Training configuration and statistics (for diagnostics)
+    training_config: dict = field(default_factory=dict)
+    training_stats: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -215,6 +218,8 @@ class LearnedSituationalCoefficients:
             "alpha": self.alpha,
             "intercept": self.intercept,
             "coefficients": self.coefficients,
+            "training_config": self.training_config,
+            "training_stats": self.training_stats,
         }
 
     @classmethod
@@ -227,6 +232,8 @@ class LearnedSituationalCoefficients:
             alpha=data["alpha"],
             intercept=data["intercept"],
             coefficients=data["coefficients"],
+            training_config=data.get("training_config", {}),
+            training_stats=data.get("training_stats", {}),
         )
 
 
@@ -251,6 +258,16 @@ class LearnedSituationalModel:
         ema_beta: float = 0.3,
         clamp_max: Optional[float] = 4.0,
         persist_dir: Optional[Path] = None,
+        # Turnover adjustment parameters
+        adjust_for_turnovers: bool = False,
+        turnover_point_value: float = 4.0,
+        # Vegas spread filter parameters
+        max_abs_vegas_spread: Optional[float] = None,
+        # Sample weighting parameters
+        use_sample_weights: bool = False,
+        weight_spread_threshold: Optional[float] = None,
+        # Minimum sample safeguard
+        min_training_games: int = 30,
     ):
         """Initialize LSA model.
 
@@ -260,6 +277,12 @@ class LearnedSituationalModel:
             ema_beta: EMA smoothing factor (0.3 = 30% new, 70% prior)
             clamp_max: Maximum coefficient magnitude (e.g., 4.0 clamps to [-4, +4]). Default 4.0.
             persist_dir: Optional directory for coefficient JSON persistence
+            adjust_for_turnovers: If True, adjust residuals to remove turnover noise. Default False.
+            turnover_point_value: Points per turnover for target adjustment. Default 4.0.
+            max_abs_vegas_spread: Filter training games with |vegas_spread| > threshold. None disables.
+            use_sample_weights: If True, use smooth Cauchy weighting instead of hard filter. Default False.
+            weight_spread_threshold: Spread threshold for Cauchy decay (default 17.0 if weights enabled).
+            min_training_games: Minimum games after filtering; relax filter if below. Default 30.
         """
         self.ridge_alpha = ridge_alpha
         self.min_games = min_games
@@ -267,9 +290,35 @@ class LearnedSituationalModel:
         self.clamp_max = clamp_max
         self.persist_dir = persist_dir
 
+        # Turnover adjustment
+        self.adjust_for_turnovers = adjust_for_turnovers
+        self.turnover_point_value = turnover_point_value
+
+        # Vegas spread filter
+        self.max_abs_vegas_spread = max_abs_vegas_spread
+
+        # Sample weighting
+        self.use_sample_weights = use_sample_weights
+        self.weight_spread_threshold = weight_spread_threshold if weight_spread_threshold is not None else 17.0
+        self.min_training_games = min_training_games
+
+        # Log if both weighting and filter are enabled (weighting takes precedence)
+        if use_sample_weights and max_abs_vegas_spread is not None:
+            logger.info(
+                "LSA: Both weighted training and Vegas filter specified; using weighting only."
+            )
+
         # Training data: parallel lists for efficient numpy stacking
         self._X_train: list[np.ndarray] = []  # Feature rows
-        self._y_train: list[float] = []  # Residuals
+        self._y_train: list[float] = []  # Residuals (post-turnover-adjustment)
+        self._sample_weights: list[float] = []  # Sample weights for weighted Ridge
+        self._vegas_spreads: list[Optional[float]] = []  # For filtering at train time
+
+        # Diagnostic counters (reset each season)
+        self._n_games_total: int = 0
+        self._n_games_turnover_adjusted: int = 0
+        self._n_games_turnover_missing: int = 0
+        self._n_games_filtered_vegas: int = 0
 
         # Current learned coefficients (dict[feature_name -> coefficient])
         self._coefficients: Optional[dict[str, float]] = None
@@ -300,6 +349,13 @@ class LearnedSituationalModel:
         # Clear training data to prevent duplicate accumulation across seasons
         self._X_train.clear()
         self._y_train.clear()
+        self._sample_weights.clear()
+        self._vegas_spreads.clear()
+        # Reset diagnostic counters
+        self._n_games_total = 0
+        self._n_games_turnover_adjusted = 0
+        self._n_games_turnover_missing = 0
+        self._n_games_filtered_vegas = 0
         # Clear EMA state so first train() uses raw coefficients without smoothing.
         # This is correct because training data already includes prior seasons
         # via seed_with_prior_data() - no need for additional cross-season EMA bleed.
@@ -309,7 +365,7 @@ class LearnedSituationalModel:
 
     def seed_with_prior_data(
         self,
-        prior_training_data: list[tuple[np.ndarray, float]],
+        prior_training_data: list[tuple],
     ) -> None:
         """Seed model with training data from prior completed seasons.
 
@@ -320,7 +376,9 @@ class LearnedSituationalModel:
         to prevent duplicate data accumulation.
 
         Args:
-            prior_training_data: List of (features_array, residual) tuples
+            prior_training_data: List of tuples. Supports two formats:
+                - Legacy: (features_array, residual)
+                - Extended: (features_array, residual, weight, vegas_spread)
 
         Raises:
             RuntimeError: If called multiple times without reset()
@@ -332,10 +390,28 @@ class LearnedSituationalModel:
             )
 
         # Prepend prior data, preserving any current-season games already added
-        prior_X = [t[0] for t in prior_training_data]
-        prior_y = [t[1] for t in prior_training_data]
+        prior_X = []
+        prior_y = []
+        prior_weights = []
+        prior_vegas = []
+
+        for t in prior_training_data:
+            prior_X.append(t[0])
+            prior_y.append(t[1])
+            # Handle extended format with weights and vegas spreads
+            if len(t) >= 3:
+                prior_weights.append(t[2])
+            else:
+                prior_weights.append(1.0)  # Default weight
+            if len(t) >= 4:
+                prior_vegas.append(t[3])
+            else:
+                prior_vegas.append(None)  # Unknown vegas spread
+
         self._X_train = prior_X + self._X_train
         self._y_train = prior_y + self._y_train
+        self._sample_weights = prior_weights + self._sample_weights
+        self._vegas_spreads = prior_vegas + self._vegas_spreads
         self._seeded = True
         logger.debug(
             "LSA seeded with %d prior games (%d total)",
@@ -347,21 +423,78 @@ class LearnedSituationalModel:
         self,
         features: SituationalFeatures,
         residual: float,
+        turnover_margin: Optional[float] = None,
+        vegas_spread: Optional[float] = None,
     ) -> None:
         """Add a completed game to training data.
 
         Args:
             features: Situational feature vector for the game
-            residual: actual_margin - base_margin_no_situ
+            residual: actual_margin - base_margin_no_situ (raw, before turnover adjustment)
+            turnover_margin: Home takeaways - home giveaways (positive = home gained turnovers).
+                            If None and adjust_for_turnovers=True, uses 0 and logs warning.
+            vegas_spread: Vegas closing spread for the game (for filtering/weighting).
+                          Convention: negative = home favored (Vegas standard).
         """
+        self._n_games_total += 1
+
+        # Apply turnover adjustment to residual if enabled
+        adjusted_residual = residual
+        if self.adjust_for_turnovers:
+            if turnover_margin is not None:
+                # Remove turnover-driven noise from residual
+                # Positive turnover_margin = home gained turnovers = home scored more than expected
+                # We remove this from residual to isolate situational effects
+                adjustment = turnover_margin * self.turnover_point_value
+                adjusted_residual = residual - adjustment
+                self._n_games_turnover_adjusted += 1
+            else:
+                # No turnover data - use unadjusted residual and log warning
+                self._n_games_turnover_missing += 1
+                if self._n_games_turnover_missing <= 5:  # Limit log spam
+                    logger.warning(
+                        "LSA: Missing turnover data for game; using unadjusted residual"
+                    )
+
+        # Compute sample weight based on Vegas spread
+        weight = self._compute_sample_weight(vegas_spread)
+
         self._X_train.append(features.to_array())
-        self._y_train.append(residual)
+        self._y_train.append(adjusted_residual)
+        self._sample_weights.append(weight)
+        self._vegas_spreads.append(vegas_spread)
+
+    def _compute_sample_weight(self, vegas_spread: Optional[float]) -> float:
+        """Compute sample weight using Cauchy-style decay for large spreads.
+
+        Args:
+            vegas_spread: Vegas spread (negative = home favored)
+
+        Returns:
+            Weight in (0, 1]. Returns 1.0 if weighting disabled or spread unknown.
+        """
+        if not self.use_sample_weights:
+            return 1.0
+        if vegas_spread is None:
+            return 1.0
+        if self.weight_spread_threshold is None or self.weight_spread_threshold <= 0:
+            return 1.0
+
+        # Use absolute value of spread (ignore sign convention)
+        abs_spread = abs(vegas_spread)
+        # Cauchy-style decay: 1 / (1 + (x/threshold)^2)
+        return 1.0 / (1.0 + (abs_spread / self.weight_spread_threshold) ** 2)
 
     def train(self, max_week: int) -> Optional[LearnedSituationalCoefficients]:
         """Train ridge regression on accumulated training data.
 
         Should be called after each week's games are added. If fewer than
         min_games are available, returns None (caller should use fixed constants).
+
+        Filtering/weighting logic:
+        - If use_sample_weights=True: uses Cauchy-weighted Ridge (no hard filter)
+        - Elif max_abs_vegas_spread set: filters out large-spread games (hard filter)
+        - If filtering would drop below min_training_games: relaxes filter
 
         Args:
             max_week: Maximum week included in training data
@@ -371,21 +504,72 @@ class LearnedSituationalModel:
         """
         self._max_week = max_week
 
-        n_games = len(self._X_train)
-        if n_games < self.min_games:
+        n_games_total = len(self._X_train)
+        if n_games_total < self.min_games:
             logger.debug(
-                "LSA: %d games < min %d, skipping training", n_games, self.min_games
+                "LSA: %d games < min %d, skipping training", n_games_total, self.min_games
             )
             self._is_trained = False
             return None
 
+        # Determine which samples to use and their weights
+        X_list = self._X_train
+        y_list = self._y_train
+        weights_list = self._sample_weights
+        vegas_list = self._vegas_spreads
+
+        n_filtered_vegas = 0
+        use_filter = False
+
+        # Apply Vegas spread filter if enabled (and NOT using weighted training)
+        if self.max_abs_vegas_spread is not None and not self.use_sample_weights:
+            # Build mask for games passing the filter
+            pass_filter = []
+            for vs in vegas_list:
+                if vs is None:
+                    # Unknown spread - do NOT filter (passes)
+                    pass_filter.append(True)
+                elif abs(vs) <= self.max_abs_vegas_spread:
+                    pass_filter.append(True)
+                else:
+                    pass_filter.append(False)
+
+            n_filtered = sum(1 for p in pass_filter if not p)
+            n_after_filter = sum(pass_filter)
+
+            # Check minimum training sample safeguard
+            if n_after_filter < self.min_training_games:
+                logger.warning(
+                    "LSA: Vegas spread filter disabled for week %d: would reduce training "
+                    "games from %d to %d (below minimum %d)",
+                    max_week, n_games_total, n_after_filter, self.min_training_games
+                )
+                # Relax filter - use all games
+                pass_filter = [True] * n_games_total
+                n_filtered = 0
+            else:
+                use_filter = True
+                n_filtered_vegas = n_filtered
+
+            # Apply filter
+            if use_filter:
+                X_list = [x for x, p in zip(self._X_train, pass_filter) if p]
+                y_list = [y for y, p in zip(self._y_train, pass_filter) if p]
+                weights_list = [w for w, p in zip(self._sample_weights, pass_filter) if p]
+
         # Build feature matrix and target vector (efficient stack)
-        X = np.vstack(self._X_train)
-        y = np.array(self._y_train)
+        X = np.vstack(X_list)
+        y = np.array(y_list)
+        n_games_used = len(y_list)
+
+        # Determine sample weights for Ridge
+        sample_weight = None
+        if self.use_sample_weights:
+            sample_weight = np.array(weights_list)
 
         # Fit ridge regression
         model = Ridge(alpha=self.ridge_alpha, fit_intercept=True)
-        model.fit(X, y)
+        model.fit(X, y, sample_weight=sample_weight)
 
         # Extract coefficients
         raw_coefs = {
@@ -424,17 +608,23 @@ class LearnedSituationalModel:
         self._intercept = float(model.intercept_)
         self._prev_coefficients = dict(self._coefficients)  # Save for next round
         self._is_trained = True
+        self._n_games_filtered_vegas = n_filtered_vegas
 
         # Check for sign flips
         self._check_sign_flips()
 
-        # Log summary
+        # Log summary with diagnostics
+        pct_filtered = (n_games_total - n_games_used) / n_games_total * 100 if n_games_total > 0 else 0
+        if pct_filtered > 25:
+            logger.warning(
+                "LSA: High filter rate: %.1f%% of games filtered (%d -> %d)",
+                pct_filtered, n_games_total, n_games_used
+            )
+
         nonzero_count = sum(1 for v in self._coefficients.values() if abs(v) > 0.1)
         logger.debug(
-            "LSA trained: %d games, week %d, %d features > 0.1 magnitude",
-            n_games,
-            max_week,
-            nonzero_count,
+            "LSA trained: %d/%d games (%.1f%% filtered), week %d, %d features > 0.1 magnitude",
+            n_games_used, n_games_total, pct_filtered, max_week, nonzero_count,
         )
 
         # Validate year before persisting
@@ -446,14 +636,33 @@ class LearnedSituationalModel:
         else:
             result_year = self._year
 
+        # Build training config and stats for persistence
+        training_config = {
+            "adjust_for_turnovers": self.adjust_for_turnovers,
+            "turnover_point_value": self.turnover_point_value,
+            "max_abs_vegas_spread": self.max_abs_vegas_spread,
+            "use_sample_weights": self.use_sample_weights,
+            "weight_spread_threshold": self.weight_spread_threshold if self.use_sample_weights else None,
+        }
+        training_stats = {
+            "n_games_total": n_games_total,
+            "n_games_used": n_games_used,
+            "n_games_turnover_adjusted": self._n_games_turnover_adjusted,
+            "n_games_turnover_missing": self._n_games_turnover_missing,
+            "n_games_filtered_vegas": n_filtered_vegas,
+            "pct_filtered": round(pct_filtered, 2),
+        }
+
         # Build result object
         result = LearnedSituationalCoefficients(
             year=result_year,
             max_week=max_week,
-            n_games=n_games,
+            n_games=n_games_used,
             alpha=self.ridge_alpha,
             intercept=self._intercept,
             coefficients=dict(self._coefficients),
+            training_config=training_config,
+            training_stats=training_stats,
         )
 
         # Persist to disk if configured (only if year is valid)
@@ -492,13 +701,13 @@ class LearnedSituationalModel:
         """Get current learned coefficients."""
         return dict(self._coefficients) if self._coefficients else None
 
-    def get_training_data(self) -> list[tuple[np.ndarray, float]]:
+    def get_training_data(self) -> list[tuple]:
         """Get accumulated training data (for passing to next season).
 
-        Returns tuple format for backward compatibility with seed_with_prior_data().
-        Note: Consider using parallel list format (X, y) for new code.
+        Returns extended tuple format: (features_array, residual, weight, vegas_spread)
+        Compatible with seed_with_prior_data() which handles both legacy and extended formats.
         """
-        return list(zip(self._X_train, self._y_train))
+        return list(zip(self._X_train, self._y_train, self._sample_weights, self._vegas_spreads))
 
     def _check_sign_flips(self) -> None:
         """Check for coefficient sign flips vs expected and log warnings."""

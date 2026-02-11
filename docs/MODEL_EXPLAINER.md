@@ -66,13 +66,15 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 | Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) | Use Case |
 |------|-----------------|----------------|-----------------|----------------|----------|
 | Fixed baseline | **53.4%** | **55.6%** | 54.5% | **57.0%** | Standard production |
-| LSA (alpha=300) | 52.9% | 55.4% | **56.1%** | 56.3% | High-conviction filtering |
+| LSA + TO-adj | 52.5% | 55.5% | **55.8%** | 56.5% | High-conviction filtering |
 
-**Key insight:** LSA serves as a high-confidence filter for closing lines. It improves 5+ Edge (Close) by +1.6pp (54.5% → 56.1%) while slightly reducing 3+ performance. However, LSA slightly hurts opening line performance (57.0% → 56.3% at 5+), suggesting fixed situational adjustments better capture value that the market hasn't yet priced in.
+**Turnover Adjustment:** LSA training residuals are adjusted for turnover margin to remove ~4 pts/turnover noise. Formula: `adjusted_residual = raw_residual - (turnover_margin × 4.0)`. This improves coefficient stability and 5+ Edge by +0.2pp vs unadjusted LSA.
+
+**Key insight:** LSA serves as a high-confidence filter for closing lines. It improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while slightly reducing 3+ performance. However, LSA slightly hurts opening line performance (57.0% → 56.5% at 5+), suggesting fixed situational adjustments better capture value that the market hasn't yet priced in.
 
 **Recommendation:** Use LSA for closing line bets; use fixed baseline for opening line bets.
 
-**Configuration:** `alpha=300.0`, `clamp_max=4.0` (safety net)
+**Configuration:** `alpha=300.0`, `clamp_max=4.0`, `adjust_for_turnovers=True` (default ON)
 
 #### Dynamic Bet Timing Mode
 

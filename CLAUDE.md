@@ -68,12 +68,14 @@
 
 Learned Situational Adjustment replaces fixed situational constants with ridge-learned coefficients. Acts as a **high-confidence filter** — improves 5+ Edge at cost of 3+ Edge.
 
-| Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
-|------|-----------------|-----------------|----------|
-| Fixed (default) | **53.5%** (750-651) | 54.3% (463-390) | Standard production |
-| LSA enabled | 52.8% (723-647) | **55.6%** (450-359) | High-conviction filtering |
+| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) | Use Case |
+|------|-----------------|----------------|-----------------|----------------|----------|
+| Fixed (default) | **53.4%** | **55.6%** | 54.5% | **57.0%** | Standard production |
+| LSA + TO-adj | 52.5% | 55.5% | **55.8%** | 56.5% | High-conviction filtering |
 
-**LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`
+**LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`, `adjust_for_turnovers=True` (default ON)
+
+**Turnover Adjustment:** Removes ~4 pts/turnover noise from training residuals, improving coefficient stability and 5+ Edge by +0.2pp.
 
 ### Model Configuration
 

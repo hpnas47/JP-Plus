@@ -622,7 +622,10 @@ def walk_forward_predict(
     fcs_static: bool = False,
     # Learned Situational Adjustment (LSA) parameters
     lsa_model: Optional[LearnedSituationalModel] = None,
-) -> tuple[list[dict], list[tuple[np.ndarray, float]]]:
+    # LSA training data sources (for turnover adjustment and Vegas filter)
+    turnover_df: Optional[pl.DataFrame] = None,
+    betting_df: Optional[pl.DataFrame] = None,
+) -> tuple[list[dict], list[tuple]]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
     For each week from start_week onward:
@@ -933,9 +936,26 @@ def walk_forward_predict(
                         fixed_situational=pred.components.situational,
                     )
 
-                    # Add to training data
-                    lsa_training_data.append((features.to_array(), residual))
-                    lsa_model.add_training_game(features, residual)
+                    # Look up turnover margin for this game (for LSA turnover adjustment)
+                    turnover_margin = None
+                    if turnover_df is not None and len(turnover_df) > 0:
+                        game_to_row = turnover_df.filter(pl.col("game_id") == game["id"])
+                        if len(game_to_row) > 0:
+                            turnover_margin = game_to_row["net_home_to_margin"][0]
+
+                    # Look up Vegas spread for this game (for LSA filtering/weighting)
+                    vegas_spread = None
+                    if betting_df is not None and len(betting_df) > 0:
+                        game_betting = betting_df.filter(pl.col("game_id") == game["id"])
+                        if len(game_betting) > 0:
+                            # Use closing spread (spread column), not opening
+                            if "spread" in game_betting.columns:
+                                vegas_spread = game_betting["spread"][0]
+
+                    # Add to training data (extended format with weight and vegas)
+                    weight = lsa_model._compute_sample_weight(vegas_spread) if lsa_model else 1.0
+                    lsa_training_data.append((features.to_array(), residual, weight, vegas_spread))
+                    lsa_model.add_training_game(features, residual, turnover_margin, vegas_spread)
 
                     # If model is trained, apply learned adjustment instead of fixed
                     if lsa_model.is_trained():
@@ -2219,6 +2239,13 @@ def _process_single_season(
     lsa_ema: float = 0.3,
     lsa_clamp_max: Optional[float] = 4.0,
     lsa_prior_data: Optional[list] = None,  # Prior years' training data
+    # LSA training signal quality parameters
+    lsa_adjust_turnovers: bool = False,
+    lsa_turnover_value: float = 4.0,
+    lsa_filter_vegas: Optional[float] = None,
+    lsa_weighted_training: bool = False,
+    lsa_weight_spread: float = 17.0,
+    lsa_min_training_games: int = 30,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2245,6 +2272,7 @@ def _process_single_season(
     # Extract fields from SeasonData (named access prevents positional bugs)
     games_df = season_data.games_df
     betting_df = season_data.betting_df
+    turnover_df = season_data.turnover_df
     efficiency_plays_df = season_data.efficiency_plays_df
     fbs_teams = season_data.fbs_teams
     st_plays_df = season_data.st_plays_df
@@ -2276,6 +2304,13 @@ def _process_single_season(
             ema_beta=lsa_ema,
             clamp_max=lsa_clamp_max,
             persist_dir=persist_dir,
+            # Training signal quality parameters
+            adjust_for_turnovers=lsa_adjust_turnovers,
+            turnover_point_value=lsa_turnover_value,
+            max_abs_vegas_spread=lsa_filter_vegas,
+            use_sample_weights=lsa_weighted_training,
+            weight_spread_threshold=lsa_weight_spread,
+            min_training_games=lsa_min_training_games,
         )
         lsa_model.reset(year)
         # Seed with prior years' training data
@@ -2315,6 +2350,8 @@ def _process_single_season(
         fcs_estimator=fcs_estimator,
         fcs_static=fcs_static,
         lsa_model=lsa_model,
+        turnover_df=turnover_df,
+        betting_df=betting_df,
     )
 
     # Calculate ATS
@@ -2375,6 +2412,13 @@ def run_backtest(
     lsa_min_games: int = 150,
     lsa_ema: float = 0.3,
     lsa_clamp_max: Optional[float] = 4.0,
+    # LSA training signal quality parameters
+    lsa_adjust_turnovers: bool = False,
+    lsa_turnover_value: float = 4.0,
+    lsa_filter_vegas: Optional[float] = None,
+    lsa_weighted_training: bool = False,
+    lsa_weight_spread: float = 17.0,
+    lsa_min_training_games: int = 30,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2509,6 +2553,13 @@ def run_backtest(
         lsa_min_games=lsa_min_games,
         lsa_ema=lsa_ema,
         lsa_clamp_max=lsa_clamp_max,
+        # LSA training signal quality params
+        lsa_adjust_turnovers=lsa_adjust_turnovers,
+        lsa_turnover_value=lsa_turnover_value,
+        lsa_filter_vegas=lsa_filter_vegas,
+        lsa_weighted_training=lsa_weighted_training,
+        lsa_weight_spread=lsa_weight_spread,
+        lsa_min_training_games=lsa_min_training_games,
     )
 
     # LSA requires sequential processing: prior years' data feeds later years
@@ -3132,6 +3183,41 @@ def main():
         default=4.0,
         help="LSA coefficient clamp magnitude (e.g., 3.0 clamps to [-3, +3]). Default: 4.0",
     )
+    # LSA training signal quality parameters
+    parser.add_argument(
+        "--lsa-adjust-turnovers",
+        action="store_true",
+        help="Adjust LSA training residuals to remove turnover-driven noise",
+    )
+    parser.add_argument(
+        "--lsa-turnover-value",
+        type=float,
+        default=4.0,
+        help="Points per turnover for target adjustment. Default: 4.0",
+    )
+    parser.add_argument(
+        "--lsa-filter-vegas",
+        type=float,
+        default=None,
+        help="Filter LSA training games with |vegas_spread| > threshold (e.g., 21.0). None disables.",
+    )
+    parser.add_argument(
+        "--lsa-weighted-training",
+        action="store_true",
+        help="Use smooth Cauchy sample weighting instead of hard Vegas filter",
+    )
+    parser.add_argument(
+        "--lsa-weight-spread",
+        type=float,
+        default=17.0,
+        help="Spread threshold for Cauchy weight decay. Default: 17.0",
+    )
+    parser.add_argument(
+        "--lsa-min-training-games",
+        type=int,
+        default=30,
+        help="Minimum games after filtering; relax filter if below. Default: 30",
+    )
 
     args = parser.parse_args()
 
@@ -3234,6 +3320,13 @@ def main():
         lsa_min_games=args.lsa_min_games,
         lsa_ema=args.lsa_ema,
         lsa_clamp_max=args.lsa_clamp_max,
+        # LSA training signal quality params
+        lsa_adjust_turnovers=args.lsa_adjust_turnovers,
+        lsa_turnover_value=args.lsa_turnover_value,
+        lsa_filter_vegas=args.lsa_filter_vegas,
+        lsa_weighted_training=args.lsa_weighted_training,
+        lsa_weight_spread=args.lsa_weight_spread,
+        lsa_min_training_games=args.lsa_min_training_games,
     )
 
     # P3.4: Print results with ATS data for sanity report

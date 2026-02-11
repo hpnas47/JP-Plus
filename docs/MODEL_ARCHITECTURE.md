@@ -504,13 +504,27 @@ The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
 - Multi-year pooling: ~3,000+ training samples by week 4 (pools all prior seasons)
 - Walk-forward safe: Only trains on games from weeks < prediction week
 - EMA smoothing (beta=0.3) for coefficient stability week-to-week
+- **Turnover adjustment:** Training residuals adjusted to remove turnover noise (see below)
 
-**Grid Sweep Results (2022-2025, Core weeks 4-15):**
+**Grid Sweep Results (2022-2025, Core weeks 4-15, Closing Line):**
 
 | Config | 3+ Edge | 5+ Edge |
 |--------|---------|---------|
-| Fixed baseline | **53.1%** | 53.7% |
-| LSA alpha=300 | 52.3% | **54.9%** |
+| Fixed baseline | **53.4%** | 54.5% |
+| LSA + TO-adj | 52.5% | **55.8%** |
+
+**Turnover Adjustment (Training Signal Quality):**
+
+Raw residuals include turnover-driven variance that doesn't reflect situational factors. The turnover adjustment removes this noise:
+
+```python
+adjusted_residual = raw_residual - (turnover_margin × turnover_point_value)
+# Default: turnover_point_value = 4.0 pts/turnover
+```
+
+**Rationale:** If Team A won by 28 but had +3 turnovers, the raw residual is inflated by ~12 pts of turnover luck. Adjusting for this produces cleaner coefficient estimates for situational features like letdown/lookahead.
+
+**Impact:** +0.2pp on 5+ Edge (Close) vs unadjusted LSA (55.6% → 55.8%)
 
 **Parameters (optimized):**
 | Parameter | Default | Description |
@@ -519,6 +533,8 @@ The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
 | `lsa_min_games` | 150 | Minimum games before switching from fixed |
 | `lsa_ema` | 0.3 | EMA smoothing factor (30% new, 70% prior) |
 | `lsa_clamp_max` | 4.0 | Coefficient clamp safety net (no effect at alpha=300) |
+| `lsa_adjust_turnovers` | True | Enable turnover-adjusted residuals |
+| `lsa_turnover_pts` | 4.0 | Points per turnover for adjustment |
 
 **Key Finding — Rivalry Underdog Boost is a Fallacy:**
 
@@ -531,11 +547,11 @@ Forensic analysis of 108 rivalry underdog home games revealed that favorites in 
 
 Examples: Oklahoma -49 actual vs Texas when predicted -8 (residual -41), Arizona -42 vs ASU when predicted -2 (residual -40). LSA correctly learns a negative coefficient to offset the wrong fixed boost.
 
-**Trade-off:** LSA improves 5+ Edge by +1.2% while reducing 3+ Edge by -0.8%. This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
+**Trade-off:** LSA improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while reducing 3+ Edge by -0.9pp (53.4% → 52.5%). This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
 
 #### Dual-Spread Mode (Dynamic Bet Timing)
 
-**Problem:** LSA excels at closing lines (56.1% at 5+) but fixed baseline excels at opening lines (57.0% at 5+). Which should we use?
+**Problem:** LSA excels at closing lines (55.8% at 5+) but fixed baseline excels at opening lines (57.0% at 5+). Which should we use?
 
 **Solution:** The `--dual-spread` flag outputs both spreads and recommends the optimal one based on bet timing:
 
@@ -551,7 +567,7 @@ else:
 | Bet Timing | Recommended Mode | 5+ Edge | Rationale |
 |------------|------------------|---------|-----------|
 | Opening (Sun–Wed) | Fixed | **57.0%** | Raw market inefficiency not yet priced |
-| Closing (Thu–Sat) | LSA | **56.1%** | Market moved; LSA's filter identifies remaining edge |
+| Closing (Thu–Sat) | LSA + TO-adj | **55.8%** | Market moved; LSA's filter identifies remaining edge |
 
 **CLI:**
 ```bash
