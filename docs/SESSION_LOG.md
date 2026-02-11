@@ -4,6 +4,67 @@
 
 ---
 
+## Session: February 11, 2026
+
+### Theme: FCS Vectorization + HFA Neutralization
+
+---
+
+#### FCS Polars Vectorization — APPROVED
+**Status**: Committed
+**Commit**: `71ce0f0`
+
+Refactored `FCSStrengthEstimator.update_from_games()` to use vectorized Polars operations instead of Python loops.
+
+**Changes**:
+- Replaced `for row in filtered.iter_rows()` with vectorized pipeline
+- Uses `with_columns()` for FBS detection and margin calculation
+- Uses `group_by("fcs_team").agg()` for per-team aggregation
+- Cleaner code, same performance
+
+---
+
+#### FCS HFA Neutralization — REJECTED (infrastructure preserved)
+**Status**: Infrastructure committed, feature disabled by default
+**Commit**: `71ce0f0`
+
+Tested HFA neutralization to remove venue bias from FCS margin calculations.
+
+**Math**:
+- When Home is FBS: `margin = fcs_pts - (fbs_pts - hfa_value)`
+- When Home is FCS: `margin = (fcs_pts - hfa_value) - fbs_pts`
+
+**Parameter sweeps**:
+
+HFA sweep (intercept=9):
+| HFA | Phase 1 5+ Edge | Phase 2 5+ Edge |
+|-----|-----------------|-----------------|
+| 0.0 | 49.8% | 54.4% |
+| 1.5-3.0 | 49.7% | 54.4% |
+
+Intercept sweep (HFA=0):
+| Intercept | Phase 1 5+ Edge | Phase 2 5+ Edge |
+|-----------|-----------------|-----------------|
+| 7 | 49.1% | 54.2% |
+| 8 | 49.4% | 54.3% |
+| 9 | 49.8% | 54.4% |
+| **10** | **50.2%** | **54.3%** |
+| 11 | 49.6% | 54.4% |
+
+**Key finding**: HFA=0, intercept=10 matches original baseline exactly.
+
+**Rejection reason**: HFA neutralization helps Core (+0.1%) but hurts Phase 1 (-0.5%). Since FCS games occur primarily in Phase 1, the net effect is negative.
+
+**Infrastructure preserved**:
+- `hfa_value` parameter in `FCSStrengthEstimator` (default 0.0 = disabled)
+- `--fcs-hfa` CLI argument for future experimentation
+
+**Unit tests**:
+- HFA=0: raw_margin = -25.0 (no adjustment) ✓
+- HFA=3: raw_margin = -22.0 (FBS wins 35-10 at home) ✓
+
+---
+
 ## Session: February 10, 2026 (Late Night)
 
 ### Theme: Dynamic FCS Strength Estimator
