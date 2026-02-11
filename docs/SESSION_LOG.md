@@ -4,6 +4,71 @@
 
 ---
 
+## Session: February 11, 2026 (Morning-2)
+
+### Theme: Bug Fixes & Documentation
+
+---
+
+#### Dual-Spread Mode Documentation — COMMITTED
+**Status**: Committed (`a05e830`)
+**Files**: `docs/MODEL_EXPLAINER.md`, `docs/MODEL_ARCHITECTURE.md`
+
+Documented the `--dual-spread` feature for dynamic LSA/fixed switching based on bet timing.
+
+**Key insight documented**:
+- **4+ days out (Sun–Wed)** → Use fixed baseline (57.0% at 5+ Edge on opening lines)
+- **<4 days (Thu–Sat)** → Use LSA (56.1% at 5+ Edge on closing lines)
+
+**MODEL_EXPLAINER.md**: Added "Dynamic Bet Timing Mode" section with CLI examples
+**MODEL_ARCHITECTURE.md**: Added technical implementation details and performance table
+
+---
+
+#### EFM Bug Fixes (4 bugs) — COMMITTED
+**Status**: Committed (`73982cc`)
+**Files**: `src/models/efficiency_foundation_model.py`
+**Backtest**: Metrics unchanged (MAE 12.53, 5+ Edge 54.5%)
+
+**Bug 1: Invalid team indices (-1)** — HIGH SEVERITY
+- `pd.Categorical.codes` returns -1 for unknown teams → `np.bincount` fails
+- **Fix**: Added explicit validation with clear error message showing unknown teams
+
+**Bug 2: Data leakage guard used assert** — HIGH SEVERITY
+- Running Python with `-O` disables asserts → silent future-data leak
+- **Fix**: Changed to explicit `if/raise ValueError`
+
+**Bug 3: SettingWithCopyWarning in garbage_time_weight=0** — MEDIUM SEVERITY
+- Filtering creates view, then `df["weight"]=1.0` may not stick
+- **Fix**: Added `.copy()` after filter
+
+**Bug 4: In-place DataFrame mutation in _calculate_raw_metrics** — LOW SEVERITY
+- `plays_df["weighted_success"]=...` could contaminate cached DataFrames
+- **Fix**: Use `.assign()` with local array instead of mutating input
+
+---
+
+#### Aggregator Defensive Fix — COMMITTED
+**Status**: Committed (`b8aaee0`)
+**Files**: `src/adjustments/aggregator.py`
+
+**Issue**: `was_capped = False` not explicitly set in non-capped branch
+- Current code relies on dataclass default, but `env_was_capped` IS explicitly set in both branches
+- Inconsistent pattern; risk of state-leak if objects reused
+
+**Fix**: Added explicit `result.was_capped = False` in else branch to match `env_was_capped` pattern
+
+---
+
+#### Bug Validated as NOT A BUG
+
+**sort_values key=abs in generate_comparison_df** — NOT A BUG
+- Claimed: `abs` (Python builtin) doesn't work on pandas Series, would raise TypeError
+- **Reality**: Pandas Series implements `__abs__()`, so `abs(series)` works correctly
+- Tested both approaches; identical correct output (sorted by absolute edge descending)
+
+---
+
 ## Session: February 11, 2026 (Evening)
 
 ### Theme: FCS & LSA Code Hardening
