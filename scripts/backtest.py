@@ -105,16 +105,35 @@ def build_team_records(
                 & pl.col("home_points").is_not_null()
                 & pl.col("away_points").is_not_null()
             )
-            for row in regular.iter_rows(named=True):
-                home_won = row["home_points"] > row["away_points"]
-                for team, is_home in [(row["home_team"], True), (row["away_team"], False)]:
-                    if team not in records:
-                        records[team] = {}
-                    if year not in records[team]:
-                        records[team][year] = (0, 0)
+            # P3.4: Vectorized aggregation instead of Python row iteration
+            regular = regular.with_columns(
+                (pl.col("home_points") > pl.col("away_points")).alias("home_won")
+            )
+            # Home team stats: wins when home_won=True, losses when home_won=False
+            home_agg = regular.group_by("home_team").agg([
+                pl.col("home_won").sum().alias("wins"),
+                (~pl.col("home_won")).sum().alias("losses"),
+            ])
+            # Away team stats: wins when home_won=False, losses when home_won=True
+            away_agg = regular.group_by("away_team").agg([
+                (~pl.col("home_won")).sum().alias("wins"),
+                pl.col("home_won").sum().alias("losses"),
+            ])
+            # Merge into records dict
+            for row in home_agg.iter_rows(named=True):
+                team = row["home_team"]
+                if team not in records:
+                    records[team] = {}
+                records[team][year] = (row["wins"], row["losses"])
+            for row in away_agg.iter_rows(named=True):
+                team = row["away_team"]
+                if team not in records:
+                    records[team] = {}
+                if year in records[team]:
                     w, l = records[team][year]
-                    won = home_won if is_home else not home_won
-                    records[team][year] = (w + int(won), l + int(not won))
+                    records[team][year] = (w + row["wins"], l + row["losses"])
+                else:
+                    records[team][year] = (row["wins"], row["losses"])
             continue
 
         # Fallback: fetch from API for years not in cache
@@ -693,20 +712,58 @@ def walk_forward_predict(
     # LSA: If model provided, train after each week's games
     use_learned_situ = lsa_model is not None
 
-    for pred_week in range(start_week, max_week + 1):
-        # Training data: all plays from games before this week
-        # P1.2: Use Polars semi-join instead of materializing game_id list to Python
-        train_games_pl = games_df.filter(pl.col("week") < pred_week)
-        train_plays_pl = efficiency_plays_df.join(
-            train_games_pl.select("id"), left_on="game_id", right_on="id", how="semi"
+    # P3.1: Initialize HFA once (depends only on team_records and year, constant for season)
+    hfa = HomeFieldAdvantage(base_hfa=hfa_value, global_offset=hfa_global_offset)
+    if team_records:
+        hfa.calculate_trajectory_modifiers(team_records, year)
+    # Build HFA lookup once (reused every week)
+    hfa_lookup = {team: hfa.get_hfa_value(team) for team in fbs_teams}
+
+    # P3.2: Pre-convert Polars DataFrames to Pandas by week
+    # Week-keyed dict structure guarantees walk-forward correctness (no future data possible)
+    plays_by_week_pd = {}
+    games_by_week_pd = {}
+    for week in range(1, max_week + 1):
+        # Filter games for this week
+        week_games = games_df.filter(pl.col("week") == week)
+        if len(week_games) > 0:
+            games_by_week_pd[week] = optimize_dtypes(week_games.to_pandas())
+
+        # Filter plays for this week (FBS-only via semi-join + filter)
+        week_plays = efficiency_plays_df.join(
+            week_games.select("id"), left_on="game_id", right_on="id", how="semi"
         ).filter(
             pl.col("offense").is_in(fbs_teams_list) &
             pl.col("defense").is_in(fbs_teams_list)
         )
+        if len(week_plays) > 0:
+            plays_by_week_pd[week] = optimize_dtypes(week_plays.to_pandas())
+
+    # P3.3: Pre-convert ST plays by week
+    st_by_week_pd = {}
+    if st_plays_df is not None and len(st_plays_df) > 0:
+        for week in range(1, max_week + 1):
+            week_st = st_plays_df.filter(pl.col("week") == week)
+            if len(week_st) > 0:
+                st_by_week_pd[week] = optimize_dtypes(week_st.to_pandas())
+
+    for pred_week in range(start_week, max_week + 1):
+        # Training data: concat pre-converted week slices for weeks < pred_week
+        # Week-keyed dict guarantees no future data inclusion (walk-forward safe)
+        train_plays_pd = pd.concat(
+            [plays_by_week_pd[w] for w in range(1, pred_week) if w in plays_by_week_pd],
+            ignore_index=True
+        ) if any(w in plays_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
+
+        train_games_pd = pd.concat(
+            [games_by_week_pd[w] for w in range(1, pred_week) if w in games_by_week_pd],
+            ignore_index=True
+        ) if any(w in games_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
 
         # Check if we have enough training data
         use_pure_priors = False
-        if len(train_plays_pl) < 5000:
+        train_play_count = sum(len(plays_by_week_pd[w]) for w in range(1, pred_week) if w in plays_by_week_pd)
+        if train_play_count < 5000:
             # Not enough plays to train EFM - can we use pure preseason priors?
             if preseason_priors is not None and preseason_priors.preseason_ratings:
                 use_pure_priors = True
@@ -715,16 +772,10 @@ def walk_forward_predict(
                 )
             else:
                 logger.warning(
-                    f"Week {pred_week}: insufficient play data ({len(train_plays_pl)}) "
+                    f"Week {pred_week}: insufficient play data ({train_play_count}) "
                     f"and no preseason priors, skipping"
                 )
                 continue
-
-        # Initialize HFA with team-specific values and trajectory modifiers
-        hfa = HomeFieldAdvantage(base_hfa=hfa_value, global_offset=hfa_global_offset)
-        # Calculate trajectory modifiers if we have records
-        if team_records:
-            hfa.calculate_trajectory_modifiers(team_records, year)
 
         if use_pure_priors:
             # Week 1 (or any week with no training data): use 100% preseason priors
@@ -735,30 +786,7 @@ def walk_forward_predict(
             logger.debug(f"Week {pred_week}: using {len(team_ratings)} preseason ratings")
         else:
             # Normal case: train EFM on available data
-            # Convert to pandas for EFM (sklearn needs pandas/numpy)
-            # P3.4: Apply optimized dtypes for memory efficiency
-            train_plays_pd = optimize_dtypes(train_plays_pl.to_pandas())
-            train_games_pd = optimize_dtypes(train_games_pl.to_pandas())
-
-            # DATA LEAKAGE GUARD: Verify no future data in training set
-            if "week" in train_plays_pd.columns:
-                max_train_week = train_plays_pd["week"].max()
-                assert max_train_week < pred_week, (
-                    f"DATA LEAKAGE: Training plays include week {max_train_week} "
-                    f"but predicting week {pred_week}. Training data must be < pred_week."
-                )
-            if "week" in train_games_pd.columns:
-                max_train_game_week = train_games_pd["week"].max()
-                assert max_train_game_week < pred_week, (
-                    f"DATA LEAKAGE: Training games include week {max_train_game_week} "
-                    f"but predicting week {pred_week}. Training data must be < pred_week."
-                )
-
-            # Build team-specific HFA lookup for EFM fraud tax (uses full priority chain)
-            hfa_lookup = {
-                team: hfa.get_hfa_value(team)
-                for team in fbs_teams
-            }
+            # (train_plays_pd and train_games_pd already built via pd.concat above)
 
             # Build EFM model
             efm = EfficiencyFoundationModel(
@@ -837,19 +865,13 @@ def walk_forward_predict(
 
         # Calculate FG efficiency ratings from FG plays
         special_teams = SpecialTeamsModel()
-        if st_plays_df is not None and len(st_plays_df) > 0:
-            # Filter to ST plays before this week (Polars filtering)
-            train_st_pl = st_plays_df.filter(pl.col("week") < pred_week)
-            if len(train_st_pl) > 0:
-                # P3.4: Apply optimized dtypes for memory efficiency
-                train_st_pd = optimize_dtypes(train_st_pl.to_pandas())
-                # DATA LEAKAGE GUARD: Verify ST plays are properly filtered
-                if "week" in train_st_pd.columns:
-                    max_st_week = train_st_pd["week"].max()
-                    assert max_st_week < pred_week, (
-                        f"DATA LEAKAGE: ST plays include week {max_st_week} "
-                        f"but predicting week {pred_week}."
-                    )
+        if st_by_week_pd:
+            # P3.3: Concat pre-converted ST week slices (walk-forward safe via week-keyed dict)
+            train_st_pd = pd.concat(
+                [st_by_week_pd[w] for w in range(1, pred_week) if w in st_by_week_pd],
+                ignore_index=True
+            ) if any(w in st_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
+            if len(train_st_pd) > 0:
                 # Calculate all ST ratings (FG + Punt + Kickoff)
                 special_teams.calculate_all_st_ratings_from_plays(
                     train_st_pd, max_week=pred_week - 1
@@ -1523,55 +1545,52 @@ def run_dual_cap_sweep(
             logger.info(f"Skipping {holdout_year}: only {len(holdout_df)} holdout games")
             continue
 
-        # Sweep all ST cap combinations on training data
+        # Sweep ST caps on training data
+        # P3.5: Decoupled search - best open cap is independent of best close cap
+        # Reduces from O(grid²) to O(grid) calls to assemble_spread_vectorized
         best_open_cap = 2.5
         best_close_cap = 2.5
         best_open_roi = -float("inf")
         best_close_roi = -float("inf")
 
-        for st_cap_open in st_cap_grid:
-            for st_cap_close in st_cap_grid:
-                # Reassemble spreads with these caps
-                spread_open = assemble_spread_vectorized(train_df, st_cap_open, hfa_offset)
-                spread_close = assemble_spread_vectorized(train_df, st_cap_close, hfa_offset)
+        # Pre-extract Vegas lines and actual margins (constant across cap values)
+        vegas_open = train_df["spread_open"].values
+        vegas_close = train_df["spread_close"].values
+        actual_margin = train_df["actual_margin"].values
 
-                # Calculate edges
-                vegas_open = train_df["spread_open"].values
-                vegas_close = train_df["spread_close"].values
-                actual_margin = train_df["actual_margin"].values
+        for st_cap in st_cap_grid:
+            # Reassemble spreads with this cap (single call per cap value)
+            spread_reassembled = assemble_spread_vectorized(train_df, st_cap, hfa_offset)
 
-                edge_open = np.abs(-spread_open - vegas_open)
-                edge_close = np.abs(-spread_close - vegas_close)
+            # Evaluate vs OPEN line
+            edge_open = np.abs(-spread_reassembled - vegas_open)
+            mask_5_open = edge_open >= 5
+            if mask_5_open.sum() >= min_bets:
+                home_cover = actual_margin[mask_5_open] + vegas_open[mask_5_open]
+                pick_home = (-spread_reassembled[mask_5_open] - vegas_open[mask_5_open]) < 0
+                ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
+                wins = ats_win.sum()
+                losses = mask_5_open.sum() - wins - (home_cover == 0).sum()
+                roi_open = (wins * 100 - losses * 110) / ((wins + losses) * 110) * 100 if (wins + losses) > 0 else 0
 
-                # ATS for open-tuned vs open
-                mask_5_open = edge_open >= 5
-                if mask_5_open.sum() >= min_bets:
-                    subset = train_df[mask_5_open]
-                    home_cover = actual_margin[mask_5_open] + vegas_open[mask_5_open]
-                    pick_home = (-spread_open[mask_5_open] - vegas_open[mask_5_open]) < 0
-                    ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
-                    wins = ats_win.sum()
-                    losses = len(subset) - wins - (home_cover == 0).sum()
-                    roi_open = (wins * 100 - losses * 110) / ((wins + losses) * 110) * 100 if (wins + losses) > 0 else 0
+                if roi_open > best_open_roi:
+                    best_open_roi = roi_open
+                    best_open_cap = st_cap
 
-                    if roi_open > best_open_roi:
-                        best_open_roi = roi_open
-                        best_open_cap = st_cap_open
+            # Evaluate vs CLOSE line (same reassembled spread)
+            edge_close = np.abs(-spread_reassembled - vegas_close)
+            mask_5_close = edge_close >= 5
+            if mask_5_close.sum() >= min_bets:
+                home_cover = actual_margin[mask_5_close] + vegas_close[mask_5_close]
+                pick_home = (-spread_reassembled[mask_5_close] - vegas_close[mask_5_close]) < 0
+                ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
+                wins = ats_win.sum()
+                losses = mask_5_close.sum() - wins - (home_cover == 0).sum()
+                roi_close = (wins * 100 - losses * 110) / ((wins + losses) * 110) * 100 if (wins + losses) > 0 else 0
 
-                # ATS for close-tuned vs close
-                mask_5_close = edge_close >= 5
-                if mask_5_close.sum() >= min_bets:
-                    subset = train_df[mask_5_close]
-                    home_cover = actual_margin[mask_5_close] + vegas_close[mask_5_close]
-                    pick_home = (-spread_close[mask_5_close] - vegas_close[mask_5_close]) < 0
-                    ats_win = np.where(pick_home, home_cover > 0, home_cover < 0)
-                    wins = ats_win.sum()
-                    losses = len(subset) - wins - (home_cover == 0).sum()
-                    roi_close = (wins * 100 - losses * 110) / ((wins + losses) * 110) * 100 if (wins + losses) > 0 else 0
-
-                    if roi_close > best_close_roi:
-                        best_close_roi = roi_close
-                        best_close_cap = st_cap_close
+                if roi_close > best_close_roi:
+                    best_close_roi = roi_close
+                    best_close_cap = st_cap
 
         # Track stability
         stability["open"][holdout_year] = best_open_cap
