@@ -17,6 +17,7 @@ Usage:
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -77,16 +78,21 @@ def run_calibration(
         # Build data and compute qualities for each week
         for pred_week in range(1, 16):
             try:
-                adjuster.build_qb_data(through_week=pred_week - 1 if pred_week > 1 else 0)
+                # through_week must be >= 1 to ensure build_qb_data's main body executes and
+                # loads prior season data (via _load_prior_season). With through_week=0, the
+                # early return triggers before prior season loading.
+                adjuster.build_qb_data(through_week=max(1, pred_week - 1))
             except Exception as e:
                 logger.warning(f"Error building data for {year} week {pred_week}: {e}")
                 continue
 
-            # Compute qualities for all teams by calling get_adjustment
+            # Compute qualities for all teams
+            # We call _compute_qb_quality directly instead of get_adjustment to avoid
+            # creating junk entries for a dummy opponent team in the _qualities cache.
+            # This is a calibration script so accessing the internal method is acceptable.
             for team in team_names:
                 try:
-                    # Call get_adjustment to populate _qualities cache
-                    adjuster.get_adjustment(team, "Opponent", pred_week=pred_week)
+                    adjuster._compute_qb_quality(team, pred_week=pred_week)
                 except Exception:
                     pass  # Some teams may not have data
 
@@ -96,6 +102,11 @@ def run_calibration(
             all_data.append(cal_df)
 
         logger.info(f"  {len(cal_df)} team-week records")
+
+        # Small delay between years to avoid CFBD API rate limiting.
+        # Each year makes ~30 API calls (15 weeks x 2 endpoints).
+        if year != years[-1]:
+            time.sleep(2)
 
     if not all_data:
         return pd.DataFrame()
@@ -225,12 +236,10 @@ def analyze_calibration(df: pd.DataFrame, qb_cap: float, qb_scale: float) -> dic
             continue
 
         pts = bucket_df['qb_points'].dropna()
-        eff_pts = bucket_df['qb_points_effective'].dropna()
 
         print(f"\n{bucket}:")
         print(f"  qb_points: min={pts.min():.2f}, mean={pts.mean():.2f}, max={pts.max():.2f}")
-        print(f"  qb_points_effective: min={eff_pts.min():.2f}, mean={eff_pts.mean():.2f}, max={eff_pts.max():.2f}")
-        print(f"  |qb_points_effective| > 1.0: {(eff_pts.abs() > 1.0).sum()} / {len(eff_pts)} ({100*(eff_pts.abs() > 1.0).mean():.1f}%)")
+        print(f"  |qb_points| > 1.0: {(pts.abs() > 1.0).sum()} / {len(pts)} ({100*(pts.abs() > 1.0).mean():.1f}%)")
 
     return results
 

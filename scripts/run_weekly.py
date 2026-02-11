@@ -755,7 +755,11 @@ def run_predictions(
                 year=year,
                 phase1_only=True,  # Only for weeks 1-3
             )
-            qb_continuous.build_qb_data(through_week=week - 1 if week > 1 else 0)
+            # through_week must be >= 1 to ensure build_qb_data's main body executes and
+            # loads prior season data (via _load_prior_season). With through_week=0, the
+            # early return "if through_week <= self._data_built_through_week" triggers
+            # before prior season loading, leaving week 1 with zero QB adjustment.
+            qb_continuous.build_qb_data(through_week=max(1, week - 1))
 
         # Build spread generator
         # Note: fcs_penalty_elite/standard use SpreadGenerator's defaults (18.0/32.0)
@@ -804,11 +808,17 @@ def run_predictions(
 
     # Generate predictions
     logger.info(f"Generating predictions for {len(upcoming_games)} games...")
-    # rankings=None: Current-week AP/CFP rankings used for letdown/lookahead detection
-    # in SituationalAdjuster. When None, these factors are inactive. The historical_rankings
-    # object provides week-by-week AP data for detecting ranked team letdown spots.
-    # This is intentional for production: letdown detection uses historical_rankings,
-    # while rankings would provide same-week poll data (not currently fetched).
+    # rankings=None: Current-week AP/CFP poll rankings are NOT fetched for production runs.
+    # This disables rankings-dependent features in SituationalAdjuster:
+    #   - Letdown spot detection for ranked teams
+    #   - Lookahead game detection against ranked opponents
+    # The historical_rankings object provides week-by-week AP data (from prior weeks)
+    # for detecting ranked team letdown spots retrospectively, but current-week rankings
+    # would provide same-week poll data which is not currently fetched.
+    #
+    # IMPORTANT: The LSA coefficients were trained in backtest with this same rankings=None
+    # behavior. If a future version fetches current-week rankings for production, the LSA
+    # coefficients MUST be retrained to match the changed feature distribution.
     predictions = spread_gen.predict_week(
         games=upcoming_games,
         week=week,
@@ -848,7 +858,11 @@ def run_predictions(
                 lsa_spread = pred.spread - fixed_situ + lsa_adj
                 lsa_spreads[pred.game_id] = lsa_spread
 
-                # If use_learned_situ (not dual), apply LSA to prediction
+                # LSA Application Modes:
+                # (a) Legacy mode (use_learned_situ=True, dual_spread=False):
+                #     Mutates pred.spread directly with LSA spread. No timing recommendation.
+                # (b) Edge-aware mode (both True): Stores fixed and LSA spreads separately,
+                #     selects via timing recommendation (fixed for opening, LSA for 5+ edge closing).
                 if use_learned_situ and not dual_spread:
                     pred.spread = lsa_spread
                     pred.components.situational = lsa_adj
@@ -856,7 +870,7 @@ def run_predictions(
             # Log mean of actual LSA adjustments (not mean of final spreads)
             mean_lsa = sum(lsa_adjustments) / len(lsa_adjustments) if lsa_adjustments else 0.0
             if use_learned_situ and not dual_spread:
-                logger.info(f"LSA adjustments applied (mean adjustment: {mean_lsa:+.2f} pts)")
+                logger.info(f"LSA applied directly to {len(predictions)} predictions (legacy mode, mean adjustment: {mean_lsa:+.2f} pts)")
             else:
                 logger.info(f"LSA spreads computed for dual-spread mode (mean adjustment: {mean_lsa:+.2f} pts)")
         else:
@@ -894,9 +908,28 @@ def run_predictions(
         comparison_df['start_date'] = comparison_df['game_id'].map(game_dates)
 
         # Calculate edge for both fixed and LSA spreads
-        # Sign convention: edge = (-model_spread) - vegas_spread
+        #
+        # SIGN CONVENTION (verified in VegasComparison.generate_comparison_df):
+        #   jp_spread: Positive (+) = home team favored (internal convention)
+        #   vegas_spread: Negative (-) = home team favored (standard Vegas convention)
+        #   edge = (-jp_spread) - vegas_spread
+        #     Negative edge → model favors HOME more than Vegas → bet HOME
+        #     Positive edge → model favors AWAY more than Vegas → bet AWAY
+        #
+        # Example: Model has home -10 (jp_spread=+10), Vegas has home -7 (vegas_spread=-7)
+        #   edge = (-10) - (-7) = -3 → model likes home 3 pts more → bet HOME
         comparison_df['edge_fixed'] = (-comparison_df['jp_spread_fixed']) - comparison_df['vegas_spread']
         comparison_df['edge_lsa'] = (-comparison_df['jp_spread_lsa']) - comparison_df['vegas_spread']
+
+        # Debug log one example game to verify sign conventions are correct
+        if len(comparison_df) > 0:
+            sample = comparison_df.iloc[0]
+            logger.debug(
+                f"Edge convention check: {sample['home_team']} vs {sample['away_team']} - "
+                f"jp_spread_fixed={sample['jp_spread_fixed']:.1f}, "
+                f"vegas_spread={sample['vegas_spread']:.1f}, "
+                f"edge_fixed={sample['edge_fixed']:.1f}"
+            )
 
         # Edge-aware recommendation logic:
         # - Opening line (4+ days): Always use Fixed (57.0% at 5+ edge)
