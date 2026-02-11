@@ -75,14 +75,14 @@ class Settings:
     # FCS Strength Estimator (Dynamic penalties based on prior FBS-vs-FCS game margins)
     # Replaces static ELITE_FCS_TEAMS frozenset with walk-forward-safe, data-driven estimates.
     # Uses Bayesian shrinkage toward baseline when data is sparse.
-    # Sweep tested intercepts 12-28; intercept=20 gives best 5+ Edge (53.9% vs static 54.0%).
+    # Calibrated to match static baseline: elite FCS (+18), avg FCS (+32), weak FCS (capped +45).
     fcs_static: bool = False  # If True, use static elite list instead of dynamic estimator
     fcs_k: float = 8.0  # Shrinkage k (games for 50% trust in data)
     fcs_baseline_margin: float = -28.0  # Prior margin for unknown FCS (FCS - FBS, negative = FCS loses)
     fcs_min_penalty: float = 10.0  # Floor for elite FCS teams
-    fcs_max_penalty: float = 40.0  # Ceiling for weak FCS teams
-    fcs_slope: float = -0.5  # Penalty change per margin point
-    fcs_intercept: float = 20.0  # Penalty when margin = 0 (optimized via sweep)
+    fcs_max_penalty: float = 45.0  # Ceiling for weak FCS teams
+    fcs_slope: float = 0.8  # Penalty increase per point of avg loss to FBS
+    fcs_intercept: float = 10.0  # Base penalty (elite FCS with 0 avg loss)
 
     # Vegas Comparison
     value_threshold: float = field(

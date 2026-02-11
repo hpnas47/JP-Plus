@@ -53,23 +53,25 @@ class FCSStrengthEstimator:
         - 16 games: 67% data, 33% baseline
 
     Penalty mapping (continuous):
-        penalty = clamp(intercept + slope * shrunk_margin, min_pen, max_pen)
+        avg_loss = abs(shrunk_margin)  # Convert to positive loss amount
+        penalty = clamp(intercept + slope * avg_loss, min_pen, max_pen)
 
-    With defaults (intercept=20, slope=-0.5):
-        - margin=-10 (strong FCS): penalty=25 pts
-        - margin=-28 (average FCS): penalty=34 pts
-        - margin=-40 (weak FCS): penalty=40 pts (capped)
+    With defaults (intercept=10, slope=0.8):
+        - avg_loss=10 (elite FCS like NDSU): penalty=18 pts
+        - avg_loss=28 (average FCS): penalty=32.4 pts
+        - avg_loss=40 (weak FCS): penalty=42 pts
+        - avg_loss=50+ (very weak FCS): penalty=45 pts (capped)
     """
 
     # Shrinkage parameters
     k_fcs: float = 8.0  # Games needed for 50% trust in data
     baseline_margin: float = -28.0  # Prior for unknown FCS teams (FCS - FBS)
 
-    # Penalty mapping parameters
+    # Penalty mapping parameters (calibrated to match static baseline)
     min_penalty: float = 10.0  # Floor for elite FCS teams
-    max_penalty: float = 40.0  # Ceiling for weak FCS teams
-    slope: float = -0.5  # How penalty changes per point of margin
-    intercept: float = 20.0  # Penalty when margin = 0 (optimized via sweep)
+    max_penalty: float = 45.0  # Ceiling for weak FCS teams
+    slope: float = 0.8  # Penalty increase per point of avg loss to FBS
+    intercept: float = 10.0  # Base penalty (elite FCS with 0 avg loss)
 
     # Internal state
     _team_strengths: dict[str, FCSTeamStrength] = field(default_factory=dict)
@@ -180,6 +182,7 @@ class FCSStrengthEstimator:
         """Convert shrunk margin to penalty points.
 
         Linear mapping with clipping at min/max bounds.
+        Uses absolute value of margin (avg loss) since slope is positive.
 
         Args:
             margin: Expected FCS - FBS margin (negative = FCS loses)
@@ -187,7 +190,8 @@ class FCSStrengthEstimator:
         Returns:
             Penalty points to apply in favor of FBS team
         """
-        raw_penalty = self.intercept + self.slope * margin
+        avg_loss = abs(margin)  # Convert to positive loss amount
+        raw_penalty = self.intercept + self.slope * avg_loss
         return max(self.min_penalty, min(self.max_penalty, raw_penalty))
 
     def get_penalty(self, fcs_team: str) -> float:

@@ -388,6 +388,9 @@ class SpreadGenerator:
             if self.fcs_estimator is not None:
                 # Dynamic penalty from FCS strength estimator
                 penalty = self.fcs_estimator.get_penalty(fcs_team)
+                strength = self.fcs_estimator.get_strength(fcs_team)
+                avg_loss = abs(strength.shrunk_margin) if strength else abs(self.fcs_estimator.baseline_margin)
+                logger.debug(f"[FCS Scale] Team: {fcs_team}, AvgLoss: {avg_loss:.1f}, FinalBonus: {penalty:.1f}")
             else:
                 # Fallback to static tiered system
                 penalty = self.fcs_penalty_elite if fcs_team in self.elite_fcs_teams else self.fcs_penalty_standard
@@ -398,6 +401,9 @@ class SpreadGenerator:
             if self.fcs_estimator is not None:
                 # Dynamic penalty from FCS strength estimator
                 penalty = self.fcs_estimator.get_penalty(fcs_team)
+                strength = self.fcs_estimator.get_strength(fcs_team)
+                avg_loss = abs(strength.shrunk_margin) if strength else abs(self.fcs_estimator.baseline_margin)
+                logger.debug(f"[FCS Scale] Team: {fcs_team}, AvgLoss: {avg_loss:.1f}, FinalBonus: {penalty:.1f}")
             else:
                 # Fallback to static tiered system
                 penalty = self.fcs_penalty_elite if fcs_team in self.elite_fcs_teams else self.fcs_penalty_standard

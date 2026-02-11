@@ -2143,9 +2143,9 @@ def _process_single_season(
     fcs_k: float = 8.0,
     fcs_baseline: float = -28.0,
     fcs_min_pen: float = 10.0,
-    fcs_max_pen: float = 40.0,
-    fcs_slope: float = -0.5,
-    fcs_intercept: float = 20.0,
+    fcs_max_pen: float = 45.0,
+    fcs_slope: float = 0.8,
+    fcs_intercept: float = 10.0,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2268,9 +2268,9 @@ def run_backtest(
     fcs_k: float = 8.0,
     fcs_baseline: float = -28.0,
     fcs_min_pen: float = 10.0,
-    fcs_max_pen: float = 40.0,
-    fcs_slope: float = -0.5,
-    fcs_intercept: float = 20.0,
+    fcs_max_pen: float = 45.0,
+    fcs_slope: float = 0.8,
+    fcs_intercept: float = 10.0,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2304,9 +2304,9 @@ def run_backtest(
         fcs_k: FCS shrinkage k (games for 50% trust). Default 8.0.
         fcs_baseline: Prior margin for unknown FCS teams (FCS - FBS). Default -28.0.
         fcs_min_pen: Minimum penalty for elite FCS. Default 10.0.
-        fcs_max_pen: Maximum penalty for weak FCS. Default 40.0.
-        fcs_slope: Penalty change per margin point. Default -0.5.
-        fcs_intercept: Penalty at margin=0. Default 20.0 (optimized via sweep).
+        fcs_max_pen: Maximum penalty for weak FCS. Default 45.0.
+        fcs_slope: Penalty increase per point of avg loss. Default 0.8.
+        fcs_intercept: Base penalty (elite FCS with 0 avg loss). Default 10.0.
 
     Returns:
         Dictionary with backtest results
@@ -2857,20 +2857,20 @@ def main():
     parser.add_argument(
         "--fcs-max-pen",
         type=float,
-        default=40.0,
-        help="Maximum FCS penalty (for weak FCS). Default: 40.0",
+        default=45.0,
+        help="Maximum FCS penalty (for weak FCS). Default: 45.0",
     )
     parser.add_argument(
         "--fcs-slope",
         type=float,
-        default=-0.5,
-        help="FCS penalty change per margin point. Default: -0.5",
+        default=0.8,
+        help="FCS penalty increase per point of avg loss. Default: 0.8",
     )
     parser.add_argument(
         "--fcs-intercept",
         type=float,
-        default=20.0,
-        help="FCS penalty when margin = 0. Default: 20.0 (optimized via sweep)",
+        default=10.0,
+        help="Base FCS penalty (elite FCS with 0 avg loss). Default: 10.0",
     )
     parser.add_argument(
         "--no-portal",
