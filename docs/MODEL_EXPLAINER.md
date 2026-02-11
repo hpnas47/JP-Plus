@@ -33,7 +33,9 @@ Instead of asking "how many points did they score?", JP+ asks "how efficiently d
 |-----------|--------|------------------|
 | **Success Rate** | 45% | Did the offense "succeed" on each play? (gain enough yards to stay on schedule) |
 | **Explosiveness** | 45% | When successful, how explosive? (big-play ability via EPA on successful plays) |
-| **Turnover Margin** | 10% | Ball-hawking and ball-security skill (regressed to account for luck) |
+| **Turnover Margin** | 10% | Ball-hawking and ball-security skill with separate INT/fumble shrinkage |
+
+**Turnover Shrinkage:** Interceptions are treated as skill (moderate Bayesian shrinkage, k=10) while fumble recoveries are treated as luck (strong shrinkage, k=30). This reflects the empirical finding that INT rates correlate year-to-year (QB decision-making, defensive scheme) while fumble recovery is essentially random.
 
 ### Key Features
 
@@ -63,10 +65,10 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 | Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
 |------|-----------------|-----------------|----------|
-| Fixed baseline | **53.5%** | 54.3% | Standard production |
+| Fixed baseline | **53.4%** | 54.5% | Standard production |
 | LSA (alpha=300) | 52.8% | **55.6%** | High-conviction filtering |
 
-**Key insight:** LSA serves as a high-confidence filter. It improves Top Tier (5+ pts) performance by +1.2% while slightly reducing volume/accuracy in the lower-confidence (3+) tier. The trade-off is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge.
+**Key insight:** LSA serves as a high-confidence filter. It improves Top Tier (5+ pts) performance by +1.1% while slightly reducing volume/accuracy in the lower-confidence (3+) tier. The trade-off is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge.
 
 **Configuration:** `alpha=300.0`, `clamp_max=4.0` (safety net)
 
@@ -89,31 +91,30 @@ Before diving into the numbers, here's what each metric means:
 
 Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data available at prediction time — no future leakage.
 
-*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-10.*
+*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-11.*
 
 #### Performance by Season Phase
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|----------------|-----------------|----------------|
-| Calibration | 1–3 | 960 | 15.33 | 18.75 | 48.7% | 48.4% | 48.8% (339-355) | 49.8% (343-346) | 50.2% (269-267) | 50.9% (275-265) |
-| **Core** | **4–15** | **2,485** | **12.53** | **15.87** | **52.0%** | **52.8%** | **53.5%** (750-651) | **55.7%** (794-631) | **54.3%** (463-390) | **57.7%** (519-381) |
-| Postseason | 16+ | 176 | 13.37 | 16.82 | 48.0% | 50.0% | 46.7% (50-57) | 47.1% (48-54) | 47.3% (35-39) | 49.3% (37-38) |
-| **Full** | **All** | **3,657** | **13.32** | **16.94** | **50.9%** | **51.5%** | **51.7%** (1139-1063) | **53.5%** (1185-1031) | **52.4%** (767-696) | **54.9%** (831-684) |
+| Calibration | 1–3 | 960 | 15.33 | 18.75 | 48.8% | 48.4% | 48.8% (339-355) | 49.8% (343-346) | 50.2% (269-267) | 50.9% (275-265) |
+| **Core** | **4–15** | **2,489** | **12.53** | **15.87** | **51.7%** | **53.0%** | **53.4%** (744-650) | **55.6%** (795-634) | **54.5%** (463-386) | **57.0%** (514-387) |
+| Postseason | 16+ | 176 | 13.38 | 16.82 | 48.0% | 50.0% | 47.2% (51-57) | 47.1% (48-54) | 47.3% (35-39) | 49.3% (37-38) |
+| **Full** | **All** | **3,657** | **13.32** | **16.93** | **50.7%** | **51.6%** | **51.6%** (1134-1062) | **53.4%** (1187-1034) | **52.6%** (767-692) | **54.5%** (826-690) |
 
 **The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
 
-#### Core Season ATS by Edge (Weeks 4–15, 2,485 games)
+#### Core Season ATS by Edge (Weeks 4–15, 2,489 games)
 
 | Edge | vs Closing Line | vs Opening Line |
 |------|-----------------|-----------------|
-| All picks | 1,293-1,192 (52.0%) | 1,313-1,172 (52.8%) |
-| 3+ pts | 750-651 (53.5%) | 794-631 (55.7%) |
-| **5+ pts** | **463-390 (54.3%)** | **519-381 (57.7%)** |
-| **5+ pts (LSA)** | **450-359 (55.6%)** | — |
+| All picks | 1,259-1,178 (51.7%) | 1,299-1,151 (53.0%) |
+| 3+ pts | 744-650 (53.4%) | 795-634 (55.6%) |
+| **5+ pts** | **463-386 (54.5%)** | **514-387 (57.0%)** |
 
-*Games: 1,401 at 3+ edge, 853 at 5+ edge. LSA = Learned Situational Adjustment filter.*
+*Games: 1,394 at 3+ edge, 849 at 5+ edge.*
 
-**Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.3% vs closing lines and 57.7% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%). With LSA enabled, 5+ edge vs closing improves to 55.6%.
+**Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.5% vs closing lines and 57.0% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%).
 
 ### ATS by Season and Phase (vs Closing Line)
 
@@ -157,18 +158,18 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 | Edge Filter | N | Mean CLV (vs Close) | CLV > 0 | ATS % (Close) |
 |-------------|---|-------------------|---------|---------------|
-| All picks | 3,621 | -0.30 | 28.5% | 50.9% |
-| 3+ pt edge | 2,239 | -0.42 | 25.9% | 51.7% |
-| 5+ pt edge | 1,490 | -0.43 | 25.0% | 52.4% |
-| 7+ pt edge | 920 | -0.45 | 22.6% | 51.7% |
+| All picks | 3,621 | -0.29 | 28.6% | 50.7% |
+| 3+ pt edge | 2,233 | -0.41 | 26.0% | 51.6% |
+| 5+ pt edge | 1,486 | -0.43 | 25.0% | 52.6% |
+| 7+ pt edge | 920 | -0.46 | 22.5% | 51.6% |
 
-#### Core Season (Weeks 4-15, 2,485 games)
+#### Core Season (Weeks 4-15, 2,489 games)
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 2,485 | -0.31 | 30.8% | 52.0% |
-| 3+ pt edge | 1,401 | -0.47 | 28.2% | 53.5% |
-| **5+ pt edge** | **853** | **-0.51** | **27.3%** | **54.3%** |
+| All picks | 2,489 | -0.31 | 30.8% | 51.7% |
+| 3+ pt edge | 1,394 | -0.47 | 28.2% | 53.4% |
+| **5+ pt edge** | **849** | **-0.51** | **27.3%** | **54.5%** |
 | 7+ pt edge | 504 | -0.58 | 24.8% | 54.7% |
 
 **Interpretation:** CLV vs closing is slightly negative, indicating the market does not consistently move toward our predictions. However, the model still generates strong ATS performance — JP+ finds value in spots the market doesn't fully adjust for even by closing. The negative CLV with positive ATS suggests the model exploits structural inefficiencies (public bias, schedule spots) rather than information the sharps eventually price in.
@@ -177,9 +178,9 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 | Edge Filter | N | Mean CLV (Open→Close) | CLV > 0 | ATS % (Open) |
 |-------------|---|----------------------|---------|--------------|
-| All picks | 3,621 | +0.43 | 38.6% | 51.5% |
-| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.5% |
-| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.9%** |
+| All picks | 3,621 | +0.43 | 38.6% | 51.6% |
+| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.4% |
+| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.5%** |
 | 7+ pt edge | 955 | +0.88 | 39.5% | 54.5% |
 
 When measured against opening lines (the price available when bets are placed), CLV is strongly positive (+0.73 at 5+ edge) and monotonically increasing with edge size — meaning the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.

@@ -37,12 +37,12 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,657 gam
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
-- **Core (Weeks 4-15)**: Profitable zone — 54.3% ATS at 5+ edge vs closing, 57.7% vs opening
+- **Core (Weeks 4-15)**: Profitable zone — 54.5% ATS at 5+ edge vs closing, 57.0% vs opening
 - **Postseason (Weeks 16+)**: Bowl games struggle due to unmodeled factors: player opt-outs, motivation variance, 3-4 week layoffs
 
 ### Core Season Detail (Weeks 4-15)
 
-The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,485-game sample.
+The Core phase is where the model is profitable. Detailed breakdowns below focus on this 2,489-game sample.
 
 #### Against The Spread (ATS)
 
@@ -52,7 +52,7 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 | **3+ pt edge** | 744-650 (53.4%) | 795-634 (55.6%) |
 | **5+ pt edge** | 463-386 (54.5%) | 514-387 (57.0%) |
 
-Opening line performance exceeds closing line by ~3-5%, indicating the model captures value that the market prices out by game time. LSA (Learned Situational Adjustment) improves 5+ Edge vs closing to 55.6%.
+Opening line performance exceeds closing line by ~2-3%, indicating the model captures value that the market prices out by game time. LSA (Learned Situational Adjustment) can further improve 5+ Edge vs closing.
 
 #### ATS by Season (Core, vs Closing Line)
 
@@ -82,18 +82,18 @@ CLV measures how the market moves after we identify an edge. Positive CLV = shar
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 3,621 | -0.30 | 28.5% | 50.9% |
-| 3+ pt edge | 2,239 | -0.42 | 25.9% | 51.7% |
-| **5+ pt edge** | **1,490** | **-0.43** | **25.0%** | **52.4%** |
-| 7+ pt edge | 920 | -0.45 | 22.6% | 51.7% |
+| All picks | 3,621 | -0.29 | 28.6% | 50.7% |
+| 3+ pt edge | 2,233 | -0.41 | 26.0% | 51.6% |
+| **5+ pt edge** | **1,486** | **-0.43** | **25.0%** | **52.6%** |
+| 7+ pt edge | 920 | -0.46 | 22.5% | 51.6% |
 
 **CLV vs Opening Line (value available at bet time):**
 
 | Edge Filter | N | Mean CLV (Open→Close) | CLV > 0 | ATS % (Open) |
 |-------------|---|----------------------|---------|--------------|
-| All picks | 3,621 | +0.43 | 38.6% | 51.5% |
-| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.5% |
-| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.9%** |
+| All picks | 3,621 | +0.43 | 38.6% | 51.6% |
+| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.4% |
+| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.5%** |
 | 7+ pt edge | 955 | +0.88 | 39.5% | 54.5% |
 
 When measured against opening lines, CLV is strongly positive (+0.73 at 5+ edge) and monotonically increasing with edge size — the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
@@ -268,32 +268,32 @@ This integrates red zone efficiency directly into the EFM ridge regression rathe
 Turnovers are a significant predictor of team success that pure efficiency metrics miss. A team that forces turnovers and protects the ball gains a systematic advantage not fully captured by Success Rate.
 
 **Implementation:**
-1. Identify turnover plays from play-by-play data (interceptions, fumble recoveries)
-2. Count turnovers forced (defense) and turnovers lost (offense) per team per game
-3. Calculate per-game turnover margin: (forced - lost) / games_played
-4. Apply Bayesian shrinkage toward 0 (see below)
-5. Convert to point value using `POINTS_PER_TURNOVER = 4.5`
+1. Identify turnover plays from play-by-play data, classified as interceptions or fumbles
+2. Track separately: INTs thrown/forced and fumbles lost/recovered per team per game
+3. Apply **different Bayesian shrinkage** for INTs vs fumbles (see below)
+4. Convert to point value using `POINTS_PER_TURNOVER = 4.5`
 
 **Turnover play types detected** (verified against CFBD API):
-- Fumble Recovery (Opponent)
-- Pass Interception Return
-- Interception
-- Fumble Return Touchdown
-- Interception Return Touchdown
 
-**Bayesian Shrinkage:** Turnover margin is 50-70% luck (fumble bounces, tipped passes). To prevent overweighting small-sample noise, JP+ applies shrinkage:
+| Category | Play Types |
+|----------|------------|
+| **Interceptions** | Interception, Interception Return, Interception Return Touchdown, Pass Interception Return |
+| **Fumbles** | Fumble Recovery (Opponent), Fumble Return Touchdown |
+
+**Separate INT/Fumble Shrinkage:** Research shows interceptions correlate year-to-year (QB decision-making, defensive scheme) while fumble recoveries are essentially random coin flips. JP+ applies different shrinkage strengths:
 
 ```
-shrinkage = games_played / (games_played + prior_strength)
-shrunk_margin = raw_margin × shrinkage
+shrink_int = games_played / (games_played + k_int)     # k_int = 10 (moderate)
+shrink_fum = games_played / (games_played + k_fumble)  # k_fumble = 30 (strong)
 ```
 
-With `turnover_prior_strength = 10`:
-- 5 games: keeps 33% of margin (5/15)
-- 10 games: keeps 50% of margin (10/20)
-- 15 games: keeps 60% of margin (15/25)
+| Games | INT Shrinkage (k=10) | Fumble Shrinkage (k=30) |
+|-------|---------------------|------------------------|
+| 5 | 33% (5/15) | 14% (5/35) |
+| 10 | 50% (10/20) | 25% (10/40) |
+| 15 | 60% (15/25) | 33% (15/45) |
 
-This means early-season turnover outliers regress heavily, while sustained end-of-season performance is mostly trusted.
+**Rationale:** INTs are treated as 50% skill, so they're modestly regressed. Fumble recoveries are treated as ~90% luck, so they're heavily regressed toward zero. This separation improved Core 5+ ATS by +0.3pp vs unified shrinkage in backtesting.
 
 **Why 10% weight?** This mirrors SP+'s approach where turnovers contribute 10% of the overall rating. Higher weights would overfit to turnover luck, while lower weights would miss legitimate ball-security/ball-hawking skill.
 
