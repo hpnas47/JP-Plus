@@ -35,6 +35,28 @@ Implemented opportunity-based Empirical Bayes shrinkage for Special Teams rating
 
 ---
 
+#### ST Spread Cap (Approach B: Margin-Level Capping) — APPROVED
+**Status**: Committed, enabled by default (cap=2.5)
+
+Alternative approach to ST reliability: cap the EFFECT of ST on spread, not the rating itself.
+- Formula: `st_impact = clip(st_diff, -cap, +cap)`
+- CLI: `--st-spread-cap` (default 2.5, use 0 to disable)
+
+**4-value sweep results** (Core weeks 4-15):
+| Cap | 5+ Edge | 3+ Edge | Spread Std |
+|-----|---------|---------|------------|
+| None | 53.7% | 53.3% | 12.42 |
+| ±1.5 | 54.0% | 53.1% | 12.21 |
+| ±2.0 | 53.8% | 53.0% | 12.27 |
+| **±2.5** | **54.0%** | **53.3%** | **12.32** |
+| ±3.0 | 53.8% | 53.3% | 12.35 |
+
+**Why it works**: Unlike shrinkage (which pulls ALL ratings toward zero), capping only affects extreme matchups (|diff| > 2.5). This reduces false positives from ST spikes while preserving true disagreement.
+
+**Key insight**: 5+ Edge improved because extreme ST predictions were noisy outliers. Capping them reduced false positives without reducing true positives.
+
+---
+
 #### Bug Fixes — COMMITTED (earlier in session)
 
 1. **Pace adjustment ordering**: FCS penalty now applied after pace compression

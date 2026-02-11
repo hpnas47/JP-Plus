@@ -608,6 +608,7 @@ def walk_forward_predict(
     team_conferences: Optional[dict[str, str]] = None,
     hfa_global_offset: float = 0.0,
     ooc_credibility_weight: float = 0.0,
+    st_spread_cap: Optional[float] = 2.5,
 ) -> list[dict]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -843,6 +844,7 @@ def walk_forward_predict(
             fbs_teams=fbs_teams,
             fcs_penalty_elite=fcs_penalty_elite,
             fcs_penalty_standard=fcs_penalty_standard,
+            st_spread_cap=st_spread_cap,  # Margin-level ST capping (Approach B)
         )
 
         # Predict this week's games (Polars iteration is faster)
@@ -2120,6 +2122,7 @@ def _process_single_season(
     st_k_fg: float = 6.0,
     st_k_punt: float = 6.0,
     st_k_ko: float = 6.0,
+    st_spread_cap: Optional[float] = 2.5,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -2178,6 +2181,7 @@ def _process_single_season(
         team_conferences=team_conferences,
         hfa_global_offset=hfa_global_offset,
         ooc_credibility_weight=ooc_credibility_weight,
+        st_spread_cap=st_spread_cap,
     )
 
     # Calculate ATS
@@ -2220,6 +2224,7 @@ def run_backtest(
     st_k_fg: float = 6.0,
     st_k_punt: float = 6.0,
     st_k_ko: float = 6.0,
+    st_spread_cap: Optional[float] = 2.5,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -2324,6 +2329,7 @@ def run_backtest(
         st_k_fg=st_k_fg,
         st_k_punt=st_k_punt,
         st_k_ko=st_k_ko,
+        st_spread_cap=st_spread_cap,
     )
 
     if len(years) > 1:
@@ -2803,6 +2809,12 @@ def main():
         help="ST shrinkage k for kickoff (events needed to trust rating fully). Default: 6.0",
     )
     parser.add_argument(
+        "--st-spread-cap",
+        type=float,
+        default=2.5,
+        help="Cap ST differential's effect on spread. Default: 2.5 (APPROVED). Use --st-spread-cap 0 to disable.",
+    )
+    parser.add_argument(
         "--no-diagnostics",
         action="store_true",
         help="Skip diagnostic reports (stack analysis, phase metrics, CLV). Faster for sweeps.",
@@ -2872,6 +2884,8 @@ def main():
     print(f"  FCS penalties:      elite={args.fcs_penalty_elite}, standard={args.fcs_penalty_standard}")
     st_shrink_status = f"enabled (k_fg={args.st_k_fg}, k_punt={args.st_k_punt}, k_ko={args.st_k_ko})" if args.st_shrink else "disabled (default)"
     print(f"  ST shrinkage:       {st_shrink_status}")
+    st_cap_status = f"±{args.st_spread_cap} pts" if args.st_spread_cap and args.st_spread_cap > 0 else "disabled"
+    print(f"  ST spread cap:      {st_cap_status}")
     print("=" * 60 + "\n")
 
     results = run_backtest(
@@ -2898,6 +2912,7 @@ def main():
         st_k_fg=args.st_k_fg,
         st_k_punt=args.st_k_punt,
         st_k_ko=args.st_k_ko,
+        st_spread_cap=args.st_spread_cap,
     )
 
     # P3.4: Print results with ATS data for sanity report

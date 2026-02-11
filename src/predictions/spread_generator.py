@@ -225,6 +225,7 @@ class SpreadGenerator:
         aggregator: Optional[AdjustmentAggregator] = None,
         track_diagnostics: bool = False,
         global_cap: float = 7.0,
+        st_spread_cap: Optional[float] = 2.5,
     ):
         """Initialize spread generator with EFM ratings and adjustment layers.
 
@@ -244,6 +245,7 @@ class SpreadGenerator:
             aggregator: AdjustmentAggregator for consolidated smoothing (default: creates new)
             track_diagnostics: If True, track adjustment stacks for P2.11 analysis
             global_cap: Maximum total adjustment (default: 7.0)
+            st_spread_cap: Cap on ST differential's effect on spread. Default 2.5 (APPROVED). 0/None = no cap.
         """
         self.ratings = ratings or {}
         # Calculate mean rating for fallback on missing teams
@@ -274,6 +276,10 @@ class SpreadGenerator:
         # P2.11: Adjustment stack diagnostics
         self.track_diagnostics = track_diagnostics
         self.diagnostics = AdjustmentStackDiagnostics() if track_diagnostics else None
+
+        # ST spread cap (Approach B: margin-level capping)
+        # Caps the effect of ST differential on final spread, not the rating itself
+        self.st_spread_cap = st_spread_cap
 
     def _get_base_margin(self, home_team: str, away_team: str) -> float:
         """Get base margin from EFM ratings differential.
@@ -534,9 +540,15 @@ class SpreadGenerator:
         components.situational = aggregated.situational_score
 
         # Special teams differential (P2.7: applied as adjustment layer)
-        components.special_teams = self.special_teams.get_matchup_differential(
+        raw_st_diff = self.special_teams.get_matchup_differential(
             home_team, away_team
         )
+        # Apply margin-level cap if configured (Approach B)
+        # This caps the EFFECT on spread, not the rating itself
+        if self.st_spread_cap and self.st_spread_cap > 0:
+            components.special_teams = max(-self.st_spread_cap, min(self.st_spread_cap, raw_st_diff))
+        else:
+            components.special_teams = raw_st_diff
 
         # Finishing drives differential (red zone efficiency)
         # SHELVED: 4 consecutive backtest rejections confirmed ~70-80% overlap with EFM (IsoPPP).

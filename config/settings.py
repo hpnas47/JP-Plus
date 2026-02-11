@@ -65,6 +65,13 @@ class Settings:
     st_k_punt: float = 6.0  # Punts needed to trust rating fully
     st_k_ko: float = 6.0  # Kickoff events needed to trust rating fully
 
+    # Special Teams Spread Impact Cap (Approach B: margin-level capping)
+    # Caps the ST differential's effect on the spread, not the rating itself.
+    # This preserves ST rating magnitude while limiting influence on final spread.
+    # APPROVED (2026-02-10): Cap 2.5 improved 5+ Edge +0.3% with minimal spread compression.
+    # Sweep tested: 1.5, 2.0, 2.5, 3.0 — cap 2.5 best for both Core and Full Season.
+    st_spread_cap: Optional[float] = 2.5
+
     # Vegas Comparison
     value_threshold: float = field(
         default_factory=lambda: float(os.getenv("VALUE_THRESHOLD", "3.0"))
