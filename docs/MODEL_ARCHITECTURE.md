@@ -493,6 +493,46 @@ The 1.25x away multiplier captures this: home = -2.0 pts, away = -2.5 pts.
 
 *Note: All situational factors feed into the consolidated AdjustmentAggregator (see Game Context section) for four-bucket smoothing.*
 
+#### Learned Situational Adjustment (LSA) — Optional
+
+**Purpose:** Replace fixed situational constants with coefficients learned via walk-forward ridge regression on prediction residuals. Acts as a high-confidence filter for 5+ edge picks.
+
+**CLI:** `--learned-situ` to enable (default OFF for production)
+
+**Architecture:**
+- 16 situational features (rest differential, bye/short week, letdown, lookahead, sandwich, rivalry, consecutive road, game shape opener)
+- Multi-year pooling: ~3,000+ training samples by week 4 (pools all prior seasons)
+- Walk-forward safe: Only trains on games from weeks < prediction week
+- EMA smoothing (beta=0.3) for coefficient stability week-to-week
+
+**Grid Sweep Results (2022-2025, Core weeks 4-15):**
+
+| Config | 3+ Edge | 5+ Edge |
+|--------|---------|---------|
+| Fixed baseline | **53.1%** | 53.7% |
+| LSA alpha=300 | 52.3% | **54.9%** |
+
+**Parameters (optimized):**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `lsa_alpha` | 300.0 | Ridge regularization strength |
+| `lsa_min_games` | 150 | Minimum games before switching from fixed |
+| `lsa_ema` | 0.3 | EMA smoothing factor (30% new, 70% prior) |
+| `lsa_clamp_max` | 4.0 | Coefficient clamp safety net (no effect at alpha=300) |
+
+**Key Finding — Rivalry Underdog Boost is a Fallacy:**
+
+Forensic analysis of 108 rivalry underdog home games revealed that favorites in rivalry games tend to **WIN BIG**, not cover less:
+
+| Metric | Value |
+|--------|-------|
+| Fixed rivalry boost applied | +1.0 pts |
+| Actual residual after boost | **-3.52 pts** |
+
+Examples: Oklahoma -49 actual vs Texas when predicted -8 (residual -41), Arizona -42 vs ASU when predicted -2 (residual -40). LSA correctly learns a negative coefficient to offset the wrong fixed boost.
+
+**Trade-off:** LSA improves 5+ Edge by +1.2% while reducing 3+ Edge by -0.8%. This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
+
 ---
 
 ### Opponent & Pace Adjustments

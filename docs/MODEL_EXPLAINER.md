@@ -57,6 +57,19 @@ JP+ applies game-specific adjustments for factors that affect the spread beyond 
 
 All adjustments pass through a smoothing layer to prevent over-prediction when multiple factors stack.
 
+### Learned Situational Adjustment (LSA) — High-Confidence Filter
+
+**Optional enhancement** (`--learned-situ` flag) that replaces fixed situational constants with coefficients learned via walk-forward ridge regression on prediction residuals.
+
+| Mode | 3+ Edge | 5+ Edge | Use Case |
+|------|---------|---------|----------|
+| Fixed baseline | **53.1%** | 53.7% | Standard production |
+| LSA (alpha=300) | 52.3% | **54.9%** | High-conviction filtering |
+
+**Key insight:** LSA serves as a high-confidence filter. It improves Top Tier (5+ pts) performance by +1.2% while slightly reducing volume/accuracy in the lower-confidence (3+) tier. The trade-off is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge.
+
+**Configuration:** `alpha=300.0`, `clamp_max=4.0` (safety net)
+
 *For detailed adjustment values and formulas, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 
 ---
