@@ -58,6 +58,52 @@ Fixed critical bug where `abs(margin)` incorrectly penalized elite FCS teams tha
 
 ---
 
+#### run_weekly.py Bug Fixes — Code Quality
+**Status**: Committed (`dcb074a`)
+**Files**: `scripts/run_weekly.py`
+
+**Validated & Fixed**:
+
+1. **build_schedule_df bare `except Exception: break`** — REAL BUG
+   - Transient API errors (rate limits, timeouts) silently truncated schedule
+   - Caused missed lookahead/sandwich spot detection with no warning
+   - **Fix**: Log error and continue; use consecutive-empty-weeks heuristic for end detection
+
+2. **LSA lsa_alpha parameter unused** — DEAD CODE
+   - Parameter accepted but never used (alpha is training-time, coefficients pre-baked)
+   - **Fix**: Removed from CLI and function signature; added explanatory comment
+
+3. **LSA misleading log** — BUG
+   - Logged mean of final spreads, not mean of LSA adjustments
+   - **Fix**: Track `lsa_adjustments` list, log actual mean adjustment
+
+4. **Unnecessary `object.__setattr__`** — CODE SMELL
+   - Used to "bypass frozen dataclass" but neither dataclass is frozen
+   - **Fix**: Normal assignment `pred.components.situational = lsa_adj`
+
+5. **hasattr guards** — MIXED
+   - `settings.ridge_alpha`: Field exists, guard unnecessary → removed
+   - `fcs_penalty_elite/standard`: Fields don't exist in Settings, always fell through to hardcoded defaults → removed (SpreadGenerator has its own defaults)
+   - `pred.components.situational`: Always exists (default_factory) → removed
+
+**Backtest**: No regressions (changes only affect run_weekly.py code path)
+
+---
+
+#### Bugs Validated as NOT BUGS
+
+1. **FG np.select `conditions[:-1]`** — NOT A BUG
+   - Claimed 50-60 yard bucket was dropped, causing 50-59 yard FGs to get wrong rate
+   - **Reality**: `[:-1]` removes (60,100) bucket; 50-60 bucket (index 3) is preserved
+   - 60+ yard FGs correctly fall through to `default=0.30`
+
+2. **Kickoff return_count dimensional issue** — NOT A BUG
+   - Claimed high-TB teams get "almost zero credit on return-yards-saved axis"
+   - **Reality**: Intentional decomposition — high-TB teams get credit via `tb_bonus`, not `return_saved`
+   - Components are orthogonal; no double-counting
+
+---
+
 ## Session: February 11, 2026
 
 ### Theme: INT/Fumble Separate Shrinkage in Turnover Model
