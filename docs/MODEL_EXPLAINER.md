@@ -62,9 +62,17 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 ### QB Continuous Rating (DEFAULT)
 
-The QB Continuous system applies walk-forward-safe QB quality estimates for **Weeks 1-3 only** (Phase 1). This captures QB value before the EFM efficiency metrics have enough data.
+**The Problem:** In early-season games (Weeks 1-3), the EFM doesn't have enough play-by-play data to accurately capture QB quality. A team starting an elite QB vs a team starting a first-time starter will look similar until the efficiency numbers accumulate.
 
-**Why Phase 1 only?** By Week 4, the EFM has already "baked in" QB quality through success rate and explosiveness metrics. Applying additional QB adjustment for Core weeks causes double-counting.
+**The Solution:** QB Continuous uses **Predicted Points Added (PPA)** — a metric from CFBD that measures how much value a QB adds per play compared to average. A QB with +0.30 PPA adds ~0.30 expected points per dropback above replacement level.
+
+**How It Works:**
+1. **Prior Season Data:** For Week 1, we use last year's PPA with 0.3 decay (QBs regress toward mean over offseason)
+2. **Current Season Data:** As games are played, current-year PPA gradually replaces the prior
+3. **Shrinkage (K=200):** QBs with few dropbacks are pulled toward average. A QB needs ~250 dropbacks to get 55% weight on their raw PPA; a backup with 50 dropbacks gets mostly the prior
+4. **Walk-Forward Safe:** Only uses data available before the game being predicted — no future leakage
+
+**Why Phase 1 Only?** By Week 4, the EFM has already "baked in" QB quality through success rate and explosiveness metrics. The efficiency data shows who has a good QB. Applying additional QB adjustment for Core weeks causes double-counting and slightly degrades ATS performance.
 
 | Metric | Without QB | With QB Phase1-only | Improvement |
 |--------|------------|---------------------|-------------|
@@ -72,9 +80,29 @@ The QB Continuous system applies walk-forward-safe QB quality estimates for **We
 | Phase 1 MAE | 15.33 | 15.31 | -0.02 |
 | Core 5+ Edge | 54.5% | 54.5% | unchanged |
 
+### Fixed vs LSA: Two Approaches to Situational Adjustments
+
+JP+ applies situational adjustments (home field, rest, travel, letdown spots, etc.) to modify the base spread. There are two methods for calculating these adjustments:
+
+**Fixed Mode:** Each situational factor has a constant point value derived from historical research:
+- Bye week advantage: +1.5 pts
+- Cross-country travel: -1.0 pts
+- Letdown after ranked win: -1.5 pts
+- etc.
+
+These values are simple, interpretable, and work well on opening lines before the market has fully priced in situational factors.
+
+**LSA Mode (Learned Situational Adjustments):** Instead of fixed constants, LSA uses **Ridge regression** to learn optimal coefficients from historical prediction errors. The model asks: "Given that JP+ was wrong by X points in this game, and these situational factors were present, what weights minimize future errors?"
+
+Key differences:
+- **LSA learns from mistakes** — If JP+ consistently over-predicts home favorites, LSA will reduce that adjustment
+- **LSA captures interactions** — Factors that stack (e.g., bye + home + letdown) may need different weights than when isolated
+- **LSA is regularized (alpha=300)** — Prevents overfitting by keeping coefficients close to zero unless strong evidence exists
+- **LSA clamps extremes** — Maximum ±4.0 pt adjustment to prevent outlier-driven predictions
+
 ### Edge-Aware Production Mode (DEFAULT in 2026)
 
-The prediction engine automatically selects Fixed or LSA situational adjustments based on **timing and edge size**. No flags needed — this is the default behavior.
+The prediction engine automatically selects Fixed or LSA based on **timing and edge size**. No flags needed — this is the default behavior.
 
 | Bet Timing | Edge Size | Mode | Historical ATS |
 |------------|-----------|------|----------------|
@@ -83,11 +111,11 @@ The prediction engine automatically selects Fixed or LSA situational adjustments
 | Closing (<4 days) | 3-5 pts | Fixed | **52.9%** at 3+ |
 
 **Why this works:**
-- **Opening lines** — Fixed dominates because market hasn't yet priced in all information
-- **Closing lines, high conviction (5+)** — LSA's learned coefficients better filter situational noise
-- **Closing lines, moderate conviction (3-5)** — Fixed beats LSA (52.9% vs 52.0%)
+- **Opening lines** — Fixed dominates because the market hasn't yet priced in all information; our simple constants capture value the books miss early in the week
+- **Closing lines, high conviction (5+)** — By game time, obvious situational factors are priced in. LSA's learned coefficients better identify which adjustments still have residual value
+- **Closing lines, moderate conviction (3-5)** — Smaller edges are noisier; Fixed's simpler approach avoids LSA's occasional overcorrection (52.9% vs 52.0%)
 
-**Full Fixed vs LSA Comparison:**
+**Full Fixed vs LSA Comparison (Core Weeks 4-15):**
 
 | Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
 |------|-----------------|----------------|-----------------|----------------|
