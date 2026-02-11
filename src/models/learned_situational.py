@@ -9,6 +9,7 @@ situational features. Multi-year pooling provides ~3,000+ training samples by we
 Walk-forward safe: Only trains on games before prediction week.
 """
 
+import dataclasses
 import json
 import logging
 from dataclasses import dataclass, field
@@ -105,25 +106,11 @@ class SituationalFeatures:
     game_shape_opener_away: float = 0.0
 
     def to_array(self) -> np.ndarray:
-        """Convert to numpy array for ridge regression."""
-        return np.array([
-            self.rest_differential,
-            self.short_week_home,
-            self.short_week_away,
-            self.bye_week_home,
-            self.bye_week_away,
-            self.letdown_home,
-            self.letdown_away,
-            self.lookahead_home,
-            self.lookahead_away,
-            self.sandwich_home,
-            self.sandwich_away,
-            self.consecutive_road_away,
-            self.rivalry_underdog_home,
-            self.rivalry_underdog_away,
-            self.game_shape_opener_home,
-            self.game_shape_opener_away,
-        ])
+        """Convert to numpy array for ridge regression.
+
+        Order is determined by FEATURE_NAMES to ensure consistency.
+        """
+        return np.array([getattr(self, name) for name in FEATURE_NAMES])
 
     @classmethod
     def from_situational_factors(
@@ -136,36 +123,40 @@ class SituationalFeatures:
         Converts the raw factor magnitudes into binary/continuous features
         suitable for ridge regression learning.
         """
+        # Guard against None values (defensive - coalesce to neutral defaults)
+        home_rest = home_factors.rest_days if home_factors.rest_days is not None else 7
+        away_rest = away_factors.rest_days if away_factors.rest_days is not None else 7
+
         # Rest differential (continuous, from home perspective)
-        rest_diff = home_factors.rest_days - away_factors.rest_days
+        rest_diff = home_rest - away_rest
 
         # Short week: rest_days <= 5
-        short_week_home = 1.0 if home_factors.rest_days <= 5 else 0.0
-        short_week_away = 1.0 if away_factors.rest_days <= 5 else 0.0
+        short_week_home = 1.0 if home_rest <= 5 else 0.0
+        short_week_away = 1.0 if away_rest <= 5 else 0.0
 
         # Bye week: rest_days >= 14
-        bye_week_home = 1.0 if home_factors.rest_days >= 14 else 0.0
-        bye_week_away = 1.0 if away_factors.rest_days >= 14 else 0.0
+        bye_week_home = 1.0 if home_rest >= 14 else 0.0
+        bye_week_away = 1.0 if away_rest >= 14 else 0.0
 
         # Letdown: penalty magnitude > 0 indicates letdown spot
-        letdown_home = 1.0 if home_factors.letdown_penalty > 0 else 0.0
-        letdown_away = 1.0 if away_factors.letdown_penalty > 0 else 0.0
+        letdown_home = 1.0 if (home_factors.letdown_penalty or 0.0) > 0 else 0.0
+        letdown_away = 1.0 if (away_factors.letdown_penalty or 0.0) > 0 else 0.0
 
         # Lookahead: penalty magnitude > 0
-        lookahead_home = 1.0 if home_factors.lookahead_penalty > 0 else 0.0
-        lookahead_away = 1.0 if away_factors.lookahead_penalty > 0 else 0.0
+        lookahead_home = 1.0 if (home_factors.lookahead_penalty or 0.0) > 0 else 0.0
+        lookahead_away = 1.0 if (away_factors.lookahead_penalty or 0.0) > 0 else 0.0
 
         # Sandwich: both letdown AND lookahead (penalty > 0 means triggered)
-        sandwich_home = 1.0 if home_factors.sandwich_penalty > 0 else 0.0
-        sandwich_away = 1.0 if away_factors.sandwich_penalty > 0 else 0.0
+        sandwich_home = 1.0 if (home_factors.sandwich_penalty or 0.0) > 0 else 0.0
+        sandwich_away = 1.0 if (away_factors.sandwich_penalty or 0.0) > 0 else 0.0
 
         # Consecutive road: away team penalty > 0
         # Note: home team can't have consecutive road penalty by definition
-        consecutive_road_away = 1.0 if away_factors.consecutive_road_penalty > 0 else 0.0
+        consecutive_road_away = 1.0 if (away_factors.consecutive_road_penalty or 0.0) > 0 else 0.0
 
         # Rivalry underdog boost: boost > 0 means team is underdog in rivalry
-        rivalry_underdog_home = 1.0 if home_factors.rivalry_boost > 0 else 0.0
-        rivalry_underdog_away = 1.0 if away_factors.rivalry_boost > 0 else 0.0
+        rivalry_underdog_home = 1.0 if (home_factors.rivalry_boost or 0.0) > 0 else 0.0
+        rivalry_underdog_away = 1.0 if (away_factors.rivalry_boost or 0.0) > 0 else 0.0
 
         # Game shape opener: is_season_opener flag
         game_shape_opener_home = 1.0 if home_factors.is_season_opener else 0.0
@@ -189,6 +180,17 @@ class SituationalFeatures:
             game_shape_opener_home=game_shape_opener_home,
             game_shape_opener_away=game_shape_opener_away,
         )
+
+
+# Validate FEATURE_NAMES matches SituationalFeatures fields (ImportError if they drift)
+_FEATURE_FIELDS = {f.name for f in dataclasses.fields(SituationalFeatures)}
+for _name in FEATURE_NAMES:
+    assert _name in _FEATURE_FIELDS, f"FEATURE_NAMES entry '{_name}' not in SituationalFeatures"
+assert len(FEATURE_NAMES) == len(_FEATURE_FIELDS), (
+    f"FEATURE_NAMES has {len(FEATURE_NAMES)} entries but SituationalFeatures "
+    f"has {len(_FEATURE_FIELDS)} fields"
+)
+del _FEATURE_FIELDS, _name  # Clean up module namespace
 
 
 @dataclass
@@ -281,8 +283,8 @@ class LearnedSituationalModel:
         """Reset model state for a new season.
 
         Note: Training data from prior seasons should be passed via
-        add_training_game() before reset() is called. This method only
-        clears the current season's state, not the accumulated training data.
+        seed_with_prior_data() after reset() is called. This method clears
+        the current season's state but not the accumulated training data.
 
         Args:
             year: Current season year
@@ -290,7 +292,10 @@ class LearnedSituationalModel:
         self._year = year
         self._max_week = 0
         self._is_trained = False
-        # Don't clear training data or coefficients - they persist across seasons
+        # Clear EMA state so first train() uses raw coefficients without smoothing.
+        # This is correct because training data already includes prior seasons
+        # via seed_with_prior_data() - no need for additional cross-season EMA bleed.
+        self._prev_coefficients = None
 
     def seed_with_prior_data(
         self,
@@ -301,11 +306,19 @@ class LearnedSituationalModel:
         Called at start of each season with pooled data from all prior years.
         This provides ~3,000+ training samples even in week 1.
 
+        Safe to call after add_training_game(); prior data is prepended,
+        preserving current-season entries.
+
         Args:
             prior_training_data: List of (features_array, residual) tuples
         """
-        self._training_data = list(prior_training_data)  # Copy to avoid mutation
-        logger.debug(f"LSA seeded with {len(self._training_data)} prior games")
+        # Prepend prior data, preserving any current-season games already added
+        self._training_data = list(prior_training_data) + self._training_data
+        logger.debug(
+            "LSA seeded with %d prior games (%d total)",
+            len(prior_training_data),
+            len(self._training_data),
+        )
 
     def add_training_game(
         self,
@@ -356,31 +369,33 @@ class LearnedSituationalModel:
             for name, coef in zip(FEATURE_NAMES, model.coef_)
         }
 
-        # Apply EMA smoothing if we have prior coefficients
-        if self._prev_coefficients is not None:
-            smoothed_coefs = {}
-            for name in FEATURE_NAMES:
-                prev = self._prev_coefficients.get(name, 0.0)
-                curr = raw_coefs[name]
-                smoothed_coefs[name] = (1 - self.ema_beta) * prev + self.ema_beta * curr
-            self._coefficients = smoothed_coefs
-        else:
-            self._coefficients = raw_coefs
-
-        # Apply coefficient clamping if configured
+        # 1. Clamp raw coefficients FIRST (before EMA)
+        # This prevents the ratchet effect where clamped values anchor EMA at ceiling
         if self.clamp_max is not None:
             clamped_count = 0
             for name in FEATURE_NAMES:
-                raw_val = self._coefficients[name]
+                raw_val = raw_coefs[name]
                 clamped_val = max(min(raw_val, self.clamp_max), -self.clamp_max)
                 if clamped_val != raw_val:
                     clamped_count += 1
                     logger.debug(
-                        f"LSA clamp: {name} {raw_val:.3f} -> {clamped_val:.3f}"
+                        "LSA clamp: %s %.3f -> %.3f", name, raw_val, clamped_val
                     )
-                self._coefficients[name] = clamped_val
+                raw_coefs[name] = clamped_val
             if clamped_count > 0:
-                logger.info(f"LSA: clamped {clamped_count} coefficients to +/-{self.clamp_max}")
+                logger.info(
+                    "LSA: clamped %d coefficients to +/-%.1f", clamped_count, self.clamp_max
+                )
+
+        # 2. Apply EMA smoothing AFTER clamping
+        # This allows coefficients to recover from ceiling when raw values drop
+        if self._prev_coefficients is not None:
+            for name in FEATURE_NAMES:
+                prev = self._prev_coefficients.get(name, 0.0)
+                curr = raw_coefs[name]
+                raw_coefs[name] = (1 - self.ema_beta) * prev + self.ema_beta * curr
+
+        self._coefficients = raw_coefs
 
         self._intercept = float(model.intercept_)
         self._prev_coefficients = dict(self._coefficients)  # Save for next round
