@@ -10,6 +10,19 @@ Usage:
     python scripts/run_weekly.py --no-wait  # Skip data availability check
     python scripts/run_weekly.py --sharp    # High-conviction mode (5+ edge only)
     python scripts/run_weekly.py --min-edge 7  # Custom edge threshold
+
+LSA (Learned Situational Adjustment) Mode:
+    python scripts/run_weekly.py --learned-situ --sharp
+
+    LSA replaces fixed situational constants with learned coefficients.
+    Improves 5+ Edge from 53.7% to 54.9%. Requires pre-computed coefficients
+    from running backtest with --learned-situ flag.
+
+    First-time setup:
+        python scripts/backtest.py --years 2022 2023 2024 2025 --learned-situ
+
+    Then weekly:
+        python scripts/run_weekly.py --learned-situ --sharp
 """
 
 import argparse
@@ -30,6 +43,11 @@ from src.models.special_teams import SpecialTeamsModel
 from src.models.finishing_drives import FinishingDrivesModel
 from src.models.efficiency_foundation_model import EfficiencyFoundationModel
 from src.models.preseason_priors import PreseasonPriors
+from src.models.learned_situational import (
+    LearnedSituationalModel,
+    SituationalFeatures,
+    FEATURE_NAMES,
+)
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster, HistoricalRankings
 from src.adjustments.travel import TravelAdjuster
@@ -117,7 +135,112 @@ def parse_args():
         action="store_true",
         help="Sharp betting mode: only show 5+ edge picks (shortcut for --min-edge 5)",
     )
+    parser.add_argument(
+        "--learned-situ",
+        action="store_true",
+        help="Use Learned Situational Adjustment (LSA). Trains on prior seasons + current season weeks.",
+    )
+    parser.add_argument(
+        "--lsa-alpha",
+        type=float,
+        default=300.0,
+        help="LSA ridge alpha for regularization. Default: 300.0",
+    )
     return parser.parse_args()
+
+
+def load_lsa_coefficients(year: int) -> dict[str, float] | None:
+    """Load the most recent LSA coefficients for a given year.
+
+    Looks for coefficients in data/learned_situ_coefficients/ and returns
+    the highest week number available for the specified year.
+
+    Args:
+        year: Season year to load coefficients for
+
+    Returns:
+        Dictionary of {feature_name: coefficient} or None if not found
+    """
+    import json
+    coef_dir = project_root / "data" / "learned_situ_coefficients"
+
+    if not coef_dir.exists():
+        logger.warning("LSA coefficients directory not found. Run backtest with --learned-situ first.")
+        return None
+
+    # Find all coefficient files for this year
+    pattern = f"lsa_{year}_week*.json"
+    files = sorted(coef_dir.glob(pattern))
+
+    if not files:
+        # Try previous year's final coefficients
+        prev_year = year - 1
+        pattern = f"lsa_{prev_year}_week*.json"
+        files = sorted(coef_dir.glob(pattern))
+        if files:
+            logger.info(f"Using {prev_year} coefficients (no {year} data yet)")
+
+    if not files:
+        logger.warning(f"No LSA coefficients found for {year} or {year-1}. Run backtest with --learned-situ first.")
+        return None
+
+    # Use the most recent (highest week number)
+    latest_file = files[-1]
+    logger.info(f"Loading LSA coefficients from {latest_file.name}")
+
+    with open(latest_file) as f:
+        data = json.load(f)
+
+    return data.get("coefficients", None)
+
+
+def apply_lsa_adjustment(
+    prediction,
+    lsa_coefficients: dict[str, float],
+    situational: SituationalAdjuster,
+    schedule_df: pd.DataFrame,
+    rankings: dict,
+    historical_rankings,
+    week: int,
+) -> float:
+    """Compute LSA adjustment for a single prediction.
+
+    Args:
+        prediction: PredictedSpread object
+        lsa_coefficients: Dict of {feature_name: coefficient}
+        situational: SituationalAdjuster for computing raw factors
+        schedule_df: Schedule DataFrame for situational lookup
+        rankings: Current rankings dict
+        historical_rankings: Historical rankings object
+        week: Current week number
+
+    Returns:
+        LSA adjustment in points (positive = favors home)
+    """
+    # Get base spread to determine who is favorite
+    home_is_favorite = prediction.spread > 0
+
+    # Get situational factors
+    home_factors, away_factors = situational.get_matchup_factors(
+        home_team=prediction.home_team,
+        away_team=prediction.away_team,
+        current_week=week,
+        schedule_df=schedule_df,
+        rankings=rankings,
+        home_is_favorite=home_is_favorite,
+        historical_rankings=historical_rankings,
+    )
+
+    # Convert to feature vector
+    features = SituationalFeatures.from_situational_factors(home_factors, away_factors)
+    feature_array = features.to_array()
+
+    # Compute learned adjustment
+    adjustment = 0.0
+    for i, name in enumerate(FEATURE_NAMES):
+        adjustment += lsa_coefficients.get(name, 0.0) * feature_array[i]
+
+    return adjustment
 
 
 def fetch_games_data(
@@ -401,6 +524,8 @@ def run_predictions(
     generate_reports: bool = True,
     use_delta_cache: bool = False,
     min_edge: float = 3.0,
+    use_learned_situ: bool = False,
+    lsa_alpha: float = 300.0,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -414,6 +539,8 @@ def run_predictions(
                          faster execution in testing/scripting. Default True.
         min_edge: Minimum edge (pts) to qualify as value play. Default 3.0.
                   Use 5.0 for high-conviction filtering (--sharp mode).
+        use_learned_situ: Whether to use LSA (Learned Situational Adjustment).
+        lsa_alpha: Ridge regularization for LSA. Default 300.0.
 
     Returns:
         Dictionary with results summary
@@ -589,6 +716,33 @@ def run_predictions(
             historical_rankings=historical_rankings,
         )
 
+        # Apply LSA adjustments if enabled
+        if use_learned_situ:
+            lsa_coefficients = load_lsa_coefficients(year)
+            if lsa_coefficients:
+                logger.info(f"Applying LSA adjustments to {len(predictions)} predictions...")
+                for pred in predictions:
+                    # Compute LSA adjustment
+                    lsa_adj = apply_lsa_adjustment(
+                        prediction=pred,
+                        lsa_coefficients=lsa_coefficients,
+                        situational=situational,
+                        schedule_df=schedule_df,
+                        rankings=None,
+                        historical_rankings=historical_rankings,
+                        week=week,
+                    )
+                    # Replace fixed situational with learned
+                    # New spread = old spread - fixed_situ + learned_situ
+                    fixed_situ = pred.components.situational if hasattr(pred, 'components') else 0.0
+                    pred.spread = pred.spread - fixed_situ + lsa_adj
+                    # Update component for transparency
+                    if hasattr(pred, 'components') and hasattr(pred.components, 'situational'):
+                        object.__setattr__(pred.components, 'situational', lsa_adj)
+                logger.info(f"LSA adjustments applied (mean shift: {sum(p.spread for p in predictions)/len(predictions):.2f})")
+            else:
+                logger.warning("LSA enabled but no coefficients found - using fixed situational")
+
         predictions_df = spread_gen.predictions_to_dataframe(predictions)
 
         # Vegas comparison
@@ -697,6 +851,11 @@ def main():
         min_edge = 5.0
         logger.info("Sharp mode enabled: filtering to 5+ edge picks only")
 
+    # LSA mode
+    use_learned_situ = args.learned_situ
+    if use_learned_situ:
+        logger.info(f"LSA enabled: alpha={args.lsa_alpha}")
+
     logger.info(f"Running predictions for {year} Week {week} (min_edge={min_edge})")
 
     results = run_predictions(
@@ -708,6 +867,8 @@ def main():
         generate_reports=not args.no_reports,
         use_delta_cache=args.use_delta_cache,
         min_edge=min_edge,
+        use_learned_situ=use_learned_situ,
+        lsa_alpha=args.lsa_alpha,
     )
 
     if results["success"]:
