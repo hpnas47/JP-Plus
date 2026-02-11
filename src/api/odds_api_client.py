@@ -105,8 +105,18 @@ class OddsAPIClient:
         self,
         data: list[dict],
         timestamp: datetime,
+        market_key: str = "spreads",
     ) -> list[OddsLine]:
-        """Parse API response into OddsLine objects."""
+        """Parse API response into OddsLine objects.
+
+        Args:
+            data: Raw API response data
+            timestamp: Snapshot timestamp
+            market_key: Market type to parse ("spreads", "totals", "h2h").
+                       Note: Only "spreads" parsing is fully implemented.
+                       Other markets will filter correctly but may not parse
+                       due to different outcome structures.
+        """
         lines = []
 
         for game in data:
@@ -134,7 +144,7 @@ class OddsAPIClient:
                     last_update = timestamp
 
                 for market in bookmaker.get("markets", []):
-                    if market.get("key") != "spreads":
+                    if market.get("key") != market_key:
                         continue
 
                     outcomes = market.get("outcomes", [])
@@ -212,7 +222,7 @@ class OddsAPIClient:
 
         data = response.json()
         timestamp = datetime.utcnow()
-        lines = self._parse_odds_response(data, timestamp)
+        lines = self._parse_odds_response(data, timestamp, market_key=market)
 
         logger.info(
             f"Fetched {len(lines)} lines for {len(data)} games. "
@@ -283,7 +293,7 @@ class OddsAPIClient:
             timestamp = datetime.utcnow()
 
         data = result.get("data", [])
-        lines = self._parse_odds_response(data, timestamp)
+        lines = self._parse_odds_response(data, timestamp, market_key=market)
 
         logger.info(
             f"Fetched {len(lines)} historical lines for {len(data)} games "
