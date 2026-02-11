@@ -79,6 +79,10 @@ class SpreadComponents:
     pace_adjustment: float = 0.0  # Compression for triple-option teams
     qb_adjustment: float = 0.0  # Adjustment when starting QB is out
     env_score: float = 0.0  # Post-smoothing environmental stack (from aggregator)
+    # Residual from aggregator: captures rest-day advantage and consecutive-road penalty
+    # that flow through net_adjustment but are not attributed to venue or situational buckets.
+    # This ensures components sum exactly to spread_raw.
+    rest_and_road: float = 0.0
     # Raw values before caps/offsets (for dual-cap mode spread reassembly)
     special_teams_raw: float = 0.0  # Raw ST differential before cap
     home_field_raw: float = 0.0  # Raw HFA before global offset
@@ -167,6 +171,7 @@ class PredictedSpread:
             "situational": self.components.situational,
             "travel": self.components.travel,
             "altitude": self.components.altitude,
+            "rest_and_road": self.components.rest_and_road,
             "correlated_stack": self.components.correlated_stack,  # HFA+travel+altitude (post-smoothing)
             "full_env_stack": self.components.full_env_stack,  # Full env stack (includes rest, consec)
             "special_teams": self.components.special_teams,
@@ -584,6 +589,12 @@ class SpreadGenerator:
         # No longer polluted by smoothing delta residuals
         components.situational = aggregated.situational_score
 
+        # Compute residual: captures rest-day and consecutive-road effects plus any
+        # global cap delta that flows through net_adjustment but isn't attributed
+        # to the venue or situational buckets above
+        venue_sum = components.home_field + components.travel + components.altitude
+        components.rest_and_road = aggregated.net_adjustment - (venue_sum + components.situational)
+
         # Special teams differential (P2.7: applied as adjustment layer)
         raw_st_diff = self.special_teams.get_matchup_differential(
             home_team, away_team
@@ -647,6 +658,27 @@ class SpreadGenerator:
         # Applied AFTER pace adjustment - talent gap shouldn't be compressed
         components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
         spread += components.fcs_adjustment
+
+        # Debug check: verify components sum to spread within floating point tolerance
+        expected_spread = (
+            components.base_margin
+            + components.home_field
+            + components.travel
+            + components.altitude
+            + components.situational
+            + components.rest_and_road
+            + components.special_teams
+            + components.finishing_drives
+            + components.pace_adjustment
+            + components.fcs_adjustment
+            + components.qb_adjustment
+        )
+        if abs(expected_spread - spread) > 0.01:
+            logger.warning(
+                f"Component sum mismatch: expected={expected_spread:.4f}, "
+                f"spread={spread:.4f}, diff={expected_spread - spread:.4f} "
+                f"({away_team} @ {home_team})"
+            )
 
         # Convert to win probability
         win_prob = self._spread_to_probability(spread)
