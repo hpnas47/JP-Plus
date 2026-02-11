@@ -63,12 +63,14 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 **Optional enhancement** (`--learned-situ` flag) that replaces fixed situational constants with coefficients learned via walk-forward ridge regression on prediction residuals.
 
-| Mode | 3+ Edge (Close) | 5+ Edge (Close) | Use Case |
-|------|-----------------|-----------------|----------|
-| Fixed baseline | **53.4%** | 54.5% | Standard production |
-| LSA (alpha=300) | 52.8% | **55.6%** | High-conviction filtering |
+| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) | Use Case |
+|------|-----------------|----------------|-----------------|----------------|----------|
+| Fixed baseline | **53.4%** | **55.6%** | 54.5% | **57.0%** | Standard production |
+| LSA (alpha=300) | 52.9% | 55.4% | **56.1%** | 56.3% | High-conviction filtering |
 
-**Key insight:** LSA serves as a high-confidence filter. It improves Top Tier (5+ pts) performance by +1.1% while slightly reducing volume/accuracy in the lower-confidence (3+) tier. The trade-off is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge.
+**Key insight:** LSA serves as a high-confidence filter for closing lines. It improves 5+ Edge (Close) by +1.6pp (54.5% → 56.1%) while slightly reducing 3+ performance. However, LSA slightly hurts opening line performance (57.0% → 56.3% at 5+), suggesting fixed situational adjustments better capture value that the market hasn't yet priced in.
+
+**Recommendation:** Use LSA for closing line bets; use fixed baseline for opening line bets.
 
 **Configuration:** `alpha=300.0`, `clamp_max=4.0` (safety net)
 
