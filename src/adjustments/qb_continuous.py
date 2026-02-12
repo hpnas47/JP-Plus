@@ -24,6 +24,7 @@ import pandas as pd
 import numpy as np
 
 from config.settings import get_settings
+from src.data.qb_cache import QBDataCache
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,9 @@ class QBContinuousAdjuster:
         self._metrics_api: Optional[cfbd.MetricsApi] = None
         self._games_api: Optional[cfbd.GamesApi] = None
 
+        # Disk cache for API responses (eliminates HTTP calls for historical data)
+        self._cache = QBDataCache()
+
         # Data caches (populated by build_qb_data)
         self._game_stats: dict[tuple[str, int, int], list[QBGameStats]] = {}  # (team, year, week) -> stats
         self._season_stats: dict[tuple[str, int, int], dict[str, QBSeasonStats]] = {}  # (team, year, through_week) -> {player_id: stats}
@@ -341,9 +345,21 @@ class QBContinuousAdjuster:
 
         Returns dict mapping team -> list of QBGameStats for that team.
         """
-        # Fetch PPA and attempts
-        ppa_data = self._fetch_qb_ppa_for_week(year, week)
-        attempts_data = self._fetch_pass_attempts_for_week(year, week)
+        # Try cache first (historical data only)
+        cached_ppa = self._cache.load_week_ppa(year, week)
+        cached_attempts = self._cache.load_week_attempts(year, week)
+
+        if cached_ppa is not None and cached_attempts is not None:
+            # Cache hit - use cached data
+            ppa_data = cached_ppa
+            attempts_data = cached_attempts
+        else:
+            # Cache miss - fetch from API
+            ppa_data = self._fetch_qb_ppa_for_week(year, week)
+            attempts_data = self._fetch_pass_attempts_for_week(year, week)
+
+            # Save to cache for future runs (only saves if historical)
+            self._cache.save_week_data(year, week, ppa_data, attempts_data)
 
         # Group PPA by team
         team_qbs: dict[str, list[dict]] = {}
@@ -434,12 +450,35 @@ class QBContinuousAdjuster:
 
         logger.info(f"Loading prior season QB data from {prior_year}")
 
-        # Fetch end-of-season PPA for prior year (all weeks)
+        # Try cache first
+        cached_data = self._cache.load_prior_season(prior_year)
+        if cached_data is not None:
+            # Reconstruct _prior_season_stats from cache
+            for record in cached_data:
+                player_id = record['player_id']
+                stats = QBSeasonStats(
+                    player_id=player_id,
+                    player_name=record['player_name'],
+                    team=record['team'],
+                    year=prior_year,
+                    through_week=99,  # End of season
+                    total_dropbacks=int(record['total_dropbacks']),
+                    total_pass_ppa=record['total_pass_ppa'],
+                    games_played=0,  # Not tracked
+                )
+                self._prior_season_stats[(player_id, prior_year)] = stats
+
+            logger.info(f"Loaded {len(self._prior_season_stats)} prior season QB records from cache")
+            self._prior_season_loaded = True
+            return
+
+        # Cache miss - fetch from API
         try:
             ppa_data = self.metrics_api.get_predicted_points_added_by_player_season(
                 year=prior_year, position="QB"
             )
 
+            records_to_cache = []
             for p in ppa_data:
                 d = p.to_dict()
                 player_id = str(d.get('id', ''))
@@ -471,7 +510,20 @@ class QBContinuousAdjuster:
                     )
                     self._prior_season_stats[(player_id, prior_year)] = stats
 
-            logger.info(f"Loaded {len(self._prior_season_stats)} prior season QB records")
+                    # Prepare for cache
+                    records_to_cache.append({
+                        'player_id': player_id,
+                        'player_name': name,
+                        'team': team,
+                        'year': prior_year,
+                        'total_dropbacks': int(est_dropbacks),
+                        'total_pass_ppa': total_pass_ppa,
+                    })
+
+            # Save to cache for future runs
+            self._cache.save_prior_season(prior_year, records_to_cache)
+
+            logger.info(f"Loaded {len(self._prior_season_stats)} prior season QB records from API")
             self._prior_season_loaded = True
 
         except Exception as e:
