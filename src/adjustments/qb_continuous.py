@@ -203,6 +203,7 @@ class QBContinuousAdjuster:
         use_prior_season: bool = True,
         fbs_avg_ppa: float = FBS_AVG_PPA,
         phase1_only: bool = False,
+        fix_misattribution: bool = False,
     ):
         """Initialize QB continuous adjuster.
 
@@ -216,6 +217,7 @@ class QBContinuousAdjuster:
             use_prior_season: Whether to use prior season data for Week 1
             fbs_avg_ppa: FBS average PPA for mean-centering
             phase1_only: If True, only apply QB adjustment for weeks 1-3 (skip Core)
+            fix_misattribution: If True, zero out Week 1 adjustment for unverified starters
         """
         settings = get_settings()
         self.api_key = api_key or settings.cfbd_api_key
@@ -227,6 +229,7 @@ class QBContinuousAdjuster:
         self.use_prior_season = use_prior_season
         self.fbs_avg_ppa = fbs_avg_ppa
         self.phase1_only = phase1_only  # If True, only apply QB adjustment for weeks 1-3
+        self.fix_misattribution = fix_misattribution  # If True, zero out Week 1 for unverified starters
 
         # API clients
         self._metrics_api: Optional[cfbd.MetricsApi] = None
@@ -659,6 +662,22 @@ class QBContinuousAdjuster:
 
         return proj
 
+    def _is_returning_starter(self, player_id: str, team: str, min_dropbacks: int = 50) -> bool:
+        """Check if a player is a returning starter (same team, >min_dropbacks in prior year).
+
+        Args:
+            player_id: The player's ID
+            team: The team name
+            min_dropbacks: Minimum dropbacks required to qualify as returning starter
+
+        Returns:
+            True if player had >min_dropbacks for this team in prior year
+        """
+        prior_stats = self._prior_season_stats.get((player_id, self.year - 1))
+        if prior_stats and prior_stats.team == team and prior_stats.total_dropbacks > min_dropbacks:
+            return True
+        return False
+
     # ========================================================================
     # Quality & Uncertainty Computation
     # ========================================================================
@@ -677,6 +696,19 @@ class QBContinuousAdjuster:
             pred_week=pred_week,
             projection=proj,
         )
+
+        # Phase A: Misattribution fix for Week 1
+        # At Week 1, we have NO current-season game data yet, so the system relies entirely
+        # on prior year data. The problem is the prior starter may have left (NFL, transfer).
+        # We can't verify who's actually starting at Week 1 prediction time.
+        # Fix: Zero out the adjustment entirely when we can't verify the starter.
+        if self.fix_misattribution and pred_week == 1 and proj.current_season_dropbacks == 0:
+            quality.qb_value_raw = 0.0
+            quality.qb_value_shrunk = 0.0
+            quality.qb_points = 0.0
+            quality.qb_uncertainty = 1.0  # Maximum uncertainty
+            self._qualities[key] = quality
+            return quality
 
         # Compute weighted average PPA
         if proj.current_season_dropbacks > 0 or proj.prior_season_used:

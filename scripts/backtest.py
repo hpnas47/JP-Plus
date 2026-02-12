@@ -653,6 +653,7 @@ def walk_forward_predict(
     qb_prior_decay: float = 0.3,
     qb_use_prior_season: bool = True,
     qb_phase1_only: bool = False,
+    qb_fix_misattribution: bool = False,
 ) -> tuple[list[dict], list[tuple]]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -731,6 +732,7 @@ def walk_forward_predict(
             prior_decay=qb_prior_decay,
             use_prior_season=qb_use_prior_season,
             phase1_only=qb_phase1_only,
+            fix_misattribution=qb_fix_misattribution,
         )
 
     # LSA: If model provided, train after each week's games
@@ -2887,6 +2889,7 @@ def _process_single_season(
     qb_prior_decay: float = 0.3,
     qb_use_prior_season: bool = True,
     qb_phase1_only: bool = False,
+    qb_fix_misattribution: bool = False,
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -3001,6 +3004,7 @@ def _process_single_season(
         qb_prior_decay=qb_prior_decay,
         qb_use_prior_season=qb_use_prior_season,
         qb_phase1_only=qb_phase1_only,
+        qb_fix_misattribution=qb_fix_misattribution,
     )
 
     # Calculate ATS
@@ -3076,6 +3080,7 @@ def run_backtest(
     qb_prior_decay: float = 0.3,
     qb_use_prior_season: bool = True,
     qb_phase1_only: bool = False,
+    qb_fix_misattribution: bool = False,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -3225,6 +3230,7 @@ def run_backtest(
         qb_prior_decay=qb_prior_decay,
         qb_use_prior_season=qb_use_prior_season,
         qb_phase1_only=qb_phase1_only,
+        qb_fix_misattribution=qb_fix_misattribution,
     )
 
     # LSA requires sequential processing: prior years' data feeds later years
@@ -3975,6 +3981,11 @@ def main():
         action="store_true",
         help="Apply QB adjustment for ALL weeks (not just Phase 1). Warning: may degrade Core ATS.",
     )
+    parser.add_argument(
+        "--qb-fix-misattribution",
+        action="store_true",
+        help="Zero out Week 1 QB adjustment for unverified starters. Prevents misattribution of departed QB data.",
+    )
     # Dual-Cap Sweep Mode
     parser.add_argument(
         "--sweep-dual-st-cap",
@@ -4219,6 +4230,7 @@ def main():
         qb_prior_decay=args.qb_prior_decay,
         qb_use_prior_season=not args.no_qb_prior_season,
         qb_phase1_only=args.qb_phase1_only and not args.no_qb_phase1_only,
+        qb_fix_misattribution=args.qb_fix_misattribution,
     )
 
     # P3.4: Print results with ATS data for sanity report
