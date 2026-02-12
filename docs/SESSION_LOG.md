@@ -4,6 +4,102 @@
 
 ---
 
+## Session: February 11, 2026 (Evening)
+
+### Theme: API Caching Optimization
+
+---
+
+#### Performance Audit — Comprehensive API Call Analysis
+**Status**: Completed
+**Agent**: perf-optimizer
+
+Full audit of all API calls across the codebase identified 4 external services with 28 endpoints:
+- **CFBD API**: Games, plays, teams, QB PPA, priors data
+- **Odds API**: Betting lines (SQLite cached)
+- **Tomorrow.io**: Weather forecasts (SQLite cached)
+
+**Key Finding**: QB Continuous API calls were the largest uncached bottleneck — 31 calls/season for PPA + attempts data.
+
+---
+
+#### QB Data Caching — APPROVED
+**Status**: Committed (`f1a5fb4`)
+**Files**: `src/data/qb_cache.py` (new), `src/adjustments/qb_continuous.py`
+
+Implemented disk cache for QB Continuous API responses following SeasonDataCache pattern.
+
+**Cache Structure:**
+```
+.cache/qb/{year}/
+  week_{week}_ppa.parquet      - QB PPA data per week
+  week_{week}_attempts.parquet - Pass attempts per week
+  prior_season.parquet         - End-of-year QB stats
+  .complete_week_{week}        - Atomic write markers
+```
+
+**Performance:**
+| Run | Time | Notes |
+|-----|------|-------|
+| First (API calls) | 34.9s | Fetches all QB data from CFBD |
+| Second (cached) | 24.5s | Uses parquet cache |
+| **Savings** | **10.4s (30%)** | |
+
+**Cache Size**: ~2.0 MB for 2022-2025 data
+
+---
+
+#### Priors Data Caching — APPROVED
+**Status**: Committed (`01294d6`)
+**Files**: `src/data/priors_cache.py` (new), `src/models/preseason_priors.py`
+
+Implemented disk cache for preseason priors API responses (SP+, Talent, RP, Portal).
+
+**Cache Structure:**
+```
+.cache/priors/{year}/
+  sp_ratings.parquet           - SP+ from prior year
+  talent.parquet               - Team talent composite
+  returning_production.parquet - Percent PPA returning
+  transfer_portal.parquet      - Portal entries
+```
+
+**API Calls Eliminated**: 16 per 4-year backtest (4 endpoints × 4 years)
+
+**Cache Size**: ~0.4 MB for 2021-2025 data
+
+---
+
+#### Combined Caching Impact
+
+| Metric | Before Caching | After Caching | Improvement |
+|--------|----------------|---------------|-------------|
+| API calls per backtest | ~140 | ~0* | **~95% reduction** |
+| 4-year backtest (first run) | ~35s | ~25s | 10s saved |
+| 4-year backtest (cached) | ~25s | ~23s | 2s saved |
+
+*After cache is populated for historical years
+
+**Total Cache Size**: ~2.4 MB
+
+---
+
+#### Blended Priors ATS Tuning — REJECTED (Earlier Today)
+**Status**: Rejected, infrastructure committed (`ef2695c`)
+**Files**: `scripts/tune_blended_priors_ats.py`, `src/models/blended_priors.py`, `src/models/own_priors.py`
+
+Attempted to tune blended priors (SP+ + own-prior) with ATS as objective function instead of MAE.
+
+**Result**: Direct comparison showed -1.1% degradation at 5+ Edge:
+| Config | 5+ Edge (Close) |
+|--------|-----------------|
+| SP+-only baseline | 50.8% |
+| Blended priors | 49.7% |
+
+**Conclusion**: Blended priors fail the binding constraint (must not degrade 5+ Edge). Added to rejection pattern as #14. Infrastructure preserved for potential future research.
+
+---
+
 ## Session: February 11, 2026 (Post-Midnight)
 
 ### Theme: Production Pipeline Hardening
