@@ -1,8 +1,20 @@
 """Continuous QB Rating System for JP+ Spreads.
 
-This module provides always-on, walk-forward-safe QB quality estimates that:
-1. Adjust predicted spreads based on QB quality (Phase A)
-2. Compute QB uncertainty for future bet gating (Phase B - logging only)
+**THIS IS THE CANONICAL QB ADJUSTMENT SYSTEM FOR JP+.**
+
+For historical/legacy QB injury handling (binary --qb-out flag), see qb_adjustment.py.
+The continuous system here is used by default in production and provides:
+
+1. Walk-forward-safe QB quality estimates
+2. Shrinkage-based uncertainty quantification
+3. Prior season decay for Week 1 projections
+4. Phase1-only mode (weeks 1-3) to avoid double-counting with EFM
+
+In SpreadGenerator, this system takes priority over the legacy QBInjuryAdjuster:
+    if self.qb_continuous:     # This module (canonical)
+        ...
+    elif self.qb_adjuster:     # Legacy fallback (qb_adjustment.py)
+        ...
 
 Walk-Forward Safety:
 - For predicting week W games, only uses QB data from weeks < W
@@ -126,10 +138,17 @@ class QBProjection:
     # Starter change detection
     starter_changed: bool = False  # True if starter changed recently
 
+    # Prior decay factor (must match QBContinuousAdjuster.prior_decay for consistency)
+    prior_decay: float = DEFAULT_PRIOR_DECAY
+
     @property
     def n_effective_db(self) -> float:
-        """Effective dropbacks (current + decayed prior)."""
-        prior_contribution = self.prior_season_dropbacks * DEFAULT_PRIOR_DECAY if self.prior_season_used else 0
+        """Effective dropbacks (current + decayed prior).
+
+        Uses instance prior_decay to ensure consistency with QBContinuousAdjuster
+        PPA weighting calculations.
+        """
+        prior_contribution = self.prior_season_dropbacks * self.prior_decay if self.prior_season_used else 0
         return self.current_season_dropbacks + prior_contribution
 
 
@@ -625,6 +644,7 @@ class QBContinuousAdjuster:
             team=team,
             year=self.year,
             pred_week=pred_week,
+            prior_decay=self.prior_decay,  # Pass instance value for consistent n_effective_db
         )
 
         # Get season stats through pred_week - 1

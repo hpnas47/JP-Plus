@@ -1,7 +1,18 @@
-"""QB Injury Adjustment Module.
+"""QB Injury Adjustment Module (LEGACY).
 
-Calculates starter-to-backup drop-off for QB injuries and applies
-adjustments to spread predictions when a starter is flagged as out.
+**NOTE: This is the legacy QB system. The canonical QB system is qb_continuous.py.**
+
+This module provides binary QB-out adjustments for manual injury flagging via --qb-out.
+It is only used as a fallback when QBContinuousAdjuster is not provided to SpreadGenerator.
+
+Key differences from qb_continuous:
+- This: Binary injury flag (starter is out → apply fixed adjustment)
+- Continuous: Always-on quality estimates with shrinkage and uncertainty
+
+The hardcoded team list (lines ~157-166) will go stale each season. Consider
+refactoring to use dynamic FBS team lookup if this module remains in use.
+
+For production 2026+, prefer enabling qb_continuous with --qb-continuous flag.
 """
 
 import logging

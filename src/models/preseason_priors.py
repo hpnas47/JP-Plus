@@ -487,21 +487,21 @@ class PreseasonPriors:
 
     # Power 4 Conferences (for level-up discount logic)
     # Note: Conference lookup is now year-appropriate via get_fbs_teams(year=year)
-    P4_CONFERENCES = {
-        'SEC', 'Big Ten', 'Big 12', 'ACC',
-        # FBS Independents conference label for teams like Notre Dame, Army, etc.
-        'FBS Independents',
-    }
+    # IMPORTANT: 'FBS Independents' is NOT included — it contains non-P4 teams like
+    # UConn, UMass. P4-level independents are listed explicitly in P4_TEAMS.
+    P4_CONFERENCES = {'SEC', 'Big Ten', 'Big 12', 'ACC'}
 
     # P4-level teams that may not be in a P4 conference in a given year
     # With year-appropriate conference lookup (P2.1 fix), this is now minimal:
     # - Notre Dame: Independent but plays P4-level schedule (ACC for most games)
-    # - BYU: Was independent 2011-2022, joined Big 12 in 2023
-    # Other teams (USC, UCLA, Oregon, etc.) are handled by year-appropriate
-    # conference lookup and don't need static overrides.
+    # - Army: Independent since 2024, competitive with P4 (service academy constraints)
+    # - Navy: Independent, competitive with P4 (service academy constraints)
+    # Note: BYU joined Big 12 in 2023, so year-appropriate lookup handles it.
+    # UConn, UMass are NOT P4 level despite being independents.
     P4_TEAMS = {
         'Notre Dame',
-        'BYU',  # Override for 2011-2022 when BYU was independent
+        'Army',   # Competitive independent, service academy recruiting limits
+        'Navy',   # Competitive independent, service academy recruiting limits
     }
 
     # High-contact positions for physicality tax (G5→P4 transfers)
@@ -513,10 +513,13 @@ class PreseasonPriors:
     # Level-up discount factors
     PHYSICALITY_TAX = 0.75      # 25% discount for trench players G5→P4
     ATHLETICISM_DISCOUNT = 0.90  # 10% discount for skill players G5→P4
-    # P1.2: Continuity tax amplifies outgoing losses (dividing by < 1.0 makes losses bigger)
-    # E.g., if a team loses 5.0 of outgoing value, the effective loss is 5.0 / 0.90 = 5.56
-    # This reflects the hidden cost of replacing incumbents (scheme fit, leadership, etc.)
-    CONTINUITY_TAX = 0.90
+
+    # Continuity retention: fraction of value retained when losing an incumbent
+    # Value 0.90 means departing players retain 90% effectiveness → dividing by 0.90
+    # amplifies loss by ~11% (1/0.90 = 1.111). This reflects hidden costs of turnover:
+    # scheme fit, leadership, chemistry that a raw "replacement" doesn't capture.
+    # E.g., if a team loses 5.0 of outgoing value: effective loss = 5.0 / 0.90 = 5.56
+    CONTINUITY_RETENTION = 0.90
 
     def _get_position_group(self, position: str) -> str:
         """Map a position to its position group.
@@ -872,6 +875,21 @@ class PreseasonPriors:
             .fillna('OTHER')
         )
 
+        # Log OTHER position group transfers (helps identify unmapped positions)
+        other_count = (transfers_df['pos_group'] == 'OTHER').sum()
+        if other_count > 0:
+            other_positions = (
+                transfers_df[transfers_df['pos_group'] == 'OTHER']['position']
+                .fillna('UNKNOWN')
+                .value_counts()
+                .head(10)
+                .to_dict()
+            )
+            logger.warning(
+                f"{other_count} transfers ({other_count/len(transfers_df):.1%}) mapped to OTHER. "
+                f"Top unmapped positions: {other_positions}"
+            )
+
         # VECTORIZED player value calculation (replaces 2x .apply() over ~2000 rows)
         # Formula: pos_weight × quality_factor × level_discount
 
@@ -939,11 +957,14 @@ class PreseasonPriors:
                 )
             )
 
-        # 4. Final value: pos_weight × quality_factor × level_discount
-        # Same formula for both outgoing and incoming (symmetric treatment)
-        player_value = pos_weight * quality_factor * level_discount
-        transfers_df['outgoing_value'] = player_value
-        transfers_df['incoming_value'] = player_value
+        # 4. Final values: ASYMMETRIC treatment for level-up transfers
+        # Outgoing value: full value regardless of where player goes
+        # The origin school lost this player at their competition level (no discount)
+        transfers_df['outgoing_value'] = pos_weight * quality_factor
+
+        # Incoming value: discounted for G5→P4 level-up adjustment
+        # G5→P4 players face physicality/scheme adjustment at the higher level
+        transfers_df['incoming_value'] = pos_weight * quality_factor * level_discount
 
         # Log position group distribution
         pos_dist = transfers_df['pos_group'].value_counts()
@@ -951,15 +972,17 @@ class PreseasonPriors:
         logger.debug(f"Position distribution: {pos_dist.to_dict()}")
 
         # Calculate outgoing value per team (players who left)
-        # Apply CONTINUITY_TAX: losing an incumbent hurts even if "replaced"
-        # With symmetric level-up discounts, net impact is now:
+        # Apply continuity retention: losing an incumbent hurts even if "replaced"
+        # With ASYMMETRIC level-up discounts, net impact is:
         #   Same-level: origin loses value×1.11, dest gains value×1.0, net = -0.11 (continuity only)
-        #   G5→P4: origin loses value×0.75×1.11=0.83, dest gains 0.75, net = -0.08 (continuity only)
+        #   G5→P4: origin loses value×1.11 (FULL value), dest gains value×0.75 (discounted)
+        #          net = -0.36 to -0.46 depending on position (continuity + discount asymmetry)
+        #   P4→G5: origin loses value×1.11, dest gains value×1.10, net ≈ 0 (slight boost)
         outgoing_raw = transfers_df.groupby('origin')['outgoing_value'].sum()
-        outgoing = outgoing_raw / self.CONTINUITY_TAX  # Amplify loss (divide by 0.90 = ~11% boost)
+        outgoing = outgoing_raw / self.CONTINUITY_RETENTION  # Amplify loss (divide by 0.90 = ~11%)
 
         # Calculate incoming value per team (players who arrived)
-        # Level-up discounts already applied symmetrically in both outgoing and incoming
+        # Level-up discounts already applied to incoming_value (G5→P4 discounted)
         incoming_df = transfers_df[transfers_df['destination'].notna()]
         incoming = incoming_df.groupby('destination')['incoming_value'].sum()
 

@@ -873,7 +873,13 @@ def run_predictions(
                 )
                 lsa_adjustments.append(lsa_adj)
 
-                # Calculate LSA spread: replace fixed situational with learned
+                # LSA/AGGREGATOR CONTRACT:
+                # LSA REPLACES the aggregator's situational component, NOT adds to it.
+                # This prevents double-counting of letdown, lookahead, sandwich spots.
+                # Formula: lsa_spread = (spread - fixed_situ) + lsa_adj
+                #        = base_spread + hfa + travel + ... + lsa_adj  (situational swapped)
+                # The aggregator's mental bucket (letdown, lookahead, sandwich) is effectively
+                # zeroed out because LSA learns these coefficients directly from residuals.
                 fixed_situ = pred.components.situational
                 lsa_spread = pred.spread - fixed_situ + lsa_adj
                 lsa_spreads[pred.game_id] = lsa_spread
