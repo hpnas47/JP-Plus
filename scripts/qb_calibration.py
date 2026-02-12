@@ -78,10 +78,9 @@ def run_calibration(
         # Build data and compute qualities for each week
         for pred_week in range(1, 16):
             try:
-                # through_week must be >= 1 to ensure build_qb_data's main body executes and
-                # loads prior season data (via _load_prior_season). With through_week=0, the
-                # early return triggers before prior season loading.
-                adjuster.build_qb_data(through_week=max(1, pred_week - 1))
+                # through_week = pred_week - 1 for walk-forward safety
+                # through_week=0 is now valid (loads prior season only, no current season games)
+                adjuster.build_qb_data(through_week=pred_week - 1)
             except Exception as e:
                 logger.warning(f"Error building data for {year} week {pred_week}: {e}")
                 continue
@@ -90,16 +89,29 @@ def run_calibration(
             # We call _compute_qb_quality directly instead of get_adjustment to avoid
             # creating junk entries for a dummy opponent team in the _qualities cache.
             # This is a calibration script so accessing the internal method is acceptable.
+            failures = 0
             for team in team_names:
                 try:
                     adjuster._compute_qb_quality(team, pred_week=pred_week)
-                except Exception:
-                    pass  # Some teams may not have data
+                except Exception as e:
+                    failures += 1
+                    logger.debug(f"Could not compute QB quality for {team} week {pred_week}: {e}")
+            if failures > 0:
+                logger.info(f"  Week {pred_week}: {failures}/{len(team_names)} teams failed")
 
         # Get calibration data
         cal_df = adjuster.get_calibration_data()
         if len(cal_df) > 0:
             all_data.append(cal_df)
+
+        # Sanity check: we should have data for most team-weeks
+        # 15 weeks * N teams, with some tolerance for missing data
+        expected_min_rows = len(team_names) * 10  # At least 10 weeks should have data
+        if len(cal_df) < expected_min_rows:
+            logger.warning(
+                f"Calibration data suspiciously small for {year}: {len(cal_df)} rows, "
+                f"expected >= {expected_min_rows}"
+            )
 
         logger.info(f"  {len(cal_df)} team-week records")
 
@@ -167,7 +179,13 @@ def analyze_calibration(df: pd.DataFrame, qb_cap: float, qb_scale: float) -> dic
     if len(midseason) > 0:
         p90_shrunk = np.percentile(midseason['qb_value_shrunk'].dropna(), 90)
         target_points = 0.65 * qb_cap  # ~65% of cap
-        recommended_scale = target_points / p90_shrunk if p90_shrunk > 0 else qb_scale
+
+        # Guard against small denominators producing absurd scale values
+        if p90_shrunk > 0.01:
+            recommended_scale = target_points / p90_shrunk
+        else:
+            recommended_scale = qb_scale
+            print(f"WARNING: p90_shrunk too small ({p90_shrunk:.4f}), keeping current scale {qb_scale}")
 
         print(f"Current QB_SCALE: {qb_scale}")
         print(f"90th percentile qb_value_shrunk (Weeks 4-8): {p90_shrunk:.4f}")

@@ -409,8 +409,21 @@ class QBContinuousAdjuster:
         This is the main data preparation method. Call before get_adjustment().
 
         Args:
-            through_week: Build data through this week (for predicting through_week + 1)
+            through_week: Build data through this week (for predicting through_week + 1).
+                         Use through_week=0 for Week 1 predictions (prior season only,
+                         no current season games).
         """
+        # Handle through_week=0 specially: load prior season data but no current season games
+        # This is the correct semantic for Week 1 predictions (we have zero current-season data)
+        if through_week == 0:
+            if self.use_prior_season and not self._prior_season_loaded:
+                logger.info(f"Building QB data for {self.year} through week 0 (prior season only)")
+                self._load_prior_season(self.year - 1)
+            return
+
+        if through_week < 0:
+            return  # Invalid
+
         if through_week <= self._data_built_through_week:
             return  # Already built
 
