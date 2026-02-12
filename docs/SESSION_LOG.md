@@ -4,6 +4,95 @@
 
 ---
 
+## Session: February 12, 2026
+
+### Theme: FCS Double-Counting Fix (Historical Backtest Consistency)
+
+---
+
+#### Phase 1 Error Analysis — FCS Games Identified as Root Cause
+**Status**: Diagnostic completed
+
+User requested investigation into Phase 1 (Weeks 1-3) prediction errors. Analysis revealed:
+
+| Cohort | N | MAE | Mean Error |
+|--------|---|-----|------------|
+| FCS games (spread>35) | 276 | 19.00 | **+12.02** |
+| FBS-only (spread≤35) | 684 | 13.60 | +0.19 |
+
+Year-over-year showed massive discrepancy:
+- 2022-2023: ME +17.64 pts (pre-FCS estimator calibration)
+- 2024-2025: ME +2.88 pts (post-calibration)
+
+**Root Cause Identified**: Double-counting in spread calculation:
+1. FCS team gets mean FBS rating fallback (~0)
+2. PLUS FCS penalty (~32 pts) added on top
+3. Result: ~50 pt predicted spreads vs ~34 pt actual margins
+
+---
+
+#### FCS Double-Counting Fix — APPROVED
+**Status**: Committed (`b19da17`)
+**Files**: `src/predictions/spread_generator.py`
+
+**Change**: In `_get_base_margin()`, return 0.0 for FBS vs FCS games. Let the FCS penalty alone handle the expected margin, preventing rating_diff + penalty stacking.
+
+```python
+# In _get_base_margin()
+if self.fbs_teams:
+    home_is_fbs = home_team in self.fbs_teams
+    away_is_fbs = away_team in self.fbs_teams
+    if home_is_fbs != away_is_fbs:
+        # FCS penalty handles the rating differential
+        return 0.0
+```
+
+**Results (2022-2025 backtest)**:
+
+| Metric | Before Fix | After Fix | Delta |
+|--------|------------|-----------|-------|
+| **FCS Mean Error** | +12.02 | +4.18 | **-7.84** ✓ |
+| **FCS MAE** | 19.00 | 16.79 | **-2.21** ✓ |
+| **Phase 1 MAE** | 15.30 | 14.42 | **-0.88** ✓ |
+| **Full MAE** | 13.32 | 13.13 | **-0.19** ✓ |
+| **Core 5+ Edge** | 54.5% | 55.0% | **+0.5%** ✓ |
+| Phase 1 5+ Edge | 50.8% | 50.0% | -0.8% |
+
+Year consistency fixed:
+- 2022-2023: ME +17.64 → +4.28
+- 2024-2025: ME +2.88 → +4.08
+
+**Trade-off accepted**: Phase 1 5+ Edge drops from 50.8% (below breakeven) to 50.0% (exact coin-flip). This is acceptable because:
+1. Original 50.8% was inflated by buggy spreads
+2. Core 5+ Edge improved (+0.5%)
+3. Phase 1 was never a profitable betting window
+
+---
+
+#### Baseline Metrics Updated — COMMITTED
+**Status**: Committed (`c91df87`)
+**Files**: `CLAUDE.md`, `docs/MODEL_ARCHITECTURE.md`
+
+Updated production baseline with new metrics post-FCS fix.
+
+---
+
+#### FCS Baseline Tuning — NOT NEEDED
+**Status**: Tested, no change
+
+Tested FCS baseline margins (-28, -26, -24, -22):
+
+| Baseline | Penalty | FCS ME | Core 5+ Edge |
+|----------|---------|--------|--------------|
+| **-28** | 32.4 | +4.18 | **55.0%** |
+| -26 | 30.8 | +2.48 | 54.9% |
+| -24 | 29.2 | +2.29 | 54.9% |
+| -22 | 27.6 | -0.92 | 54.9% |
+
+Baseline -28 kept — Core performance essentially identical, and it's the documented standard.
+
+---
+
 ## Session: February 11, 2026 (Evening)
 
 ### Theme: API Caching Optimization
