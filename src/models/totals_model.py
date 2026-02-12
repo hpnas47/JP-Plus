@@ -200,6 +200,17 @@ class TotalsModel:
         # Walk-forward filter
         if max_week is not None:
             games = games[games['week'] <= max_week]
+            # Track for external leakage verification
+            self._last_train_max_week = max_week
+            # DATA LEAKAGE GUARD: Verify no future weeks slipped through
+            actual_max = int(games['week'].max()) if len(games) > 0 else 0
+            if actual_max > max_week:
+                raise ValueError(
+                    f"DATA LEAKAGE in TotalsModel: games include week {actual_max} "
+                    f"but max_week={max_week}. Check filtering logic."
+                )
+        else:
+            self._last_train_max_week = int(games['week'].max()) if len(games) > 0 else 0
 
         if len(games) < 50:
             logger.warning(f"Only {len(games)} games for training - ratings may be unstable")
