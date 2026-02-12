@@ -308,6 +308,9 @@ class SpreadGenerator:
     def _get_base_margin(self, home_team: str, away_team: str) -> float:
         """Get base margin from EFM ratings differential.
 
+        For FBS vs FCS games, returns 0.0 to avoid double-counting with FCS penalty.
+        The FCS penalty already represents the full expected margin between FBS and FCS.
+
         Args:
             home_team: Home team name
             away_team: Away team name
@@ -315,6 +318,22 @@ class SpreadGenerator:
         Returns:
             Expected point margin (home - away) on neutral field
         """
+        # Check if this is an FBS vs FCS game
+        # If so, return 0.0 - let the FCS penalty handle the full margin
+        # This prevents double-counting (rating_diff + FCS penalty was inflating spreads)
+        if self.fbs_teams:
+            home_is_fbs = home_team in self.fbs_teams
+            away_is_fbs = away_team in self.fbs_teams
+            if home_is_fbs != away_is_fbs:
+                # FBS vs FCS game - FCS penalty handles the rating differential
+                # Log which team is FCS for debugging
+                fcs_team = away_team if home_is_fbs else home_team
+                logger.debug(
+                    f"FBS vs FCS game: {home_team} vs {away_team}. "
+                    f"Setting base_margin=0, FCS penalty will apply for {fcs_team}."
+                )
+                return 0.0
+
         home_rating = self.ratings.get(home_team)
         away_rating = self.ratings.get(away_team)
 
