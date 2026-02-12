@@ -66,7 +66,7 @@ def run_backtest_and_extract() -> dict:
         portal_scale=0.15,
     )
 
-    logger.info("Running backtest (start_week=1, closing lines)...")
+    logger.info("Running backtest (start_week=1, closing lines, QB Continuous Phase1-only)...")
     results = run_backtest(
         years=years,
         start_week=start_week,
@@ -85,6 +85,9 @@ def run_backtest_and_extract() -> dict:
         portal_scale=0.15,
         use_opening_line=False,  # Closing line is default for ATS
         hfa_global_offset=0.50,  # Calibrated Feb 2026
+        use_qb_continuous=True,  # Production default for 2026
+        qb_scale=5.0,
+        qb_phase1_only=True,  # Only apply QB adjustment in Phase 1 (weeks 1-3)
     )
 
     predictions_df = results["predictions"]

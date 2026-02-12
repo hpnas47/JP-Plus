@@ -76,9 +76,9 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 
 | Metric | Without QB | With QB Phase1-only | Improvement |
 |--------|------------|---------------------|-------------|
-| Phase 1 5+ Edge (Close) | 50.2% | 50.8% | **+0.6%** |
-| Phase 1 MAE | 15.33 | 15.31 | -0.02 |
-| Core 5+ Edge | 54.5% | 54.5% | unchanged |
+| Phase 1 5+ Edge (Close) | 50.2% | 50.5% | **+0.3%** |
+| Phase 1 MAE | 15.33 | 14.00 | -1.33 |
+| Core 5+ Edge | 54.7% | 54.7% | unchanged |
 
 ### Fixed vs LSA: Two Approaches to Situational Adjustments
 
@@ -161,28 +161,28 @@ Before diving into the numbers, here's what each metric means:
 
 Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data available at prediction time — no future leakage.
 
-*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-11.*
+*All metrics from walk-forward backtest, 2022–2025. Verified 2026-02-12.*
 
 #### Performance by Season Phase
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|----------------|-----------------|----------------|
-| Calibration | 1–3 | 960 | 15.33 | 18.75 | 48.8% | 48.4% | 48.8% (339-355) | 49.8% (343-346) | 50.2% (269-267) | 50.9% (275-265) |
-| **Core** | **4–15** | **2,489** | **12.53** | **15.87** | **51.7%** | **53.0%** | **53.4%** (744-650) | **55.6%** (795-634) | **54.5%** (463-386) | **57.0%** (514-387) |
-| Postseason | 16+ | 176 | 13.38 | 16.82 | 48.0% | 50.0% | 47.2% (51-57) | 47.1% (48-54) | 47.3% (35-39) | 49.3% (37-38) |
-| **Full** | **All** | **3,657** | **13.32** | **16.93** | **50.7%** | **51.6%** | **51.6%** (1134-1062) | **53.4%** (1187-1034) | **52.6%** (767-692) | **54.5%** (826-690) |
+| Calibration | 1–3 | 960 | 14.00 | — | 48.6% | 47.5% | 48.9% (301-315) | 49.4% (300-307) | 50.5% (223-219) | 50.6% (226-221) |
+| **Core** | **4–15** | **2,485** | **12.51** | **15.87** | **51.7%** | **53.0%** | **53.4%** (746-650) | **55.6%** (796-636) | **54.7%** (463-383) | **57.2%** (515-386) |
+| Postseason | 16+ | 176 | 13.38 | — | 48.0% | 49.4% | 47.2% (51-57) | 47.6% (49-54) | 47.3% (35-39) | 48.7% (37-39) |
+| **Full** | **All** | **3,657** | **12.92** | **16.33** | **50.7%** | **51.4%** | **51.8%** (1098-1022) | **53.5%** (1145-997) | **52.9%** (721-641) | **54.6%** (778-646) |
 
 **The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
 
-#### Core Season ATS by Edge (Weeks 4–15, 2,489 games)
+#### Core Season ATS by Edge (Weeks 4–15, 2,485 games)
 
 | Edge | vs Closing Line | vs Opening Line |
 |------|-----------------|-----------------|
 | All picks | 1,259-1,178 (51.7%) | 1,299-1,151 (53.0%) |
-| 3+ pts | 744-650 (53.4%) | 795-634 (55.6%) |
-| **5+ pts** | **463-386 (54.5%)** | **514-387 (57.0%)** |
+| 3+ pts | 746-650 (53.4%) | 796-636 (55.6%) |
+| **5+ pts** | **463-383 (54.7%)** | **515-386 (57.2%)** |
 
-*Games: 1,394 at 3+ edge, 849 at 5+ edge.*
+*Games: 1,396 at 3+ edge, 846 at 5+ edge.*
 
 **Key insight:** 5+ point edge is the model's highest-conviction signal. At 54.5% vs closing lines and 57.0% vs opening lines, these are solidly profitable at standard -110 odds (breakeven = 52.4%).
 
@@ -190,35 +190,35 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 
 | Year | Phase | Games | ATS % | 3+ Edge | 5+ Edge |
 |------|-------|-------|-------|---------|---------|
-| 2022 | Core (4-15) | 605 | 53.2% | 188-172 (52.2%) | 117-105 (52.7%) |
-| 2023 | Core (4-15) | 611 | 52.5% | 203-165 (55.2%) | 124-101 (55.1%) |
-| 2024 | Core (4-15) | 631 | 50.4% | 193-167 (53.6%) | 124-101 (55.1%) |
-| 2025 | Core (4-15) | 638 | 52.7% | 180-146 (55.2%) | 108-84 (56.2%) |
+| 2022 | Core (4-15) | 605 | 52.5% | 188-167 (53.0%) | 115-100 (53.5%) |
+| 2023 | Core (4-15) | 611 | 52.5% | 195-162 (54.6%) | 122-98 (55.5%) |
+| 2024 | Core (4-15) | 631 | 49.9% | 186-171 (52.1%) | 126-99 (56.0%) |
+| 2025 | Core (4-15) | 638 | 51.9% | 177-150 (54.1%) | 100-86 (53.8%) |
 
-**Notes:** 2024 was the weakest overall ATS year, but the Core 5+ edge still hit 55.1%. The model's edge concentrates in high-conviction plays regardless of year.
+**Notes:** 2024 had the weakest overall ATS year (49.9%), but the Core 5+ edge still hit 56.0%. The model's edge concentrates in high-conviction plays regardless of year.
 
 ### ATS by Season and Phase (vs Opening Line)
 
 | Year | Phase | Games | ATS % | 3+ Edge | 5+ Edge |
 |------|-------|-------|-------|---------|---------|
-| 2022 | Core (4-15) | 605 | 52.6% | 192-160 (54.5%) | 118-100 (54.1%) |
-| 2023 | Core (4-15) | 611 | 54.8% | 202-158 (56.1%) | 132-97 (57.6%) |
-| 2024 | Core (4-15) | 631 | 52.0% | 200-173 (53.6%) | 144-101 (58.8%) |
-| 2025 | Core (4-15) | 638 | 53.7% | 197-151 (56.6%) | 115-84 (57.8%) |
+| 2022 | Core (4-15) | 606 | 52.6% | 197-154 (56.1%) | 116-97 (54.5%) |
+| 2023 | Core (4-15) | 614 | 54.8% | 197-155 (56.0%) | 138-96 (59.0%) |
+| 2024 | Core (4-15) | 631 | 52.0% | 210-174 (54.7%) | 148-104 (58.7%) |
+| 2025 | Core (4-15) | 638 | 53.7% | 192-153 (55.7%) | 113-89 (55.9%) |
 
 Opening line performance significantly exceeds closing line, indicating the model captures value that the market prices out by game time.
 
 ### MAE & RMSE by Season
 
-| Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | RMSE (Core) | MAE (Cal) | MAE (Post) |
-|------|-------------|------------|-------------|------------|-------------|-----------|------------|
-| 2022 | 802 | 13.28 | 16.95 | 12.72 | 16.24 | 15.63 | 12.90 |
-| 2023 | 816 | 13.04 | 16.49 | 12.42 | 15.75 | 14.60 | 16.11 |
-| 2024 | 818 | 13.13 | 16.39 | 12.68 | 15.76 | 15.48 | 12.09 |
-| 2025 | 837 | 12.45 | 15.90 | 12.19 | 15.55 | 13.42 | 12.72 |
-| **All** | **3,273** | **12.97** | **16.43** | **12.50** | **15.82** | **14.77** | **13.41** |
+| Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | MAE (Cal) | MAE (Post) |
+|------|-------------|------------|-------------|------------|-----------|------------|
+| 2022 | 896 | 13.27 | 16.82 | 12.67 | 14.96 | 12.86 |
+| 2023 | 910 | 12.80 | 16.23 | 12.48 | 13.06 | 16.10 |
+| 2024 | 918 | 13.12 | 16.38 | 12.66 | 14.97 | 12.04 |
+| 2025 | 933 | 12.50 | 15.86 | 12.25 | 13.09 | 12.71 |
+| **All** | **3,657** | **12.92** | **16.33** | **12.51** | **14.00** | **13.38** |
 
-2025 was JP+'s best year by MAE (12.19 Core), improving from 12.72 in 2022. The trend reflects more seasons of data improving prior calibration.
+2025 was JP+'s best year by MAE (12.25 Core), improving from 12.67 in 2022. The trend reflects more seasons of data improving prior calibration.
 
 ### Closing Line Value (CLV)
 
@@ -228,18 +228,18 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 | Edge Filter | N | Mean CLV (vs Close) | CLV > 0 | ATS % (Close) |
 |-------------|---|-------------------|---------|---------------|
-| All picks | 3,621 | -0.29 | 28.6% | 50.7% |
-| 3+ pt edge | 2,233 | -0.41 | 26.0% | 51.6% |
-| 5+ pt edge | 1,486 | -0.43 | 25.0% | 52.6% |
-| 7+ pt edge | 920 | -0.46 | 22.5% | 51.6% |
+| All picks | 3,540 | -0.31 | 28.5% | 50.8% |
+| 3+ pt edge | 2,156 | -0.44 | 25.8% | 51.8% |
+| 5+ pt edge | 1,389 | -0.50 | 24.8% | 52.9% |
+| 7+ pt edge | 834 | -0.56 | 21.9% | 52.0% |
 
-#### Core Season (Weeks 4-15, 2,489 games)
+#### Core Season (Weeks 4-15, 2,485 games)
 
 | Edge Filter | N | Mean CLV | CLV > 0 | ATS % (Close) |
 |-------------|---|----------|---------|---------------|
-| All picks | 2,489 | -0.31 | 30.8% | 51.7% |
-| 3+ pt edge | 1,394 | -0.47 | 28.2% | 53.4% |
-| **5+ pt edge** | **849** | **-0.51** | **27.3%** | **54.5%** |
+| All picks | 2,485 | -0.31 | 30.8% | 51.7% |
+| 3+ pt edge | 1,396 | -0.47 | 28.2% | 53.4% |
+| **5+ pt edge** | **846** | **-0.51** | **27.3%** | **54.7%** |
 | 7+ pt edge | 504 | -0.58 | 24.8% | 54.7% |
 
 **Interpretation:** CLV vs closing is slightly negative, indicating the market does not consistently move toward our predictions. However, the model still generates strong ATS performance — JP+ finds value in spots the market doesn't fully adjust for even by closing. The negative CLV with positive ATS suggests the model exploits structural inefficiencies (public bias, schedule spots) rather than information the sharps eventually price in.
@@ -248,12 +248,12 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 | Edge Filter | N | Mean CLV (Open→Close) | CLV > 0 | ATS % (Open) |
 |-------------|---|----------------------|---------|--------------|
-| All picks | 3,621 | +0.43 | 38.6% | 51.6% |
-| 3+ pt edge | 2,237 | +0.60 | 39.5% | 53.4% |
-| **5+ pt edge** | **1,528** | **+0.73** | **40.7%** | **54.5%** |
-| 7+ pt edge | 955 | +0.88 | 39.5% | 54.5% |
+| All picks | 3,540 | +0.41 | 38.4% | 51.6% |
+| 3+ pt edge | 2,162 | +0.62 | 40.1% | 53.5% |
+| **5+ pt edge** | **1,436** | **+0.74** | **41.3%** | **54.6%** |
+| 7+ pt edge | 866 | +0.96 | 41.0% | 54.9% |
 
-When measured against opening lines (the price available when bets are placed), CLV is strongly positive (+0.73 at 5+ edge) and monotonically increasing with edge size — meaning the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
+When measured against opening lines (the price available when bets are placed), CLV is strongly positive (+0.74 at 5+ edge) and monotonically increasing with edge size — meaning the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
 
 ### Reality Check
 
@@ -271,18 +271,18 @@ Vegas lines are set by professionals with decades of experience and access to in
 
 ## 2025 Season Performance
 
-JP+'s most recent season — best Core MAE (12.19) and strongest 5+ Edge performance across all years.
+JP+'s most recent season — best Core MAE (12.25) and solid 5+ Edge performance.
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1-3 | 153 | 13.42 | 17.33 | 50.7% | 50.7% | 54-51 (51.4%) | 37-34 (52.1%) | 37-32 (53.6%) |
-| **Core** | **4-15** | **638** | **12.19** | **15.55** | **52.7%** | **54.1%** | **180-146 (55.2%)** | **108-84 (56.2%)** | **118-84 (58.4%)** |
-| Postseason | 16+ | 46 | 12.72 | 15.66 | 43.5% | 43.5% | 11-15 (42.3%) | 8-9 (47.1%) | 8-7 (53.3%) |
-| **Full Season** | **All** | **837** | **12.45** | **15.90** | **51.8%** | **52.9%** | **245-212 (53.6%)** | **153-127 (54.6%)** | **163-123 (57.0%)** |
+| Calibration | 1-3 | 244 | 13.09 | — | 51.2% | 49.6% | 86-66 (56.6%) | 67-47 (58.8%) | 65-49 (57.0%) |
+| **Core** | **4-15** | **638** | **12.25** | **—** | **51.9%** | **52.5%** | **177-150 (54.1%)** | **100-86 (53.8%)** | **113-89 (55.9%)** |
+| Postseason | 16+ | 46 | 12.71 | — | 43.5% | 43.5% | 12-15 (44.4%) | 8-8 (50.0%) | 8-6 (57.1%) |
+| **Full Season** | **All** | **933** | **12.50** | **15.86** | **50.8%** | **51.0%** | **275-231 (54.4%)** | **175-141 (55.4%)** | **186-144 (56.4%)** |
 
 **2025 highlights:**
-- Core 5+ Edge at 56.2% (Close) and 58.4% (Open) — strongest single-season performance
-- Full-season 5+ Edge profitable at 54.6% (Close) even including weak Calibration/Postseason phases
+- Calibration phase shows strongest 5+ Edge (58.8% Close, 57.0% Open) — QB Continuous helping early-season predictions
+- Core 5+ Edge solid at 53.8% (Close) and 55.9% (Open)
 - Postseason weakness persists (43.5% ATS) — bowl opt-outs and motivation remain unmodeled
 
 ---

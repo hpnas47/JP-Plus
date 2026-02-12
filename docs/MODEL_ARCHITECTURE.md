@@ -30,10 +30,10 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,657 gam
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1-3 | 992 | 14.62 | 18.40 | 49.5% | 48.4% | 48.7% | 49.4% | 50.2% |
-| **Core** | **4-15** | **2,489** | **12.51** | **15.85** | **51.7%** | **53.1%** | **53.6%** | **55.0%** | **57.4%** |
-| Postseason | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% | 47.2% | 47.3% | 49.3% |
-| **Full Season** | All | 3,657 | 13.13 | 16.63 | 51.0% | 51.7% | 51.8% | 52.6% | 54.5% |
+| Calibration | 1-3 | 992 | 13.96 | 17.57 | 48.6% | 47.5% | 48.9% | 50.5% | 50.6% |
+| **Core** | **4-15** | **2,489** | **12.51** | **15.81** | **51.7%** | **53.0%** | **53.4%** | **54.7%** | **57.2%** |
+| Postseason | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% | 47.2% | 47.3% | 48.7% |
+| **Full Season** | All | 3,657 | 12.92 | 16.33 | 50.7% | 51.4% | 51.8% | 52.9% | 54.6% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates
@@ -48,9 +48,9 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
-| **All picks** | 1261-1176 (51.7%) | 1301-1149 (53.1%) |
-| **3+ pt edge** | 751-649 (53.6%) | 803-634 (55.9%) |
-| **5+ pt edge** | 470-385 (55.0%) | 521-386 (57.4%) |
+| **All picks** | 1260-1177 (51.7%) | 1299-1151 (53.0%) |
+| **3+ pt edge** | 746-650 (53.4%) | 796-636 (55.6%) |
+| **5+ pt edge** | 463-383 (54.7%) | 515-386 (57.2%) |
 
 Opening line performance exceeds closing line by ~2-3%, indicating the model captures value that the market prices out by game time. LSA (Learned Situational Adjustment) can further improve 5+ Edge vs closing.
 
