@@ -54,18 +54,18 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-11)
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-12)
 
 **With QB Continuous Phase1-only mode enabled** (`--qb-continuous --qb-scale 5.0 --qb-phase1-only`)
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.32 | 16.93 | 50.7% | 51.6% |
-| Phase 1 (Calibration) | 1–3 | 992 | 15.30 | — | 48.8% | 48.4% |
-| **Phase 2 (Core)** | **4–15** | **2,489** | **12.53** | **15.87** | **51.7%** | **53.0%** |
+| **Full (`--start-week 1`)** | 1–Post | 3,657 | 13.13 | 16.63 | 51.0% | 51.7% |
+| Phase 1 (Calibration) | 1–3 | 992 | 14.62 | — | 49.5% | 48.4% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.51** | **15.85** | **51.7%** | **53.1%** |
 | Phase 3 (Postseason) | 16+ | 176 | 13.38 | — | 48.0% | 49.4% |
-| 3+ Edge (Core) | 4–15 | 1,421 | — | — | 53.4% (744-650) | 55.6% (795-634) |
-| 5+ Edge (Core) | 4–15 | 869 | — | — | 54.5% (463-386) | 57.0% (514-387) |
+| 3+ Edge (Core) | 4–15 | 1,427 | — | — | 53.6% (751-649) | 55.9% (803-634) |
+| 5+ Edge (Core) | 4–15 | 875 | — | — | 55.0% (470-385) | 57.4% (521-386) |
 
 **Phase 1 Improvement with QB Continuous:**
 | Metric | Without QB | With QB Phase1-only | Delta |
@@ -166,7 +166,7 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
 ## 📊 Quant Auditor (The Analyst)
 - **Role:** Weight optimization, MAE/ATS validation, and **redundancy detection**.
 - **Success Metrics (Core Phase, Weeks 4–15, 2,485 games):**
-    - **MAE Baseline:** 12.53 (Strict Tolerance: +0.02).
+    - **MAE Baseline:** 12.51 (Strict Tolerance: +0.02).
     - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 54.0%.
 - **Redundancy Protocol:** For any new signal, you must report the **Correlation Coefficient** against existing PPA/IsoPPP metrics.
 - **Validation Slices (Mandatory):**
@@ -174,4 +174,4 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
 
-<!-- Last validated: 2026-02-11 by generate_docs.py -->
+<!-- Last validated: 2026-02-12 by generate_docs.py -->
