@@ -235,7 +235,6 @@ class PreseasonPriors:
         prior_year_weight: float = 0.6,
         talent_weight: float = 0.4,
         regression_factor: float = 0.3,
-        use_churn_penalty: bool = False,
         use_talent_decay: bool = True,
     ) -> None:
         """Initialize preseason priors calculator.
@@ -245,7 +244,6 @@ class PreseasonPriors:
             prior_year_weight: Weight for previous year's rating (0-1)
             talent_weight: Weight for talent composite (0-1)
             regression_factor: How much to regress prior ratings toward mean (0-1)
-            use_churn_penalty: If True, apply roster churn penalty to portal impact (default False)
             use_talent_decay: If True, decay talent_floor_weight from 0.08→0.03 over weeks 0-10.
                 If False, use static talent_floor_weight all season (legacy behavior).
         """
@@ -253,7 +251,6 @@ class PreseasonPriors:
         self.prior_year_weight = prior_year_weight
         self.talent_weight = talent_weight
         self.regression_factor = regression_factor
-        self.use_churn_penalty = use_churn_penalty
         self.use_talent_decay = use_talent_decay
 
         self.preseason_ratings: dict[str, PreseasonRating] = {}
@@ -675,74 +672,6 @@ class PreseasonPriors:
 
         return pos_weight * quality_factor * level_discount
 
-    def calculate_roster_churn_penalty(
-        self,
-        returning_production_pct: float,
-        portal_additions: int,
-        roster_size: int = 85,
-    ) -> float:
-        """Calculate roster churn penalty coefficient for portal impact.
-
-        TALENT MIRAGE HYPOTHESIS: Portal-heavy teams with low returning production
-        are systematically overvalued because we treat incoming transfers too generously.
-        The "talent mirage" occurs when a team replaces experienced players with
-        highly-rated transfers who may not gel immediately due to:
-        - Scheme learning curve
-        - Team chemistry/cohesion gaps
-        - Leadership vacuum from lost incumbents
-
-        This penalty dampens the portal impact for high-churn rosters.
-
-        Args:
-            returning_production_pct: Percentage of prior-year production returning (0-1)
-            portal_additions: Number of incoming portal transfers
-            roster_size: Total roster spots (default 85)
-
-        Returns:
-            Penalty coefficient (0.0 to 1.0):
-            - 1.0 = no penalty (high continuity: >60% returning, <15 portal adds)
-            - 0.7 = heavy penalty (high churn: <40% returning, >25 portal adds)
-            - Values interpolated smoothly between these bounds
-
-        Examples:
-            - Team with 70% returning, 10 portal adds → ~1.0 (no penalty)
-            - Team with 50% returning, 20 portal adds → ~0.85 (mild penalty)
-            - Team with 30% returning, 30 portal adds → ~0.70 (heavy penalty)
-        """
-        # Clamp inputs to valid ranges
-        ret_pct = max(0.0, min(1.0, returning_production_pct))
-        portal_pct = portal_additions / roster_size
-
-        # Define continuity score: higher = more stable roster
-        # Weight returning production heavily (70%) since it captures actual PPA returning
-        # Weight portal churn moderately (30%) since some churn is normal/healthy
-        continuity_score = 0.7 * ret_pct + 0.3 * (1.0 - portal_pct)
-
-        # Map continuity score to penalty coefficient using sigmoid curve
-        # This creates smooth transitions rather than harsh thresholds
-        #
-        # Reference points:
-        # - continuity = 0.75 (60% ret + 15 portal) → penalty ~1.0 (no penalty)
-        # - continuity = 0.50 (typical churn) → penalty ~0.85
-        # - continuity = 0.35 (40% ret + 25 portal) → penalty ~0.75
-        # - continuity = 0.25 (heavy churn) → penalty ~0.70
-
-        # Sigmoid formula: penalty = min_penalty + (1 - min_penalty) / (1 + exp(-k * (x - midpoint)))
-        # Parameters tuned to match reference points above
-        min_penalty = 0.70  # Floor at 70% of portal impact (never fully discount)
-        midpoint = 0.50     # Continuity score at which penalty = ~0.85
-        steepness = 8.0     # Controls curve steepness (higher = sharper transition)
-
-        # Calculate sigmoid
-        sigmoid_input = steepness * (continuity_score - midpoint)
-        # Clamp to prevent overflow in exp
-        sigmoid_input = max(-20, min(20, sigmoid_input))
-        sigmoid = 1.0 / (1.0 + np.exp(-sigmoid_input))
-
-        penalty_coefficient = min_penalty + (1.0 - min_penalty) * sigmoid
-
-        return float(penalty_coefficient)
-
     def fetch_fbs_teams(self, year: int) -> set[str]:
         """Fetch the set of FBS team names for a given year.
 
@@ -799,7 +728,6 @@ class PreseasonPriors:
         portal_scale: float = 0.15,
         fbs_only: bool = True,
         impact_cap: float = 0.12,
-        returning_production: Optional[dict[str, float]] = None,
     ) -> dict[str, float]:
         """Calculate net transfer portal impact for each team using unit-level analysis.
 
@@ -807,18 +735,11 @@ class PreseasonPriors:
         and continuity tax for losing incumbents. Reflects 2026 market reality
         where elite trench play is the primary driver of rating stability.
 
-        If use_churn_penalty is enabled, applies roster churn penalty to dampen
-        portal impact for high-turnover teams (Talent Mirage hypothesis).
-
         Args:
             year: Season year (fetches transfers FOR this year)
             portal_scale: How much to scale portal impact (default 0.15, matches production caller)
             fbs_only: If True, only include FBS teams in results (default True)
-            impact_cap: Pre-penalty cap on portal impact (default ±12%). The effective
-                cap for high-churn teams is impact_cap * churn_penalty (e.g., 8.4% if
-                churn_penalty=0.7). This is intentional: high-turnover teams face
-                integration risk that should limit their portal upside.
-            returning_production: Optional dict of returning production pct per team (for churn penalty)
+            impact_cap: Cap on portal impact (default ±12%)
 
         Returns:
             Dictionary mapping team name to adjusted returning production modifier
@@ -986,9 +907,6 @@ class PreseasonPriors:
         incoming_df = transfers_df[transfers_df['destination'].notna()]
         incoming = incoming_df.groupby('destination')['incoming_value'].sum()
 
-        # Count portal additions per team (for churn penalty)
-        portal_additions_count = incoming_df.groupby('destination').size()
-
         # Log coverage and level-up stats
         has_dest = len(incoming_df)
         logger.info(
@@ -1015,49 +933,17 @@ class PreseasonPriors:
             all_teams = [t for t in all_teams if t in fbs_teams]
 
         portal_impact = {}
-        churn_penalties_applied = []  # Track for logging
 
         for team in all_teams:
             out_val = outgoing.get(team, 0.0)
             in_val = incoming.get(team, 0.0)
             net_val = in_val - out_val
 
-            # Apply roster churn penalty if enabled
-            churn_penalty = 1.0  # Default: no penalty
-            if self.use_churn_penalty and net_val > 0 and returning_production:
-                # Only penalize positive portal impact (gains, not losses)
-                # Rationale: Losses already hurt via continuity tax; no need to double-penalize
-                portal_adds = portal_additions_count.get(team, 0)
-                ret_pct = returning_production.get(team, 0.5)  # Default to average if missing
-
-                churn_penalty = self.calculate_roster_churn_penalty(
-                    returning_production_pct=ret_pct,
-                    portal_additions=portal_adds,
-                )
-
-                # Log significant penalties (penalty < 0.95 = >5% reduction)
-                if churn_penalty < 0.95:
-                    churn_penalties_applied.append((team, ret_pct, portal_adds, churn_penalty))
-
-            # Scale the impact, cap to ±12%, THEN apply churn penalty.
-            # Order is intentional: cap THEN penalty means high-churn teams have
-            # a LOWER effective ceiling (e.g., 12% * 0.7 = 8.4%). This reflects
-            # integration risk — a team that churned 50% of their roster shouldn't
-            # be able to claim +12% portal uplift regardless of incoming talent.
+            # Scale the impact and cap to ±12%
             scaled_impact = net_val * portal_scale
             scaled_impact = max(-impact_cap, min(impact_cap, scaled_impact))
-            scaled_impact *= churn_penalty
 
             portal_impact[team] = scaled_impact
-
-        # Log churn penalties if applied
-        if churn_penalties_applied:
-            logger.info(f"Applied roster churn penalty to {len(churn_penalties_applied)} teams")
-            logger.debug("Teams with significant churn penalties (>5% reduction):")
-            for team, ret_pct, adds, penalty in sorted(churn_penalties_applied, key=lambda x: x[3]):
-                logger.debug(
-                    f"  {team}: penalty={penalty:.2f} (ret={ret_pct:.1%}, portal_adds={adds})"
-                )
 
         # Log top winners/losers (P3.9: debug level for quiet runs)
         sorted_impact = sorted(portal_impact.items(), key=lambda x: (-x[1], x[0]))
@@ -1385,7 +1271,6 @@ class PreseasonPriors:
             portal_impact = self.calculate_portal_impact(
                 year,
                 portal_scale=portal_scale,
-                returning_production=returning_prod,  # Pass for churn penalty calculation
             )
 
         # P0.2: Validate data quality and rank direction
