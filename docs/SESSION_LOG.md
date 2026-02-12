@@ -93,6 +93,47 @@ Baseline -28 kept — Core performance essentially identical, and it's the docum
 
 ---
 
+#### Totals Backtest Cleanup — APPROVED
+**Status**: Committed (earlier today)
+**Files**: `scripts/backtest_totals.py`, `src/models/totals_model.py`
+
+Removed redundant pre-filtering and added data leakage guards:
+
+**Changes**:
+1. Removed pre-filtering of weeks < start_week in game list (walk-forward already handles)
+2. Added `_last_train_max_week` tracking in TotalsModel
+3. Added explicit leakage guard assertion: `model._last_train_max_week > pred_week - 1` raises ValueError
+
+Pattern matches leakage guards used in main backtest.py.
+
+---
+
+#### QB Calibration Walk-Forward Fix — APPROVED
+**Status**: Committed (`b5b5a44`)
+**Files**: `src/adjustments/qb_continuous.py`, `scripts/qb_calibration.py`
+
+Fixed walk-forward semantics in QB calibration:
+
+**Bug 2 (CRITICAL)**: Week 1 predictions used `through_week=1` (data leakage). Fixed by adding `through_week=0` handling that loads prior season only.
+
+**Bug 3 (MINOR)**: Added small denominator guard for recommended scale calculation (`p90_shrunk > 0.01`).
+
+**Bug 4 (MINOR)**: Replaced bare `except: pass` with proper failure logging.
+
+**Before/After Comparison (2024 data)**:
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| Row count | 2010 | 2010 | 0 |
+| Weeks 1-3 N | 401 | 401 | 0 |
+| Weeks 1-3 mean | 0.076337 | 0.076337 | 0 |
+| Recommended QB_SCALE | 9.25 | 9.25 | 0 |
+
+Output identical because prior season loading already occurred correctly — fix is about semantic correctness and edge case safety.
+
+**Production code unchanged**: `get_adjustment()` not modified.
+
+---
+
 ## Session: February 11, 2026 (Evening)
 
 ### Theme: API Caching Optimization
