@@ -4,6 +4,56 @@
 
 ---
 
+## Session: February 11, 2026 (Night)
+
+### Theme: QB Misattribution Analysis
+
+---
+
+#### QB Misattribution Fix — Phased Analysis — NO IMPACT
+**Status**: Tested, infrastructure added but no performance impact
+**Files**: `src/adjustments/qb_continuous.py`, `scripts/backtest.py`, `data/outputs/qb_phase_*.md`
+
+Investigated and fixed the QB misattribution problem: at Week 1, the system was using departed QB's PPA data for teams with new starters. 89 of 136 FBS teams had wrong QB data applied at Week 1.
+
+**Phased Approach:**
+- **Phase A**: Zero out ALL Week 1 QB adjustments (can't verify who's starting)
+- **Phase B**: Measure gap between matched (returning starter) vs unmatched (newcomer) teams
+- **Phase C**: Implement informed prior for newcomers (conditional on Phase B)
+
+**Implementation:**
+Added `fix_misattribution` parameter to `QBContinuousAdjuster` and `--qb-fix-misattribution` CLI flag. When enabled, zeros out Week 1 adjustments for any team without verified current-season dropbacks.
+
+**Phase A Results (2022-2025, Week 1 only):**
+| Metric | Original | Phase A | Delta |
+|--------|----------|---------|-------|
+| MAE | 15.39 pts | 15.39 pts | 0.00 |
+| 5+ Edge | 50.0% (100-100) | 50.0% (100-100) | 0.0% |
+| 3+ Edge | 49.2% (127-131) | 49.2% (127-131) | 0.0% |
+
+**Phase B Gap Analysis:**
+Gap between matched and unmatched teams: **0.0 points** (no measurable difference)
+
+**Phase C: SKIPPED** — Gap < 1.0 pts threshold
+
+**Root Cause — Why No Impact:**
+Week 1 QB adjustments are too small to matter:
+| Factor | Effect | Result |
+|--------|--------|--------|
+| Prior decay (0.3) | 469 dropbacks → 141 effective | 70% signal loss |
+| Shrinkage (K=200) | 141 effective → 43% weight | Max ~0.7 pts adjustment |
+| Typical case | 300 dropbacks | ~0.4 pts adjustment |
+
+These sub-1-point adjustments are overwhelmed by EFM ratings (±30 pts range), preseason priors, and HFA (2.5-3.5 pts).
+
+**Key Insight:**
+The QB Continuous system's value comes from **Weeks 2-3** (when actual 2025 game data exists), not from Week 1 prior-based estimates. The prior-based Week 1 adjustments are too heavily shrunk to provide meaningful signal.
+
+**Recommendation:**
+Enable `--qb-fix-misattribution` as default (conceptually correct, zero downside). But no performance gain expected.
+
+---
+
 ## Session: February 11, 2026 (Evening)
 
 ### Theme: QB Continuous Rating System
