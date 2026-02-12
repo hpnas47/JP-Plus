@@ -54,6 +54,46 @@ Enable `--qb-fix-misattribution` as default (conceptually correct, zero downside
 
 ---
 
+#### Blended Priors (SP+ + JP+ Own-Prior) — ATS Validation — REJECTED
+**Status**: Tested, infrastructure complete but ATS degradation
+**Files**: `src/models/blended_priors.py`, `src/models/own_priors.py`, `scripts/backtest.py` (--blended-priors flag), `data/outputs/blended_prior_summary.md`
+
+Validated the blended prior system (combining SP+ and JP+ own-priors with week-dependent weights) against the SP+-only baseline for ATS performance.
+
+**Blended Schedule Tested (from tuning):**
+| Week | SP+ Weight | Own Weight |
+|------|------------|------------|
+| 1 | 0% | 100% |
+| 2 | 40% | 60% |
+| 3 | 0% | 100% |
+| 4+ | 80% | 20% |
+
+**Results (Weeks 1-3, 2022-2025):**
+| Metric | SP+-Only | Blended | Delta |
+|--------|----------|---------|-------|
+| MAE | 15.30 | 14.94 | **-0.36** ✓ |
+| Mean Error (bias) | +3.33 | +2.63 | **-0.70** ✓ |
+| 5+ Edge | **50.8%** (270-262) | 49.7% (274-277) | **-1.1%** ✗ |
+| 3+ Edge | 48.9% (340-355) | 49.0% (341-355) | +0.1% ≈ |
+
+**Why It Failed:**
+Classic 3+/5+ divergence pattern. Blended priors improved MAE by 0.36 pts and reduced bias, but degraded 5+ Edge by 1.1%. The tuning was optimized for spread MAE, not ATS performance.
+
+**Key Insight:**
+The disagreement analysis showed own-prior converges to actual 62% of time vs 33% for SP+. But convergence to "correct" end-of-season rating ≠ betting edge. The market may already price the same convergence pattern. MAE improvement without ATS improvement = no edge.
+
+**Infrastructure Preserved:**
+- `--blended-priors` CLI flag in backtest.py
+- `BlendedPriorGenerator` class with `BlendSchedule` dataclass
+- `OwnPriorGenerator` class with fitted parameters
+- `data/historical_jp_ratings.json` (2021-2025 JP+ ratings)
+- Full disagreement analysis in `data/outputs/`
+
+**Recommendation:**
+Keep SP+-only priors as default. Blended system may be revisited if tuning is redone with ATS as objective function rather than MAE.
+
+---
+
 ## Session: February 11, 2026 (Evening)
 
 ### Theme: QB Continuous Rating System
