@@ -2108,11 +2108,11 @@ def print_phase_report(ats_df: pd.DataFrame, predictions_df: pd.DataFrame = None
     print("\n### Phase-by-Phase Performance\n")
 
     # Format and print table
-    display_cols = ["Phase", "Weeks", "Games", "MAE", "MAE vs Close", "ATS %", "3+ Edge", "5+ Edge", "Mean CLV"]
+    display_cols = ["Phase", "Weeks", "Games", "MAE", "RMSE", "MAE vs Close", "ATS %", "3+ Edge", "5+ Edge", "Mean CLV"]
     available_cols = [c for c in display_cols if c in phase_metrics.columns]
 
     # Format numeric columns
-    for col in ["MAE", "MAE vs Close", "ATS %", "Mean CLV"]:
+    for col in ["MAE", "RMSE", "MAE vs Close", "ATS %", "Mean CLV"]:
         if col in phase_metrics.columns:
             phase_metrics[col] = phase_metrics[col].apply(
                 lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"

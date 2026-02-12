@@ -302,6 +302,7 @@ def build_claude_md_table(metrics: dict) -> str:
     # Phase 1
     p1_games = _get(metrics, "phase1", "games")
     p1_mae = _fmt_num(_get(metrics, "phase1", "mae"))
+    p1_rmse = _fmt_num(_get(metrics, "phase1", "rmse"))
     p1_ats_close = _fmt_pct(_get(metrics, "phase1_ats_close", "pct"))
     p1_ats_open = _fmt_pct(_get(metrics, "phase1_ats_open", "pct"))
 
@@ -315,6 +316,7 @@ def build_claude_md_table(metrics: dict) -> str:
     # Phase 3
     p3_games = _get(metrics, "phase3", "games")
     p3_mae = _fmt_num(_get(metrics, "phase3", "mae"))
+    p3_rmse = _fmt_num(_get(metrics, "phase3", "rmse"))
     p3_ats_close = _fmt_pct(_get(metrics, "phase3_ats_close", "pct"))
     p3_ats_open = _fmt_pct(_get(metrics, "phase3_ats_open", "pct"))
 
@@ -353,9 +355,9 @@ def build_claude_md_table(metrics: dict) -> str:
         "| Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |",
         "|-------|-------|-------|-----|------|-------------|------------|",
         f"| **Full (`--start-week 1`)** | 1–Post | {full_games:,} | {full_mae} | {full_rmse} | {full_ats_close_pct} | {full_ats_open_pct} |",
-        f"| Phase 1 (Calibration) | 1–3 | {p1_games:,} | {p1_mae} | — | {p1_ats_close} | {p1_ats_open} |",
+        f"| Phase 1 (Calibration) | 1–3 | {p1_games:,} | {p1_mae} | {p1_rmse} | {p1_ats_close} | {p1_ats_open} |",
         f"| **Phase 2 (Core)** | **4–15** | **{p2_games:,}** | **{p2_mae}** | **{p2_rmse}** | **{p2_ats_close}** | **{p2_ats_open}** |",
-        f"| Phase 3 (Postseason) | 16+ | {p3_games:,} | {p3_mae} | — | {p3_ats_close} | {p3_ats_open} |",
+        f"| Phase 3 (Postseason) | 16+ | {p3_games:,} | {p3_mae} | {p3_rmse} | {p3_ats_close} | {p3_ats_open} |",
         f"| 3+ Edge (Core) | 4–15 | {e3_close.get('games', '--'):,} | — | — | {e3_close_str} | {e3_open_str} |",
         f"| 5+ Edge (Core) | 4–15 | {e5_close.get('games', '--'):,} | — | — | {e5_close_str} | {e5_open_str} |",
     ]
