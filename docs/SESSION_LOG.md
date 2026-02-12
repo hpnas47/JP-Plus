@@ -4,6 +4,105 @@
 
 ---
 
+## Session: February 11, 2026 (Late Night)
+
+### Theme: G5/Cross-Tier/HFA Investigation — Complete
+
+---
+
+#### G5 Conference Island Diagnostics — NO ACTION NEEDED
+**Status**: Investigated, no bias found
+**Files**: `scripts/diagnose_g5_islands.py`, `data/outputs/g5_diagnostics/PHASE_A_SUMMARY.md`
+
+Investigated whether G5 conferences are "isolated islands" causing rating inflation.
+
+**Key Findings:**
+- Overall G5 vs P4 ME: -2.15 pts (over-predict P4)
+- **Weeks 1-3**: ME = -3.16 (bias present)
+- **Weeks 4+**: ME = -0.28 (bias nearly gone)
+- Connectivity is similar across all conferences (1.7-2.1 OOC games/team)
+- Sun Belt is only truly problematic conference (47.1% ATS, -3.80 ME)
+
+**Conclusion**: Conference island inflation is NOT real. The existing conference anchor mechanism is working correctly.
+
+---
+
+#### G5 Prior Analysis — BLENDED PRIORS WON'T HELP
+**Status**: Investigated, counterintuitive finding
+**Files**: `scripts/analyze_g5_priors.py`, `data/outputs/g5_prior_analysis.md`
+
+Investigated whether SP+ vs own-prior explains G5 early-season bias.
+
+**Key Findings:**
+| Prior System | Overrates G5 By |
+|--------------|-----------------|
+| SP+ (prior year) | +0.46 pts |
+| Own-Prior (JP+) | +1.29 pts |
+
+**Conclusion**: Own-prior actually overrates G5 MORE than SP+. Blended priors would make G5 bias WORSE, not better.
+
+---
+
+#### Cross-Tier HFA Analysis — REJECTED (Blowout Artifact)
+**Status**: Investigated, robustness check FAILED
+**Files**: `scripts/analyze_cross_tier_hfa.py`, `scripts/cross_tier_hfa_robustness.py`, `data/outputs/cross_tier_hfa_*.md`
+
+Investigated the 7-point ME swing between G5 home vs G5 away in cross-tier games.
+
+**Initial Finding (Full Dataset, N=432):**
+| Scenario | Residual HFA |
+|----------|--------------|
+| P4 Home vs G5 | +7.16 |
+| G5 Home vs P4 | -0.27 |
+
+**Robustness Check — FAILED:**
+| Dataset | P4 Home Residual HFA |
+|---------|---------------------|
+| Full (N=432) | +7.16 |
+| **Excluding 30+ pt margins (N=301)** | **-0.10** |
+
+The +7.16 effect **completely disappears** when excluding blowout games (131 games, 30.3%).
+
+**Conclusion**: Cross-tier HFA asymmetry is a blowout artifact, NOT a venue effect. In competitive games (<30 pt margin), model HFA is well-calibrated. Do NOT implement cross-tier HFA adjustment.
+
+---
+
+#### Blowout Rating Contamination — NO ISSUE
+**Status**: Quick sanity check, no contamination detected
+**Files**: `scripts/blowout_rating_impact.py`, `data/outputs/blowout_rating_impact.md`
+
+Verified that blowout wins don't contaminate team ratings.
+
+**EFM Architecture (Why Blowouts Are Handled):**
+- Regresses on Success Rate (0-1) and IsoPPP (~-0.5 to +1.5), NOT margins
+- Garbage time: trailing team 0.1 weight, leading team 1.0 weight
+- MOV calibration: DISABLED (mov_weight=0.0)
+- Efficiency metrics are inherently bounded
+
+**Rating Trajectory Analysis (3 teams with 3+ blowout G5 wins):**
+| Metric | Value |
+|--------|-------|
+| Mean change after blowout G5 win | **+0.03** |
+| Mean change after P4 game | **+0.36** |
+
+No spike/correction pattern. Ratings are stable.
+
+---
+
+#### Investigation Summary — VALUABLE NEGATIVE RESULTS
+**Commit**: `c2bfec1` — Add G5/cross-tier diagnostic scripts (NEGATIVE RESULTS)
+
+**Final Conclusions:**
+1. Conference island inflation is NOT real — connectivity similar across conferences
+2. Cross-tier HFA asymmetry is a blowout artifact — not a venue effect
+3. Model is well-calibrated for competitive cross-tier games (< 30 pt margin)
+4. Early-season G5 vs P4 ME is mostly a blowout prediction issue — not systematic bias
+5. Blowout wins do NOT contaminate ratings — EFM handles them appropriately
+
+These negative results prevent implementing corrections that would hurt performance.
+
+---
+
 ## Session: February 11, 2026 (Night)
 
 ### Theme: QB Misattribution Analysis
