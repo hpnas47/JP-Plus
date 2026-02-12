@@ -408,20 +408,14 @@ def build_schedule_df(
         DataFrame with full schedule
     """
     all_games = []
-    consecutive_empty = 0
 
-    # Fetch all regular season weeks
+    # Fetch all regular season weeks (always iterate all 15, skip empty weeks)
     for week in range(1, 16):
         try:
             games = client.get_games(year, week)
             if not games:
-                # Empty response = week doesn't exist yet (mid-season)
-                consecutive_empty += 1
-                if consecutive_empty >= 2:
-                    # Two consecutive empty weeks = reached end of scheduled games
-                    break
+                # Empty response = week not scheduled yet (mid-season) or bye week
                 continue
-            consecutive_empty = 0  # Reset on successful fetch
             for game in games:
                 all_games.append({
                     "week": game.week,
@@ -431,8 +425,8 @@ def build_schedule_df(
                     "away_points": game.away_points,
                 })
         except DataNotAvailableError:
-            # Week doesn't exist yet - stop fetching
-            break
+            # Week doesn't exist - continue to next week
+            continue
         except Exception as e:
             # Log transient errors but continue fetching remaining weeks
             # (rate limits, timeouts should not truncate the schedule)
@@ -449,7 +443,7 @@ def build_schedule_df(
 PLAY_COLUMNS = [
     "game_id", "offense", "defense", "down", "distance",
     "yards_gained", "ppa", "play_type", "period",
-    "home_score", "away_score", "yards_to_goal",
+    "offense_score", "defense_score", "yards_to_goal", "home_team",
 ]
 
 # Polars schema for play-by-play data (used for empty DataFrame creation)
@@ -463,9 +457,10 @@ PLAY_SCHEMA = {
     "ppa": pl.Float64,
     "play_type": pl.Utf8,
     "period": pl.Int64,
-    "home_score": pl.Int64,
-    "away_score": pl.Int64,
+    "offense_score": pl.Int64,
+    "defense_score": pl.Int64,
     "yards_to_goal": pl.Float64,
+    "home_team": pl.Utf8,
 }
 
 
@@ -484,9 +479,10 @@ def _fetch_week_plays_from_api(client: CFBDClient, year: int, w: int) -> pl.Data
             "ppa": play.ppa,
             "play_type": play.play_type,
             "period": play.period,
-            "home_score": play.home_score,
-            "away_score": play.away_score,
+            "offense_score": play.offense_score or 0,
+            "defense_score": play.defense_score or 0,
             "yards_to_goal": getattr(play, "yards_to_goal", None),
+            "home_team": play.home,  # For neutral-field ridge regression
         })
     return pl.DataFrame(plays_data, schema=PLAY_SCHEMA)
 
@@ -621,6 +617,14 @@ def run_predictions(
     # Ensure output directory exists
     settings.outputs_dir.mkdir(parents=True, exist_ok=True)
 
+    # Validate LSA mode coupling: dual_spread requires use_learned_situ
+    if dual_spread and not use_learned_situ:
+        logger.warning(
+            "dual_spread=True requires use_learned_situ=True for edge-aware mode. "
+            "Enabling use_learned_situ automatically."
+        )
+        use_learned_situ = True
+
     # P0: Fail fast for invalid weeks (prevents infinite wait loop)
     # CFB season: weeks 0-15 regular, 16-17 postseason (bowls + CFP)
     MAX_CFB_WEEK = 18  # Week 17 is national championship, week 18+ doesn't exist
@@ -640,7 +644,8 @@ def run_predictions(
     # Programming errors (TypeError, KeyError, etc.) propagate naturally.
     try:
         # Wait for data if requested
-        if wait_for_data:
+        # Week 1 special case: no prior week data exists, skip data availability check
+        if wait_for_data and week > 1:
             logger.info(f"Checking data availability for {year} week {week}...")
             if not client.check_data_availability(year, week - 1):
                 logger.info("Data not ready, waiting...")
@@ -648,6 +653,8 @@ def run_predictions(
                     raise DataNotAvailableError(
                         f"Data not available after waiting for {year} week {week-1}"
                     )
+        elif week == 1:
+            logger.info("Week 1: skipping data availability check (no prior week data)")
 
         # Fetch FBS teams for FCS detection (needed before EFM)
         logger.info("Fetching FBS teams...")
@@ -662,8 +669,18 @@ def run_predictions(
         logger.info("Fetching current season game data...")
         current_games_df = fetch_games_data(client, year, week - 1)
 
+        # Week 1 special case: no prior games exist, use priors-only mode
         if current_games_df.empty:
-            raise ValueError(f"No game data found for {year} through week {week-1}")
+            if week == 1:
+                logger.info("Week 1: no prior game data, model will use preseason priors only")
+                # Create empty DataFrame with expected schema for downstream compatibility
+                current_games_df = pd.DataFrame(columns=[
+                    'season', 'week', 'game_id', 'home_team', 'away_team',
+                    'home_points', 'away_points', 'home_margin', 'neutral_site',
+                    'conference_game'
+                ])
+            else:
+                raise ValueError(f"No game data found for {year} through week {week-1}")
 
         # Fetch historical data for HFA (use current year + historical)
         logger.info("Fetching historical data for HFA calculation...")
@@ -689,10 +706,13 @@ def run_predictions(
             )
             .to_pandas()
         )
-        logger.info(
-            f"Loaded {len(plays_df)} FBS plays for EFM training "
-            f"({pre_filter - len(plays_df)} FCS plays excluded)"
-        )
+        if len(plays_df) > 0:
+            logger.info(
+                f"Loaded {len(plays_df)} FBS plays for EFM training "
+                f"({pre_filter - len(plays_df)} FCS plays excluded)"
+            )
+        else:
+            logger.info("No play data available (week 1) - EFM will use preseason priors only")
 
         # Build EFM model
         logger.info("Fitting Efficiency Foundation Model...")
@@ -892,8 +912,14 @@ def run_predictions(
     vegas.fetch_lines(year, week)
 
     comparison_df = vegas.generate_comparison_df(predictions)
-    value_plays = vegas.identify_value_plays(predictions)
-    value_plays_df = vegas.value_plays_to_dataframe(value_plays)
+
+    # Value plays: computed differently for dual-spread vs fixed mode
+    # In dual-spread mode, value plays are recomputed with edge-aware recommended spreads below
+    if not dual_spread:
+        value_plays = vegas.identify_value_plays(predictions)
+        value_plays_df = vegas.value_plays_to_dataframe(value_plays)
+    else:
+        value_plays_df = None  # Placeholder - computed below with edge-aware logic
 
     # Add edge-aware dual-spread recommendations (requires Vegas lines for edge calculation)
     if dual_spread:
@@ -955,7 +981,8 @@ def run_predictions(
                     return 'lsa'
                 else:
                     return 'fixed'  # 3-5 pt edge at closing: use fixed (53.4% > 52.5%)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Edge-aware recommendation error for game {row.get('game_id', '?')}: {e}")
                 return 'fixed'
 
         comparison_df['bet_timing_rec'] = comparison_df.apply(get_edge_aware_recommendation, axis=1)

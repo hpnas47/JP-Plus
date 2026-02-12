@@ -1808,6 +1808,18 @@ class EfficiencyFoundationModel:
         Returns:
             Dict mapping team name to TeamEFMRating
         """
+        # Early return for empty plays (Week 1 with no prior game data)
+        # SpreadGenerator will use mean rating (0.0) for all teams, relying on priors from other sources
+        if plays_df.empty:
+            logger.warning(
+                "Empty plays DataFrame - no efficiency data available. "
+                "Returning empty ratings (week 1 priors-only mode)."
+            )
+            self.team_ratings = {}
+            self._canonical_teams = []
+            self._team_to_idx = {}
+            return {}
+
         # Prepare plays (with data leakage guard if max_week provided)
         # Season passed for year-conditional garbage time thresholds (2024+ clock rule change)
         prepared = self._prepare_plays(plays_df, max_week=max_week, team_conferences=team_conferences, season=season)
