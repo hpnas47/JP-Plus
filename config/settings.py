@@ -48,7 +48,7 @@ class Settings:
     letdown_away_multiplier: float = 1.25  # Letdown worse on the road (sleepy noon kickoff)
     lookahead_penalty: float = -1.5
     sandwich_extra_penalty: float = -1.0  # Extra penalty when BOTH letdown AND lookahead
-    rivalry_underdog_boost: float = 1.0
+    rivalry_underdog_boost: float = 0.0  # Ablation tested 2026-02-12: removing improved Core 5+ Edge
     consecutive_road_penalty: float = -1.5  # Penalty for 2nd consecutive road game
 
     # Travel Adjustment
