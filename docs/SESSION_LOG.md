@@ -4,6 +4,48 @@
 
 ---
 
+## Session: February 11, 2026 (Post-Midnight)
+
+### Theme: Production Pipeline Hardening
+
+---
+
+#### run_weekly.py Production Fixes — 5 Issues Resolved
+**Status**: Committed (`cc0f6b9`)
+**Files**: `scripts/run_weekly.py`, `src/models/efficiency_foundation_model.py`
+
+Fixed 5 issues in the production prediction pipeline to improve robustness.
+
+**Fix 1 (CRITICAL): Week 1 Predictions Crash**
+- Guard `wait_for_data` to skip for week 1 (no prior week data exists)
+- Handle empty `current_games_df` for week 1 with proper DataFrame schema
+- Add EFM early return for empty plays (priors-only mode)
+- Fix play column names: `home_score/away_score` → `offense_score/defense_score` (API mismatch)
+- Add `home_team` column for neutral-field ridge regression
+
+**Fix 2 (MEDIUM): Bare Except in Edge-Aware Recommendation**
+- Changed `except Exception:` to `except Exception as e:` with debug logging
+- Now captures game_id and error message for debugging
+
+**Fix 3 (LOW): Wasted Value Play Computation**
+- Moved initial value play computation inside `if not dual_spread:` guard
+- In dual_spread mode, value plays are recomputed with edge-aware recommended spreads
+
+**Fix 4 (LOW): LSA Mode Coupling Validation**
+- Added guard that auto-enables `use_learned_situ` when `dual_spread=True`
+- Prevents invalid configuration state
+
+**Fix 5 (LOW): Fragile Schedule Fetching**
+- Removed `consecutive_empty` early-exit logic in `build_schedule_df`
+- Now always iterates all 15 regular season weeks, skipping empty weeks gracefully
+- Prevents truncated schedules due to mid-season bye weeks
+
+**Testing:**
+- Week 5 backtest: MAE 10.42, 54.7% ATS (Core slice)
+- EFM correctly loaded 34,799 FBS plays for training
+
+---
+
 ## Session: February 11, 2026 (Late Night)
 
 ### Theme: G5/Cross-Tier/HFA Investigation — Complete
