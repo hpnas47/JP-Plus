@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from config.teams import TRIPLE_OPTION_TEAMS
+from src.data.priors_cache import PriorsDataCache
 
 if TYPE_CHECKING:
     from src.api.cfbd_client import CFBDClient
@@ -257,6 +258,9 @@ class PreseasonPriors:
 
         self.preseason_ratings: dict[str, PreseasonRating] = {}
 
+        # Disk cache for API responses (eliminates HTTP calls for historical data)
+        self._cache = PriorsDataCache()
+
     def fetch_prior_year_sp(self, year: int) -> dict[str, float]:
         """Fetch SP+ ratings from the previous year.
 
@@ -267,6 +271,13 @@ class PreseasonPriors:
             Dictionary mapping team name to SP+ rating
         """
         prior_year = year - 1
+
+        # Try cache first
+        cached = self._cache.load_sp_ratings(prior_year)
+        if cached is not None:
+            return cached
+
+        # Cache miss - fetch from API
         try:
             sp_ratings = self.client.get_sp_ratings(year=prior_year)
             ratings = {}
@@ -274,6 +285,10 @@ class PreseasonPriors:
                 if team.rating is not None:
                     ratings[team.team] = team.rating
             logger.info(f"Fetched {len(ratings)} SP+ ratings from {prior_year}")
+
+            # Save to cache for future runs
+            self._cache.save_sp_ratings(prior_year, ratings)
+
             return ratings
         except Exception as e:
             logger.warning(f"Could not fetch SP+ ratings for {prior_year}: {e}")
@@ -288,12 +303,22 @@ class PreseasonPriors:
         Returns:
             Dictionary mapping team name to talent score
         """
+        # Try cache first
+        cached = self._cache.load_talent(year)
+        if cached is not None:
+            return cached
+
+        # Cache miss - fetch from API
         try:
             talent = self.client.get_team_talent(year=year)
             scores = {}
             for team in talent:
                 scores[team.team] = team.talent
             logger.info(f"Fetched talent scores for {len(scores)} teams")
+
+            # Save to cache for future runs
+            self._cache.save_talent(year, scores)
+
             return scores
         except Exception as e:
             logger.warning(f"Could not fetch talent data for {year}: {e}")
@@ -308,6 +333,12 @@ class PreseasonPriors:
         Returns:
             Dictionary mapping team name to percent_ppa (0-1 scale)
         """
+        # Try cache first
+        cached = self._cache.load_returning_production(year)
+        if cached is not None:
+            return cached
+
+        # Cache miss - fetch from API
         try:
             rp_data = self.client.get_returning_production(year=year)
             returning = {}
@@ -315,6 +346,10 @@ class PreseasonPriors:
                 if team.percent_ppa is not None:
                     returning[team.team] = team.percent_ppa
             logger.info(f"Fetched returning production for {len(returning)} teams")
+
+            # Save to cache for future runs
+            self._cache.save_returning_production(year, returning)
+
             return returning
         except Exception as e:
             logger.warning(f"Could not fetch returning production for {year}: {e}")
@@ -329,6 +364,12 @@ class PreseasonPriors:
         Returns:
             DataFrame with transfer portal entries
         """
+        # Try cache first
+        cached = self._cache.load_transfer_portal(year)
+        if cached is not None:
+            return cached
+
+        # Cache miss - fetch from API
         try:
             transfers = self.client.get_transfer_portal(year=year)
             data = []
@@ -359,6 +400,10 @@ class PreseasonPriors:
 
             df = pd.DataFrame(data)
             logger.info(f"Fetched {len(df)} transfer portal entries for {year}")
+
+            # Save to cache for future runs
+            self._cache.save_transfer_portal(year, df)
+
             return df
 
         except Exception as e:
