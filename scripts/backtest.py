@@ -641,6 +641,7 @@ def walk_forward_predict(
     st_early_weight: float = 1.0,
     fcs_estimator: Optional[FCSStrengthEstimator] = None,
     fcs_static: bool = False,
+    fcs_use_deviation: bool = True,  # Use FBS team's deviation from FBS mean for FCS games
     # Learned Situational Adjustment (LSA) parameters
     lsa_model: Optional[LearnedSituationalModel] = None,
     # LSA training data sources (for turnover adjustment and Vegas filter)
@@ -938,6 +939,7 @@ def walk_forward_predict(
             st_early_season_weight=st_early_weight,  # Early-season ST weighting (Approach C)
             fcs_estimator=active_fcs_estimator,  # Dynamic FCS penalties (None = use static)
             qb_continuous=qb_continuous_adjuster,  # Continuous QB rating adjustment
+            use_fbs_deviation_for_fcs=fcs_use_deviation,  # FBS team deviation for FCS games
         )
 
         # Predict this week's games (Polars iteration is faster)
@@ -2931,6 +2933,7 @@ def _process_single_season(
     qb_use_prior_season: bool = True,
     qb_phase1_only: bool = False,
     qb_fix_misattribution: bool = False,
+    fcs_use_deviation: bool = True,  # Use FBS team's deviation from FBS mean for FCS games
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -3034,6 +3037,7 @@ def _process_single_season(
         st_early_weight=st_early_weight,
         fcs_estimator=fcs_estimator,
         fcs_static=fcs_static,
+        fcs_use_deviation=fcs_use_deviation,
         lsa_model=lsa_model,
         turnover_df=turnover_df,
         betting_df=betting_df,
@@ -3101,6 +3105,7 @@ def run_backtest(
     fcs_slope: float = 0.8,
     fcs_intercept: float = 10.0,
     fcs_hfa: float = 0.0,
+    fcs_use_deviation: bool = True,  # Use FBS team's deviation from FBS mean for FCS games
     # Learned Situational Adjustment (LSA) parameters
     use_learned_situ: bool = False,
     lsa_alpha: float = 300.0,
@@ -3261,6 +3266,7 @@ def run_backtest(
         fcs_slope=fcs_slope,
         fcs_intercept=fcs_intercept,
         fcs_hfa=fcs_hfa,
+        fcs_use_deviation=fcs_use_deviation,
         # LSA params
         use_learned_situ=use_learned_situ,
         lsa_alpha=lsa_alpha,
@@ -3818,6 +3824,11 @@ def main():
         help="HFA value to neutralize in FCS margin calculations. 0=disabled. Default: 0.0",
     )
     parser.add_argument(
+        "--fcs-legacy-base",
+        action="store_true",
+        help="Use legacy FCS base_margin=0 (treats all FBS teams identically vs FCS). Default: False (use FBS deviation).",
+    )
+    parser.add_argument(
         "--no-portal",
         action="store_true",
         help="Disable transfer portal adjustment in preseason priors",
@@ -4158,6 +4169,7 @@ def main():
             fcs_slope=args.fcs_slope,
             fcs_intercept=args.fcs_intercept,
             fcs_hfa=args.fcs_hfa,
+            fcs_use_deviation=not args.fcs_legacy_base,
             use_learned_situ=args.learned_situ,
             lsa_alpha=args.lsa_alpha,
             lsa_min_games=args.lsa_min_games,
@@ -4270,6 +4282,7 @@ def main():
         fcs_slope=args.fcs_slope,
         fcs_intercept=args.fcs_intercept,
         fcs_hfa=args.fcs_hfa,
+        fcs_use_deviation=not args.fcs_legacy_base,  # Default True unless --fcs-legacy-base
         # Learned Situational Adjustment (LSA) params
         use_learned_situ=args.learned_situ,
         lsa_alpha=args.lsa_alpha,

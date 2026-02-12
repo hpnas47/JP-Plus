@@ -239,6 +239,7 @@ class SpreadGenerator:
         st_spread_cap: Optional[float] = 2.5,
         st_early_season_weight: float = 1.0,  # Weight for ST in weeks 1-3 (1.0 = full, 0.5 = half)
         fcs_estimator: Optional[FCSStrengthEstimator] = None,  # Dynamic FCS strength estimator
+        use_fbs_deviation_for_fcs: bool = True,  # If True, use FBS team's deviation from FBS mean for FCS games
     ):
         """Initialize spread generator with EFM ratings and adjustment layers.
 
@@ -262,21 +263,40 @@ class SpreadGenerator:
             st_spread_cap: Cap on ST differential's effect on spread. Default 2.5 (APPROVED). 0/None = no cap.
             st_early_season_weight: Weight for ST impact in weeks 1-3 (1.0 = full). Default 1.0.
             fcs_estimator: Dynamic FCS strength estimator (if provided, overrides static elite list)
+            use_fbs_deviation_for_fcs: If True (default), use FBS team's deviation from FBS mean
+                as base_margin for FCS games. If False, use 0.0 (legacy behavior pre-Feb 2026).
         """
         self.ratings = ratings or {}
+        self.fbs_teams = fbs_teams or set()
+        self.use_fbs_deviation_for_fcs = use_fbs_deviation_for_fcs
+
         # Calculate mean rating for fallback on missing teams
         # If ratings center around +2.0, a missing team should be treated as +2.0, not 0.0
         if self.ratings:
             self._mean_rating = sum(self.ratings.values()) / len(self.ratings)
         else:
             self._mean_rating = 0.0
+
+        # Calculate mean FBS rating (FBS teams only, for FCS base_margin calculation)
+        # Important: Don't include FCS teams that appear in ratings (from playing FBS opponents)
+        # as they have artificially low ratings that would pull the mean down
+        if self.ratings and self.fbs_teams:
+            fbs_ratings = [r for team, r in self.ratings.items() if team in self.fbs_teams]
+            if fbs_ratings:
+                self._mean_fbs_rating = sum(fbs_ratings) / len(fbs_ratings)
+            else:
+                # No overlap between ratings and fbs_teams - use overall mean
+                self._mean_fbs_rating = self._mean_rating
+        else:
+            self._mean_fbs_rating = self._mean_rating
+
         self.special_teams = special_teams or SpecialTeamsModel()
         self.finishing_drives = finishing_drives or FinishingDrivesModel()
         self.home_field = home_field or HomeFieldAdvantage()
         self.situational = situational or SituationalAdjuster()
         self.travel = travel or TravelAdjuster()
         self.altitude = altitude or AltitudeAdjuster()
-        self.fbs_teams = fbs_teams or set()
+        # Note: self.fbs_teams already set earlier for _mean_fbs_rating calculation
         self.elite_fcs_teams = elite_fcs_teams if elite_fcs_teams is not None else ELITE_FCS_TEAMS
 
         # FCS penalties
@@ -308,8 +328,17 @@ class SpreadGenerator:
     def _get_base_margin(self, home_team: str, away_team: str) -> float:
         """Get base margin from EFM ratings differential.
 
-        For FBS vs FCS games, returns 0.0 to avoid double-counting with FCS penalty.
-        The FCS penalty already represents the full expected margin between FBS and FCS.
+        For FBS vs FCS games, returns the FBS team's deviation from FBS mean (not the
+        full rating differential). The FCS penalty represents the average-FBS-to-FCS gap,
+        so we only add the FBS team's deviation from average, not their full rating.
+
+        Example with deviation approach (use_fbs_deviation_for_fcs=True):
+            Alabama (+25 rating, FBS mean ~+2): base = +23, + penalty ~32 = ~55
+            Average FBS team (+2 rating): base = 0, + penalty ~32 = ~32
+            Kent State (-8 rating): base = -10, + penalty ~32 = ~22
+
+        Legacy behavior (use_fbs_deviation_for_fcs=False):
+            All FBS teams get base_margin=0, only FCS penalty differentiates games.
 
         Args:
             home_team: Home team name
@@ -319,20 +348,47 @@ class SpreadGenerator:
             Expected point margin (home - away) on neutral field
         """
         # Check if this is an FBS vs FCS game
-        # If so, return 0.0 - let the FCS penalty handle the full margin
-        # This prevents double-counting (rating_diff + FCS penalty was inflating spreads)
         if self.fbs_teams:
             home_is_fbs = home_team in self.fbs_teams
             away_is_fbs = away_team in self.fbs_teams
             if home_is_fbs != away_is_fbs:
-                # FBS vs FCS game - FCS penalty handles the rating differential
-                # Log which team is FCS for debugging
+                # FBS vs FCS game
                 fcs_team = away_team if home_is_fbs else home_team
+                fbs_team = home_team if home_is_fbs else away_team
+
+                if not self.use_fbs_deviation_for_fcs:
+                    # Legacy behavior: return 0.0, let FCS penalty handle everything
+                    logger.debug(
+                        f"FBS vs FCS game: {home_team} vs {away_team}. "
+                        f"Setting base_margin=0 (legacy mode), FCS penalty will apply for {fcs_team}."
+                    )
+                    return 0.0
+
+                # New behavior: return FBS team's deviation from FBS mean
+                # This preserves FBS team differentiation (Alabama vs Kent State)
+                # while letting FCS penalty represent the average-FBS-to-FCS gap
+                fbs_rating = self.ratings.get(fbs_team)
+                if fbs_rating is None:
+                    logger.warning(
+                        f"FBS team '{fbs_team}' not found in ratings "
+                        f"(defaulting to FBS mean={self._mean_fbs_rating:.2f}). "
+                        "Check for name mismatch or missing data."
+                    )
+                    fbs_rating = self._mean_fbs_rating
+
+                # Deviation from FBS mean
+                deviation = fbs_rating - self._mean_fbs_rating
+
+                # Apply sign: positive if FBS team is home, negative if away
+                base_margin = deviation if home_is_fbs else -deviation
+
                 logger.debug(
                     f"FBS vs FCS game: {home_team} vs {away_team}. "
-                    f"Setting base_margin=0, FCS penalty will apply for {fcs_team}."
+                    f"FBS team {fbs_team} rating={fbs_rating:.1f}, "
+                    f"FBS mean={self._mean_fbs_rating:.1f}, "
+                    f"deviation={deviation:.1f}, base_margin={base_margin:.1f}"
                 )
-                return 0.0
+                return base_margin
 
         home_rating = self.ratings.get(home_team)
         away_rating = self.ratings.get(away_team)
