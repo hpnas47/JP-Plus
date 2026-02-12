@@ -69,6 +69,41 @@ Year consistency fixed:
 
 ---
 
+#### FCS Double-Counting Fix v2: FBS Team Differentiation — APPROVED
+**Status**: Committed (`be57aa6`)
+**Files**: `src/predictions/spread_generator.py`, `scripts/backtest.py`
+
+**Problem**: The v1 fix (b19da17) set `base_margin=0` for ALL FBS vs FCS games, treating Alabama and Kent State identically vs the same FCS opponent. This eliminated FBS team quality differentiation.
+
+**Solution**: For FCS games, return the FBS team's deviation from FBS mean (not 0.0). The FCS penalty represents the average-FBS-to-FCS gap, so we only add the FBS team's deviation from average.
+
+```python
+# New _get_base_margin() logic for FCS games:
+deviation = fbs_rating - _mean_fbs_rating
+base_margin = deviation if home_is_fbs else -deviation
+```
+
+**Example spreads**:
+- Alabama (+25 rating, FBS mean ~+2) vs FCS: base=+23, +penalty=~55
+- Average FBS team (+2 rating) vs FCS: base=0, +penalty=~32
+- Kent State (-8 rating) vs FCS: base=-10, +penalty=~22
+
+**Results (2022-2025 backtest, vs v1 fix baseline)**:
+
+| Metric | v1 Fix | v2 Fix | Delta |
+|--------|--------|--------|-------|
+| **FCS MAE** | 15.53 | 14.43 | **-1.10** ✓ |
+| **FCS ME** | +4.53 | +3.59 | **-0.94** ✓ |
+| **Full MAE** | 13.14 | 12.99 | **-0.15** ✓ |
+| Core 5+ Edge (FBS-only) | 54.3% | 54.3% | **0** ✓ |
+| Core 5+ Edge (Total) | 54.7% | 54.3% | -0.4% |
+
+**Key finding**: The -0.4% Core 5+ Edge drop is entirely from FCS games; FBS-only Core performance is **identical** (445-375 in both). The FCS ATS edge loss is a consequence of more accurate spreads (less random disagreement with Vegas).
+
+**Config toggle**: `--fcs-legacy-base` reverts to v1 behavior for A/B testing.
+
+---
+
 #### Baseline Metrics Updated — COMMITTED
 **Status**: Committed (`c91df87`)
 **Files**: `CLAUDE.md`, `docs/MODEL_ARCHITECTURE.md`
