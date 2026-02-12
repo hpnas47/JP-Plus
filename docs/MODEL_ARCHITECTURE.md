@@ -31,7 +31,7 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,657 gam
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
 | Calibration | 1-3 | 992 | 13.96 | 17.57 | 48.6% | 47.5% | 48.9% | 50.5% | 50.6% |
-| **Core** | **4-15** | **2,489** | **12.51** | **15.81** | **51.7%** | **53.0%** | **53.4%** | **54.7%** | **57.2%** |
+| **Core** | **4-15** | **2,489** | **12.51** | **15.81** | **51.7%** | **53.0%** | **53.1%** | **55.1%** | **57.1%** |
 | Postseason | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% | 47.2% | 47.3% | 48.7% |
 | **Full Season** | All | 3,657 | 12.92 | 16.33 | 50.7% | 51.4% | 51.8% | 52.9% | 54.6% |
 
@@ -49,8 +49,8 @@ The Core phase is where the model is profitable. Detailed breakdowns below focus
 | Edge Filter | vs Closing Line | vs Opening Line |
 |-------------|-----------------|-----------------|
 | **All picks** | 1260-1177 (51.7%) | 1299-1151 (53.0%) |
-| **3+ pt edge** | 746-650 (53.4%) | 796-636 (55.6%) |
-| **5+ pt edge** | 463-383 (54.7%) | 515-386 (57.2%) |
+| **3+ pt edge** | 737-652 (53.1%) | 791-637 (55.4%) |
+| **5+ pt edge** | 464-378 (55.1%) | 511-384 (57.1%) |
 
 Opening line performance exceeds closing line by ~2-3%, indicating the model captures value that the market prices out by game time. LSA (Learned Situational Adjustment) can further improve 5+ Edge vs closing.
 
@@ -356,7 +356,7 @@ EFM ratings feed into `SpreadGenerator` which applies game-specific adjustments.
 | | Letdown Spot | -2.0/-2.5 pts | Big win last week (ranked or rival), facing unranked |
 | | Lookahead Spot | -1.5 pts | Rival or top-10 opponent next week |
 | | Sandwich Spot | -1.0 pts extra | BOTH letdown AND lookahead (compounding) |
-| | Rivalry Boost | +1.0 pts | Underdog in rivalry game only |
+| | ~~Rivalry Boost~~ | ~~+1.0 pts~~ | **REMOVED** — Ablation test (2026-02-12) showed boost was noise |
 | **Opponent/Pace** | FCS Penalty | 10-45 pts | Dynamic: Bayesian shrinkage from prior FBS-FCS margins |
 | | Special Teams | ±2.5 pts max | ST differential capped to prevent outlier-driven spreads |
 | | Pace (Triple-Option) | -10% to -15% | Spread compression for low-play-count games |
@@ -411,7 +411,7 @@ All game adjustments pass through a single aggregator that applies unified envir
 |--------|---------|-----------|-----------|
 | **Environmental Stack** | HFA, travel, altitude, rest, consecutive_road | Single-layer soft cap | All physical/venue factors sum linearly, then soft cap for extreme stacks only |
 | **Mental** | letdown, lookahead, sandwich | Standard (100%/50%/25%) | Mental factors compound with diminishing returns |
-| **Boosts** | rivalry | Linear sum | Positive factors are rare, stack fully |
+| **Boosts** | ~~rivalry~~ (removed) | Linear sum | Empty after rivalry boost removal (2026-02-12) |
 
 **Environmental Stack Details:**
 - All environmental factors (HFA + travel + altitude + rest + consecutive_road) sum linearly first
@@ -463,7 +463,7 @@ Teams playing their second consecutive road game receive a -1.5 pt penalty. Trav
 
 **Travel Correlation:** When travel penalty exceeds 1.5 pts (indicating significant distance), the consecutive road penalty is reduced by 50% to prevent double-counting the fatigue component.
 
-#### Letdown, Lookahead, Sandwich, and Rivalry
+#### Letdown, Lookahead, and Sandwich
 
 | Factor | Value | Condition |
 |--------|-------|-----------|
@@ -471,7 +471,7 @@ Teams playing their second consecutive road game receive a -1.5 pt penalty. Trav
 | **Letdown Spot (away)** | -2.5 pts | Same, but traveling (sleepy road game) |
 | **Lookahead Spot** | -1.5 pts | Rival or top-10 opponent next week |
 | **Sandwich Spot** | -1.0 pts extra | BOTH letdown AND lookahead apply to same team |
-| **Rivalry Boost** | +1.0 pts | Underdog in rivalry game only |
+| ~~**Rivalry Boost**~~ | ~~+1.0 pts~~ | **REMOVED** — Ablation test (2026-02-12) showed boost was noise, not signal |
 
 **Letdown "Big Win" Criteria (either triggers):**
 1. Beat a top-15 ranked team (using historical ranking at time of game)
@@ -536,16 +536,16 @@ adjusted_residual = raw_residual - (turnover_margin × turnover_point_value)
 | `lsa_adjust_turnovers` | True | Enable turnover-adjusted residuals |
 | `lsa_turnover_pts` | 4.0 | Points per turnover for adjustment |
 
-**Key Finding — Rivalry Underdog Boost is a Fallacy:**
+**Key Finding — Rivalry Underdog Boost REMOVED (2026-02-12):**
 
-Forensic analysis of 108 rivalry underdog home games revealed that favorites in rivalry games tend to **WIN BIG**, not cover less:
+Ablation testing confirmed the +1.0 pt rivalry underdog boost was noise, not signal:
 
-| Metric | Value |
-|--------|-------|
-| Fixed rivalry boost applied | +1.0 pts |
-| Actual residual after boost | **-3.52 pts** |
+| Metric | With Boost | Without Boost |
+|--------|------------|---------------|
+| Core 5+ Edge (Close) | 54.7% | **55.1%** (+0.4%) |
+| Core 5+ Edge (Open) | 57.2% | 57.1% (neutral) |
 
-Examples: Oklahoma -49 actual vs Texas when predicted -8 (residual -41), Arizona -42 vs ASU when predicted -2 (residual -40). LSA correctly learns a negative coefficient to offset the wrong fixed boost.
+The boost has been **removed from production**. Historical analysis showed favorites in rivalry games tend to **WIN BIG**, not cover less — the boost was directionally wrong. LSA forensics (108 rivalry underdog home games) showed -3.52 pt actual residual despite +1.0 boost applied.
 
 **Trade-off:** LSA improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while reducing 3+ Edge by -0.9pp (53.4% → 52.5%). This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
 
