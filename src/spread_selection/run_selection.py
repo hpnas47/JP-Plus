@@ -55,6 +55,12 @@ from src.spread_selection.calibration import (
     DEFAULT_CALIBRATION_MODE,
     DEFAULT_TRAINING_WINDOW_SEASONS,
 )
+from src.spread_selection.policies.phase1_sp_gate import (
+    Phase1SPGateConfig,
+    evaluate_single_game,
+    fetch_sp_spreads_vegas,
+    merge_gate_results_to_df,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +198,10 @@ def compare_strategies(games_with_pcov: pd.DataFrame) -> dict:
         games_with_pcov["p_cover_no_push"].notna() & ~games_with_pcov["push"]
     ].copy()
 
-    # Calculate EV for each game
-    df["ev"] = calculate_ev_vectorized(df["p_cover_no_push"].values)
+    # Use existing EV column if valid (preserves push-aware EV from walk_forward_validate)
+    # Only recompute if ev column is missing or all-null
+    if "ev" not in df.columns or df["ev"].isna().all():
+        df["ev"] = calculate_ev_vectorized(df["p_cover_no_push"].values)
 
     strategies = {
         "OLD_5pt": {"filter": lambda x: x["edge_abs"] >= 5.0},
@@ -341,7 +349,11 @@ def print_strategy_comparison(results: dict) -> None:
         print("OVERLAP ANALYSIS (OLD_5pt vs NEW_EV3):")
         print(f"  OLD_5pt selects:     {oa['old_total']} bets")
         print(f"  NEW_EV3 selects:     {oa['ev3_total']} bets")
-        print(f"  Overlap:             {oa['overlap_old_ev3']} bets ({oa['overlap_old_ev3']/oa['old_total']*100:.1f}% of OLD)")
+        if oa['old_total'] > 0:
+            overlap_pct = f"{oa['overlap_old_ev3']/oa['old_total']*100:.1f}%"
+        else:
+            overlap_pct = "N/A"
+        print(f"  Overlap:             {oa['overlap_old_ev3']} bets ({overlap_pct} of OLD)")
         print(f"  OLD only:            {oa['old_only_vs_ev3']} bets")
         print(f"  EV3 only:            {oa['ev3_only_vs_old']} bets")
 
@@ -748,11 +760,17 @@ def run_mode_comparison(
     print(f"\n| {'Year':>6} | {'PRIMARY':^30} | {'ULTRA':^30} |")
     print(f"|{'-'*8}|{'-'*32}|{'-'*32}|")
 
-    for i, fold_pri in enumerate(r_pri["fold_summaries"]):
-        fold_ult = r_ult["fold_summaries"][i]
+    # Align folds by eval_year instead of positional index
+    pri_folds_by_year = {f["eval_year"]: f for f in r_pri["fold_summaries"]}
+    ult_folds_by_year = {f["eval_year"]: f for f in r_ult["fold_summaries"]}
+    common_years = sorted(set(pri_folds_by_year.keys()) & set(ult_folds_by_year.keys()))
+
+    for eval_year in common_years:
+        fold_pri = pri_folds_by_year[eval_year]
+        fold_ult = ult_folds_by_year[eval_year]
         pri_years = ",".join(str(y) for y in fold_pri.get("training_years_used", fold_pri["years_trained"]))
         ult_years = ",".join(str(y) for y in fold_ult.get("training_years_used", fold_ult["years_trained"]))
-        print(f"| {fold_pri['eval_year']:>6} | {pri_years:^30} | {ult_years:^30} |")
+        print(f"| {eval_year:>6} | {pri_years:^30} | {ult_years:^30} |")
 
     # Strategy comparison
     print("\n" + "=" * 80)
@@ -1020,6 +1038,7 @@ def run_predict(
     year: Optional[int] = None,
     week: Optional[int] = None,
     output_dir: str = "data/spread_selection/outputs",
+    sp_gate_config: Optional[Phase1SPGateConfig] = None,
 ) -> None:
     """Generate predictions for upcoming games.
 
@@ -1036,6 +1055,7 @@ def run_predict(
         year: Year for predictions (default: infer from slate)
         week: Week for predictions (default: infer from slate)
         output_dir: Output directory for prediction files
+        sp_gate_config: Optional Phase 1 SP+ gate configuration (default OFF)
     """
     from scipy.special import expit
 
@@ -1045,6 +1065,10 @@ def run_predict(
     print(f"Modes: {', '.join(emit_modes)}")
     print(f"PRIMARY min EV: {primary_min_ev:.2f}")
     print(f"ULTRA min EV:   {ultra_min_ev:.2f}")
+    if sp_gate_config and sp_gate_config.enabled:
+        print(f"SP+ Gate: ENABLED (mode={sp_gate_config.mode}, weeks={sp_gate_config.weeks})")
+    else:
+        print(f"SP+ Gate: DISABLED")
     print("=" * 80)
 
     # Create output directory
@@ -1202,12 +1226,37 @@ def run_predict(
         print(f"  P(cover) @ 10 pts: {p_at_10:.1%}")
         print(f"  Implied BE edge: {calibration.implied_breakeven_edge:.1f} pts")
 
+        # Estimate push rates from training data (same pattern as walk_forward_validate)
+        push_rates = None
+        try:
+            push_rates = estimate_push_rates(train_df)
+            logger.info(f"[PREDICT] Push rates estimated: default_even={push_rates.default_even:.4f}")
+        except Exception as e:
+            logger.warning(f"[PREDICT] Push rate estimation failed: {e}. Falling back to p_push=0.")
+
         # Apply calibration to slate
         slate_pred = slate_df.copy()
         slate_pred["p_cover_no_push"] = predict_cover_probability(
             slate_pred["edge_abs"].values, calibration
         )
-        slate_pred["ev"] = calculate_ev_vectorized(slate_pred["p_cover_no_push"].values)
+
+        # Calculate push-aware EV
+        if push_rates is not None:
+            # Get per-game push probabilities based on Vegas spread
+            slate_pred["p_push"] = get_push_probability_vectorized(
+                slate_pred["vegas_spread"].values, push_rates
+            )
+            # Push-aware EV formula: ev = p_win * (100/110) - p_lose
+            # where p_win = p_cover_no_push * (1 - p_push), p_lose = (1 - p_cover_no_push) * (1 - p_push)
+            p_cover = slate_pred["p_cover_no_push"].values
+            p_push = slate_pred["p_push"].values
+            p_win = p_cover * (1 - p_push)
+            p_lose = (1 - p_cover) * (1 - p_push)
+            slate_pred["ev"] = p_win * (100 / 110) - p_lose
+        else:
+            # Fallback to p_push=0
+            slate_pred["p_push"] = 0.0
+            slate_pred["ev"] = calculate_ev_vectorized(slate_pred["p_cover_no_push"].values)
 
         # Assign tiers
         min_ev = config["min_ev"]
@@ -1219,8 +1268,79 @@ def run_predict(
         # Sort by EV descending
         slate_pred = slate_pred.sort_values("ev", ascending=False)
 
-        # Extract bets
-        bets = slate_pred[slate_pred["tier"] != "PASS"].copy()
+        # Extract bets BEFORE gate (baseline)
+        bets_before_gate = slate_pred[slate_pred["tier"] != "PASS"].copy()
+
+        # Apply Phase 1 SP+ Gate (post-selection filter)
+        gate_results = []
+        sp_spreads = {}
+        if sp_gate_config and sp_gate_config.should_apply(week):
+            print(f"\n  Applying SP+ Gate (mode={sp_gate_config.mode})...")
+
+            # Fetch SP+ spreads
+            try:
+                from src.api.cfbd_client import CFBDClient
+                client = CFBDClient()
+                sp_spreads = fetch_sp_spreads_vegas(client, year, [week])
+                print(f"    Fetched {len(sp_spreads)} SP+ spreads")
+            except Exception as e:
+                logger.warning(f"Failed to fetch SP+ spreads: {e}")
+                sp_spreads = {}
+
+            # Evaluate gate for each game in slate
+            for _, row in slate_pred.iterrows():
+                game_id = int(row['game_id'])
+                sp_spread = sp_spreads.get(game_id)
+                result = evaluate_single_game(
+                    game_id=game_id,
+                    jp_spread=row['jp_spread'],
+                    vegas_spread=row['vegas_spread'],
+                    sp_spread=sp_spread,
+                    config=sp_gate_config,
+                )
+                gate_results.append(result)
+
+            # Merge gate results into slate
+            slate_pred = merge_gate_results_to_df(slate_pred, gate_results)
+
+            # Filter bets based on gate (only for BET/MED/HIGH tiers)
+            if sp_gate_config.candidate_basis == "ev":
+                # Candidates are EV-based bets (tier != PASS)
+                candidate_mask = slate_pred["tier"] != "PASS"
+            else:
+                # Candidates are edge-based
+                candidate_mask = slate_pred["edge_abs"] >= sp_gate_config.jp_edge_min
+
+            # Pass-through non-candidates, filter candidates by gate
+            bets = slate_pred[
+                ((candidate_mask) & (slate_pred["sp_gate_passed"] == True)) |
+                (~candidate_mask)
+            ].copy()
+            bets = bets[bets["tier"] != "PASS"].copy()
+
+            # Log gate summary
+            n_before = len(bets_before_gate)
+            n_after = len(bets)
+            n_filtered = n_before - n_after
+            print(f"    Gate result: {n_before} -> {n_after} bets ({n_filtered} filtered)")
+
+            # Log category breakdown
+            if gate_results:
+                from collections import Counter
+                cats = Counter(r.category.value for r in gate_results if
+                               slate_pred[slate_pred['game_id'] == r.game_id]['tier'].iloc[0] != "PASS"
+                               if len(slate_pred[slate_pred['game_id'] == r.game_id]) > 0)
+                if cats:
+                    print(f"    Categories: {dict(cats)}")
+        else:
+            bets = bets_before_gate.copy()
+            # Add placeholder gate columns
+            slate_pred['sp_spread'] = None
+            slate_pred['sp_edge_pts'] = None
+            slate_pred['sp_edge_abs'] = None
+            slate_pred['sp_gate_category'] = None
+            slate_pred['sp_gate_passed'] = True
+            slate_pred['sp_gate_reason'] = None
 
         print(f"\n  Results ({config['label']}):")
         print(f"    Total games: {len(slate_pred)}")
@@ -1247,6 +1367,16 @@ def run_predict(
             "prediction_year": year,
             "prediction_week": week,
             "generated_at": datetime.now().isoformat(),
+            "sp_gate": {
+                "enabled": sp_gate_config.enabled if sp_gate_config else False,
+                "mode": sp_gate_config.mode if sp_gate_config else None,
+                "sp_edge_min": sp_gate_config.sp_edge_min if sp_gate_config else None,
+                "jp_edge_min": sp_gate_config.jp_edge_min if sp_gate_config else None,
+                "candidate_basis": sp_gate_config.candidate_basis if sp_gate_config else None,
+                "n_sp_spreads_fetched": len(sp_spreads),
+                "n_bets_before_gate": len(bets_before_gate),
+                "n_bets_after_gate": len(bets),
+            } if sp_gate_config and sp_gate_config.should_apply(week) else {"enabled": False},
         }
 
         # Write outputs
@@ -1675,6 +1805,34 @@ Examples:
     predict_parser.add_argument(
         "--verbose", "-v", action="store_true", help="Verbose logging"
     )
+    # Phase 1 SP+ Gate arguments (defaults OFF)
+    predict_parser.add_argument(
+        "--sp-gate", action="store_true", default=False,
+        help="Enable Phase 1 SP+ gate (weeks 1-3 only)"
+    )
+    predict_parser.add_argument(
+        "--sp-gate-mode", type=str, default="confirm_only",
+        choices=["confirm_only", "veto_opposes", "confirm_or_neutral"],
+        help="SP+ gate mode (default: confirm_only)"
+    )
+    predict_parser.add_argument(
+        "--sp-gate-sp-edge-min", type=float, default=2.0,
+        help="Minimum SP+ edge for CONFIRM category (default: 2.0)"
+    )
+    predict_parser.add_argument(
+        "--sp-gate-jp-edge-min", type=float, default=5.0,
+        help="Minimum JP+ edge for candidate (when basis=edge) (default: 5.0)"
+    )
+    predict_parser.add_argument(
+        "--sp-gate-missing-behavior", type=str, default="treat_neutral",
+        choices=["treat_neutral", "reject"],
+        help="How to handle games without SP+ prediction (default: treat_neutral)"
+    )
+    predict_parser.add_argument(
+        "--sp-gate-candidate-basis", type=str, default="ev",
+        choices=["ev", "edge"],
+        help="Candidate selection basis: 'ev' for EV-based, 'edge' for edge-based (default: ev)"
+    )
 
     # Backtest command (V2)
     backtest_parser = subparsers.add_parser(
@@ -1753,6 +1911,18 @@ Examples:
             compare_modes=args.compare_modes,
         )
     elif args.command == "predict":
+        # Build SP+ gate config
+        sp_gate_config = None
+        if args.sp_gate:
+            sp_gate_config = Phase1SPGateConfig(
+                enabled=True,
+                mode=args.sp_gate_mode,
+                sp_edge_min=args.sp_gate_sp_edge_min,
+                jp_edge_min=args.sp_gate_jp_edge_min,
+                missing_sp_behavior=args.sp_gate_missing_behavior,
+                candidate_basis=args.sp_gate_candidate_basis,
+            )
+
         run_predict(
             slate_csv=args.slate_csv,
             historical_csv=args.historical_csv,
@@ -1762,6 +1932,7 @@ Examples:
             year=args.year,
             week=args.week,
             output_dir=args.output_dir,
+            sp_gate_config=sp_gate_config,
         )
     else:
         parser.print_help()
