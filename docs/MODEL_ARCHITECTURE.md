@@ -1178,6 +1178,65 @@ python scripts/run_weekly.py --year 2025 --week 10 --use-delta-cache
 | `--qb-out` | None | Teams whose starting QB is out (space-separated) |
 | `--use-delta-cache` | Off | Load historical weeks from Parquet cache, fetch only current week from API |
 
+### Phase 1 Betting Controls (Weeks 1-3 only)
+
+These optional risk controls help manage overconfident early-season predictions. Both are **disabled by default**.
+
+#### SP+ Agreement Gate
+
+Cross-references JP+ picks against SP+ predictions to filter overconfident bets.
+
+```bash
+# Enable SP+ gating (confirm_only mode)
+python scripts/run_weekly.py --year 2026 --week 2 --sp-gate
+
+# Custom threshold and mode
+python scripts/run_weekly.py --sp-gate --sp-gate-mode veto_opposes --sp-gate-sp-edge 3.0
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sp-gate` | Off | Enable SP+ gating for Phase 1 |
+| `--sp-gate-mode` | `confirm_only` | Gating mode: `confirm_only`, `veto_opposes`, `confirm_or_neutral` |
+| `--sp-gate-sp-edge` | 2.0 | Minimum SP+ edge (pts) for "confirms" category |
+| `--sp-gate-jp-edge` | 5.0 | Minimum JP+ edge (pts) for candidate bet |
+
+**Gating Modes:**
+- `confirm_only` — Only bet when SP+ confirms (same side AND SP+ edge ≥ threshold). Highest precision.
+- `veto_opposes` — Bet confirms + neutral, reject only when SP+ actively opposes.
+- `confirm_or_neutral` — Same as `veto_opposes`.
+
+**Backtest (2022-2025 Phase 1):**
+| Mode | Retention | ATS % |
+|------|-----------|-------|
+| Baseline | 100% | 51.4% |
+| `confirm_only` | 18.7% | **60.0%** |
+| `veto_opposes` | 67.0% | 52.2% |
+
+#### Kill-Switch Protection
+
+Disables or throttles Phase 1 betting after a poor Week 1.
+
+```bash
+# Enable kill-switch (evaluates after Week 1)
+python scripts/run_weekly.py --year 2026 --week 2 --killswitch
+
+# Custom trigger threshold and action
+python scripts/run_weekly.py --killswitch --killswitch-trigger-ats 0.35 --killswitch-action raise_threshold
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--killswitch` | Off | Enable Phase 1 kill-switch |
+| `--killswitch-action` | `disable_phase1_bets` | Action when triggered: `disable_phase1_bets` or `raise_threshold` |
+| `--killswitch-trigger-ats` | 0.40 | Trigger if Week 1 ATS ≤ this value |
+
+**Actions:**
+- `disable_phase1_bets` — Stop all Phase 1 value plays for Weeks 2-3. Safest option.
+- `raise_threshold` — Increase JP+ edge requirement to 8+ pts. Filters to highest-conviction only.
+
+**Note:** Kill-switch requires `season_results_df` with prior weeks' betting results to evaluate. In backtest, this is handled automatically. For live use, results must be provided externally.
+
 ---
 
 ## Key Design Decisions

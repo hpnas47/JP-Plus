@@ -472,6 +472,52 @@ Historical backtest shows weather provides no ATS improvement (market already pr
 
 ---
 
+## Betting Selection Engine (Phase 1)
+
+Early-season predictions (Weeks 1-3) rely heavily on preseason priors, making JP+ less confident during this "Calibration Phase." The Betting Selection Engine provides two optional risk controls for Phase 1:
+
+### SP+ Agreement Gate
+
+**The Problem:** JP+ edges in Weeks 1-3 are overconfident — the model disagrees with Vegas by 5+ points, but the market is often right because it has access to camp reports, injury news, and sharp money that priors don't capture.
+
+**The Solution:** Cross-reference JP+ picks against SP+ (Bill Connelly's model, available via CFBD API). When both models agree on the same side with meaningful edges, confidence increases significantly.
+
+| SP+ Agreement | Backtest ATS (2022-2025) |
+|---------------|--------------------------|
+| **Confirms** (same side, SP+ edge ≥2 pts) | **60.0%** |
+| Neutral (same side, SP+ edge <2 pts) | 51.2% |
+| **Opposes** (opposite side) | **46.7%** |
+
+**Gating Modes:**
+- `confirm_only` — Only bet when SP+ confirms (highest precision, lowest volume)
+- `veto_opposes` — Bet confirms + neutral, reject opposes (balanced approach)
+
+### Kill-Switch Protection
+
+**The Problem:** Some seasons start catastrophically — 2022 Week 1 had 40% ATS for JP+ Phase 1 picks. Continuing to bet aggressively after a disastrous Week 1 compounds losses.
+
+**The Solution:** After Week 1, evaluate live results. If ATS ≤ 40%, either disable Phase 1 betting entirely or raise the edge threshold to 8+ points for Weeks 2-3.
+
+| Action | Trigger Rate | Pooled ATS Improvement |
+|--------|--------------|------------------------|
+| `disable_phase1_bets` | 1/4 years (2022 only) | +1.5% |
+| `raise_threshold` (to 8+) | 1/4 years (2022 only) | +0.3% |
+
+**Key insight:** The kill-switch only triggered in 2022 — the one year it was needed. In good years (2023-2025), it stays inactive and doesn't reduce profitable betting volume.
+
+### When to Use These Controls
+
+| Scenario | Recommendation |
+|----------|----------------|
+| Week 1 with no live data | SP+ gate (confirm_only) for any bets |
+| Week 2-3 after strong Week 1 | Gate + normal thresholds |
+| Week 2-3 after weak Week 1 (≤40%) | Kill-switch triggers automatically |
+| Core season (Weeks 4+) | Neither — EFM has sufficient data |
+
+*For CLI usage and configuration, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
+
+---
+
 ## Reality Check
 
 Vegas lines are set by professionals with decades of experience and access to information we don't have (injury reports, locker room intel, sharp money). Beating them consistently is hard. The goal is to find spots where JP+ has an edge, not to win every bet.
