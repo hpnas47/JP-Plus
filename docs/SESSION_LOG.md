@@ -4,6 +4,91 @@
 
 ---
 
+## Session: February 12, 2026 (Evening)
+
+### Theme: Phase 1 Spread Shrinkage Research & Implementation
+
+---
+
+#### Phase 1 Diagnostic Analysis
+**Status**: Completed
+
+Comprehensive analysis of Phase 1 (Weeks 1-3) underperformance revealed:
+- **Dual Pathology**: Variance-dominant (Error Std 17.55 vs Core 15.81) with embedded directional bias (MSE +0.90)
+- **Root cause**: SP+ priors comprise 92% of Week 1 signal; model is essentially a "SP+ wrapper" for early season
+- **Edge-to-ATS calibration**: Completely flat — increasing edge provides no improvement in win rate
+
+---
+
+#### Phase 1 Shrinkage Sweep — APPROVED
+**Status**: Committed (`4d28992`)
+**Files**: `scripts/backtest.py`, `CLAUDE.md`, `docs/MODEL_ARCHITECTURE.md`
+
+**Formula**: `NewSpread = (OldSpread - HFA) × Shrinkage + HFA`
+
+**Sweep Results (7 values tested)**:
+
+| Shrinkage | MAE | MSE | ErrStd | 5+ Edge (Close) |
+|-----------|-----|-----|--------|-----------------|
+| 1.00 | 13.95 | +0.90 | 17.54 | 50.4% |
+| **0.90** | **13.95** | **-0.79** | **17.43** | **51.1%** ✓ |
+| 0.85 | 14.03 | -1.64 | 17.45 | 49.6% |
+| 0.80 | 14.17 | -2.49 | 17.51 | 49.8% |
+
+**Optimal**: Shrinkage=0.90 (+0.7% Close, +0.5% Open)
+
+**CLI**: `--phase1-shrinkage 0.90` (default), `--no-phase1-shrinkage` to disable
+
+---
+
+#### Pure Prior Test — REJECTED
+**Status**: Tested, rejected
+
+Hypothesis: Force 100% prior weight for weeks 1-3 to eliminate "small sample noise"
+
+**Results**:
+| Mode | 5+ Edge (Close) | Delta |
+|------|-----------------|-------|
+| Normal Blend + Shrink | 51.1% | baseline |
+| Pure Prior + Shrink | **49.6%** | **-1.5%** ✗ |
+
+**Conclusion**: Early-season blending (5-17% in-season data) is HELPING, not hurting. The noise is in the SP+ priors themselves, not the blending architecture.
+
+---
+
+#### Stacking Interaction Sweep — HFA Offset Variation
+**Status**: Tested, baseline confirmed optimal
+
+Hypothesis: Shrinkage=0.90 creates -0.79 MSE (road bias). Removing HFA penalty might fix it.
+
+**Results**:
+
+| HFA Offset | MSE | 5+ Edge (Close) |
+|------------|-----|-----------------|
+| 0.00 (Restoration) | **-0.31** ✓ | 49.8% ✗ |
+| **0.50 (Baseline)** | -0.79 | **51.1%** ✓ |
+| 1.00 (Hybrid) | -1.27 | 49.5% |
+| 1.50 (Double Down) | -1.74 | 49.5% |
+
+**Key Finding**: MSE/ATS Divergence Pattern confirmed. Improving calibration (MSE→0) makes model MORE like market, which DESTROYS edge. Baseline (0.50) is optimal.
+
+---
+
+#### Phase 1 Research Conclusions
+
+| Experiment | Result | Status |
+|------------|--------|--------|
+| **Shrinkage=0.90** | +0.7% 5+ Edge, fixed 21+ bucket | **APPROVED** |
+| Pure Prior (100%) | -1.5% 5+ Edge | **REJECTED** |
+| HFA Offset stacking | MSE/ATS divergence | **REJECTED** |
+
+**Final Production Config for Phase 1**:
+- Shrinkage: 0.90 (default)
+- HFA Offset: 0.50 (unchanged)
+- Prior blending: Normal (unchanged)
+
+---
+
 ## Session: February 12, 2026
 
 ### Theme: FCS Double-Counting Fix (Historical Backtest Consistency)
