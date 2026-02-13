@@ -1,0 +1,380 @@
+"""Selection engine for calibrated spread betting.
+
+This module provides:
+1. BetRecommendation - full recommendation for a single game
+2. evaluate_game - evaluate a single game for betting
+3. evaluate_slate - evaluate all games in a slate
+
+V2 Features:
+- Push-aware EV calculation
+- Confidence tier assignment (HIGH, MED, BET, PASS, NO_BET)
+- Full metadata for auditability
+"""
+
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from .calibration import (
+    CalibrationResult,
+    PushRates,
+    breakeven_prob,
+    predict_cover_probability,
+    get_push_probability,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BetRecommendation:
+    """Full recommendation for a single game.
+
+    All spreads in Vegas convention (negative = home favored).
+
+    Attributes:
+        game_id: Unique game identifier
+        home_team: Home team name
+        away_team: Away team name
+        jp_spread: JP+ spread in Vegas convention
+        vegas_spread: Vegas spread
+        edge_pts: jp_spread - vegas_spread (negative = JP+ likes home more)
+        edge_abs: Absolute edge in points
+        jp_favored_side: "HOME" or "AWAY" based on edge direction
+
+        p_cover_no_push: P(cover | no push) from logistic calibration
+        p_push: P(push) from push rate lookup
+        p_cover: Unconditional P(cover) = p_cover_no_push * (1 - p_push)
+        p_breakeven: Breakeven probability for juice (e.g., 0.5238 at -110)
+        edge_prob: p_cover - p_breakeven (probability edge)
+        ev: Expected value as fraction of stake
+
+        juice: American odds (e.g., -110)
+        confidence: Tier: "HIGH", "MED", "BET", "PASS", "NO_BET"
+
+        year: Optional year for tracking
+        week: Optional week for tracking
+    """
+
+    game_id: str
+    home_team: str
+    away_team: str
+    jp_spread: float
+    vegas_spread: float
+    edge_pts: float
+    edge_abs: float
+    jp_favored_side: str
+
+    # Probabilities - None for NO_BET games
+    p_cover_no_push: Optional[float]
+    p_push: Optional[float]
+    p_cover: Optional[float]
+    p_breakeven: float
+    edge_prob: Optional[float]
+    ev: Optional[float]
+
+    # Metadata
+    juice: int
+    confidence: str
+
+    # Optional extras
+    year: Optional[int] = None
+    week: Optional[int] = None
+
+    def __repr__(self) -> str:
+        if self.confidence == "NO_BET":
+            return (
+                f"BetRecommendation({self.away_team}@{self.home_team}, "
+                f"NO_BET (edge=0))"
+            )
+        return (
+            f"BetRecommendation({self.away_team}@{self.home_team}, "
+            f"{self.jp_favored_side} by {self.edge_abs:.1f}, "
+            f"p_cover={self.p_cover:.1%}, EV={self.ev:+.3f}, {self.confidence})"
+        )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "game_id": self.game_id,
+            "home_team": self.home_team,
+            "away_team": self.away_team,
+            "jp_spread": self.jp_spread,
+            "vegas_spread": self.vegas_spread,
+            "edge_pts": self.edge_pts,
+            "edge_abs": self.edge_abs,
+            "jp_favored_side": self.jp_favored_side,
+            "p_cover_no_push": self.p_cover_no_push,
+            "p_push": self.p_push,
+            "p_cover": self.p_cover,
+            "p_breakeven": self.p_breakeven,
+            "edge_prob": self.edge_prob,
+            "ev": self.ev,
+            "juice": self.juice,
+            "confidence": self.confidence,
+            "year": self.year,
+            "week": self.week,
+        }
+
+
+def calculate_ev_with_push(
+    p_cover_no_push: float,
+    p_push: float,
+    juice: int = -110,
+) -> float:
+    """Calculate EV with explicit push probability.
+
+    Formula:
+        p_win = p_cover_no_push * (1 - p_push)
+        p_lose = (1 - p_cover_no_push) * (1 - p_push)
+        p_push = p_push (stake returned, 0 profit)
+
+        EV = p_win * payout - p_lose * stake + p_push * 0
+           = p_win * (100/risk) - p_lose * 1
+
+    Example (from spec):
+        p_cover_no_push = 0.55
+        p_push = 0.05
+        juice = -110
+
+        p_win = 0.55 * 0.95 = 0.5225
+        p_lose = 0.45 * 0.95 = 0.4275
+        p_push = 0.05
+
+        EV = 0.5225 * (100/110) - 0.4275 * 1 + 0.05 * 0
+           = 0.475 - 0.4275
+           = 0.0475
+
+    Args:
+        p_cover_no_push: P(cover | no push) from calibration
+        p_push: P(push) from push rate lookup
+        juice: American odds (negative, e.g., -110)
+
+    Returns:
+        EV as fraction of stake
+    """
+    if juice >= 0:
+        raise ValueError(f"Expected negative juice, got {juice}")
+
+    risk = abs(juice)
+    payout = 100 / risk
+
+    p_win = p_cover_no_push * (1 - p_push)
+    p_lose = (1 - p_cover_no_push) * (1 - p_push)
+
+    ev = p_win * payout - p_lose * 1.0
+    return ev
+
+
+def evaluate_game(
+    game: pd.Series,
+    calibration: CalibrationResult,
+    push_rates: Optional[PushRates] = None,
+    min_ev_threshold: float = 0.03,
+    juice: int = -110,
+) -> BetRecommendation:
+    """Evaluate a single game for betting recommendation.
+
+    Args:
+        game: Series with jp_spread, vegas_spread, home_team, away_team, game_id
+        calibration: CalibrationResult from calibrate_cover_probability
+        push_rates: Optional PushRates for push modeling (V2)
+        min_ev_threshold: Minimum EV for BET tier
+        juice: American odds (default: -110)
+
+    Returns:
+        BetRecommendation with all fields populated
+
+    Logic:
+        1. Compute edge_pts, edge_abs, jp_favored_side
+        2. If edge_abs == 0: NO_BET (all prob/EV fields None)
+        3. Determine recommended side from edge sign
+        4. Compute p_cover_no_push from calibration
+        5. Compute p_push from push_rates (0 if None)
+        6. Compute p_cover = p_cover_no_push * (1 - p_push)
+        7. Compute EV using push-aware formula
+        8. Assign confidence tier
+    """
+    # Extract required fields
+    game_id = str(game.get("game_id", ""))
+    home_team = str(game.get("home_team", ""))
+    away_team = str(game.get("away_team", ""))
+    year = game.get("year")
+    week = game.get("week")
+
+    # Get spreads - handle different column names
+    if "jp_spread" in game.index:
+        jp_spread = float(game["jp_spread"])
+    elif "predicted_spread" in game.index:
+        # Internal convention needs flip
+        jp_spread = -float(game["predicted_spread"])
+    else:
+        raise ValueError("Game must have jp_spread or predicted_spread")
+
+    vegas_spread = float(game["vegas_spread"])
+
+    # Compute edge
+    edge_pts = jp_spread - vegas_spread
+    edge_abs = abs(edge_pts)
+    jp_favored_side = "HOME" if edge_pts < 0 else "AWAY"
+
+    # Breakeven probability
+    p_breakeven = breakeven_prob(juice)
+
+    # Handle NO_BET (zero edge)
+    if edge_abs == 0:
+        return BetRecommendation(
+            game_id=game_id,
+            home_team=home_team,
+            away_team=away_team,
+            jp_spread=jp_spread,
+            vegas_spread=vegas_spread,
+            edge_pts=edge_pts,
+            edge_abs=edge_abs,
+            jp_favored_side=jp_favored_side,
+            p_cover_no_push=None,
+            p_push=None,
+            p_cover=None,
+            p_breakeven=p_breakeven,
+            edge_prob=None,
+            ev=None,
+            juice=juice,
+            confidence="NO_BET",
+            year=int(year) if pd.notna(year) else None,
+            week=int(week) if pd.notna(week) else None,
+        )
+
+    # Compute P(cover | no push) from calibration
+    p_cover_no_push = float(predict_cover_probability(
+        np.array([edge_abs]), calibration
+    )[0])
+
+    # Get push probability (0 if no push rates provided)
+    if push_rates is not None:
+        p_push = get_push_probability(vegas_spread, push_rates)
+    else:
+        p_push = 0.0
+
+    # Compute unconditional P(cover)
+    p_cover = p_cover_no_push * (1 - p_push)
+
+    # Compute probability edge
+    edge_prob = p_cover - p_breakeven
+
+    # Compute EV
+    ev = calculate_ev_with_push(p_cover_no_push, p_push, juice)
+
+    # Assign confidence tier
+    if ev >= min_ev_threshold + 0.05:
+        confidence = "HIGH"
+    elif ev >= min_ev_threshold + 0.02:
+        confidence = "MED"
+    elif ev >= min_ev_threshold:
+        confidence = "BET"
+    else:
+        confidence = "PASS"
+
+    return BetRecommendation(
+        game_id=game_id,
+        home_team=home_team,
+        away_team=away_team,
+        jp_spread=jp_spread,
+        vegas_spread=vegas_spread,
+        edge_pts=edge_pts,
+        edge_abs=edge_abs,
+        jp_favored_side=jp_favored_side,
+        p_cover_no_push=p_cover_no_push,
+        p_push=p_push,
+        p_cover=p_cover,
+        p_breakeven=p_breakeven,
+        edge_prob=edge_prob,
+        ev=ev,
+        juice=juice,
+        confidence=confidence,
+        year=int(year) if pd.notna(year) else None,
+        week=int(week) if pd.notna(week) else None,
+    )
+
+
+def evaluate_slate(
+    games: pd.DataFrame,
+    calibration: CalibrationResult,
+    push_rates: Optional[PushRates] = None,
+    min_ev_threshold: float = 0.03,
+    juice: int = -110,
+) -> list[BetRecommendation]:
+    """Evaluate all games in a slate.
+
+    Args:
+        games: DataFrame with required columns for each game
+        calibration: CalibrationResult from calibrate_cover_probability
+        push_rates: Optional PushRates for push modeling
+        min_ev_threshold: Minimum EV for BET tier
+        juice: American odds (default: -110)
+
+    Returns:
+        List sorted by EV descending, PASS/NO_BET at bottom
+    """
+    recommendations = []
+
+    for _, game in games.iterrows():
+        try:
+            rec = evaluate_game(
+                game,
+                calibration,
+                push_rates,
+                min_ev_threshold,
+                juice,
+            )
+            recommendations.append(rec)
+        except Exception as e:
+            logger.warning(f"Failed to evaluate game {game.get('game_id')}: {e}")
+            continue
+
+    # Sort by EV descending, PASS/NO_BET at bottom
+    def sort_key(rec: BetRecommendation) -> tuple:
+        if rec.confidence in ("PASS", "NO_BET"):
+            return (1, 0.0)  # Put at bottom
+        return (0, -(rec.ev or 0))  # Negative EV for descending sort
+
+    recommendations.sort(key=sort_key)
+
+    return recommendations
+
+
+def summarize_slate(recommendations: list[BetRecommendation]) -> dict:
+    """Summarize a slate of recommendations.
+
+    Args:
+        recommendations: List of BetRecommendation objects
+
+    Returns:
+        Dictionary with summary statistics
+    """
+    bets = [r for r in recommendations if r.confidence not in ("PASS", "NO_BET")]
+    passes = [r for r in recommendations if r.confidence == "PASS"]
+    no_bets = [r for r in recommendations if r.confidence == "NO_BET"]
+
+    tier_counts = {
+        "HIGH": len([r for r in bets if r.confidence == "HIGH"]),
+        "MED": len([r for r in bets if r.confidence == "MED"]),
+        "BET": len([r for r in bets if r.confidence == "BET"]),
+        "PASS": len(passes),
+        "NO_BET": len(no_bets),
+    }
+
+    avg_ev = np.mean([r.ev for r in bets]) if bets else 0.0
+    avg_p_cover = np.mean([r.p_cover for r in bets]) if bets else 0.0
+    avg_edge_abs = np.mean([r.edge_abs for r in bets]) if bets else 0.0
+
+    return {
+        "total_games": len(recommendations),
+        "total_bets": len(bets),
+        "tier_counts": tier_counts,
+        "avg_ev": avg_ev,
+        "avg_p_cover": avg_p_cover,
+        "avg_edge_abs": avg_edge_abs,
+    }

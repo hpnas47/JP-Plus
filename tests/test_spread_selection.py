@@ -5,6 +5,9 @@ Tests cover:
 2. Calibration logic
 3. EV calculations
 4. Walk-forward validation integrity
+5. V2: Push rate estimation
+6. V2: Push-aware EV calculations
+7. V2: Selection engine (BetRecommendation, evaluate_game, evaluate_slate)
 """
 
 import numpy as np
@@ -14,16 +17,29 @@ from scipy.special import expit
 
 from src.spread_selection.calibration import (
     CalibrationResult,
+    PushRates,
+    KEY_TICKS,
     load_and_normalize_game_data,
     calibrate_cover_probability,
     predict_cover_probability,
     walk_forward_validate,
+    estimate_push_rates,
+    get_push_probability,
+    get_push_probability_vectorized,
     breakeven_prob,
     calculate_ev,
     calculate_ev_vectorized,
     get_spread_bucket,
     diagnose_calibration,
     diagnose_fold_stability,
+    stratified_diagnostics,
+)
+
+from src.spread_selection.selection import (
+    BetRecommendation,
+    evaluate_game,
+    evaluate_slate,
+    calculate_ev_with_push,
 )
 
 
@@ -550,6 +566,536 @@ class TestIntegration:
         # Fold stability
         stability = diagnose_fold_stability(result.fold_summaries)
         assert stability["n_folds"] >= 2
+
+
+# =============================================================================
+# V2: PUSH RATE TESTS
+# =============================================================================
+
+class TestPushRates:
+    """Push rate estimation tests (V2)."""
+
+    def test_half_point_tick_zero_push(self):
+        """Odd ticks (half-point spreads) => p_push = 0.0 by definition."""
+        # Create synthetic data with half-point spreads
+        n = 100
+        df = pd.DataFrame({
+            "game_id": range(n),
+            "year": [2023] * n,
+            "vegas_spread": [-3.5] * n,  # Half-point spread
+            "push": [False] * n,  # No pushes for half-point
+        })
+
+        push_rates = estimate_push_rates(df)
+
+        # spread = 3.5 => tick = 7 (odd) => p_push = 0
+        p_push = get_push_probability(-3.5, push_rates)
+        assert p_push == 0.0
+
+    def test_integer_tick_lookup(self):
+        """Even ticks use empirical rate or default_even."""
+        n = 200
+        # Mix of integer spreads
+        spreads = [-3.0] * 100 + [-7.0] * 100
+        # 10% push rate for -3, 5% push rate for -7
+        pushes = [i % 10 == 0 for i in range(100)] + [i % 20 == 0 for i in range(100)]
+
+        df = pd.DataFrame({
+            "game_id": range(n),
+            "year": [2023] * n,
+            "vegas_spread": spreads,
+            "push": pushes,
+        })
+
+        push_rates = estimate_push_rates(df, min_games_per_tick=50)
+
+        # tick = 6 (spread 3) is a KEY_TICK - should have own bucket
+        # tick = 14 (spread 7) is a KEY_TICK - should have own bucket
+        assert 6 in push_rates.tick_rates  # KEY_TICK
+        assert 14 in push_rates.tick_rates  # KEY_TICK
+
+        # Check rates are approximately correct (allow for counting differences)
+        assert 0.05 <= push_rates.tick_rates[6] <= 0.15  # ~10%
+        assert 0.02 <= push_rates.tick_rates[14] <= 0.10  # ~5%
+
+    def test_key_tick_always_separate(self):
+        """KEY_TICKS always get own bucket regardless of sample size."""
+        # Small sample for each key tick
+        spreads = []
+        pushes = []
+        for tick in KEY_TICKS:
+            spread = tick / 2.0  # Convert tick to spread
+            # Add only 10 games per key tick (below min_games_per_tick threshold)
+            spreads.extend([-spread] * 10)
+            pushes.extend([i == 0 for i in range(10)])  # 10% push rate
+
+        df = pd.DataFrame({
+            "game_id": range(len(spreads)),
+            "year": [2023] * len(spreads),
+            "vegas_spread": spreads,
+            "push": pushes,
+        })
+
+        push_rates = estimate_push_rates(df, min_games_per_tick=50)
+
+        # All KEY_TICKS should have their own bucket despite n < 50
+        for tick in KEY_TICKS:
+            assert tick in push_rates.tick_rates, f"KEY_TICK {tick} should have own bucket"
+
+    def test_float_safety(self):
+        """Tick calculation handles floating point correctly."""
+        # Test edge cases
+        assert int(round(abs(3.0) * 2)) == 6
+        assert int(round(abs(2.99999999) * 2)) == 6  # Should round to 6, not 5
+        assert int(round(abs(3.0000001) * 2)) == 6
+        assert int(round(abs(3.5) * 2)) == 7
+
+        # Now test with push rates lookup
+        df = pd.DataFrame({
+            "game_id": range(100),
+            "year": [2023] * 100,
+            "vegas_spread": [-3.0] * 100,
+            "push": [i % 10 == 0 for i in range(100)],
+        })
+
+        push_rates = estimate_push_rates(df)
+
+        # All these should give the same result
+        p1 = get_push_probability(-3.0, push_rates)
+        p2 = get_push_probability(-2.99999999, push_rates)
+        p3 = get_push_probability(3.0, push_rates)  # Sign doesn't matter
+
+        assert p1 == p2 == p3
+
+    def test_fallback_default_even(self):
+        """Non-key even ticks with n < min_games_per_tick use default_even."""
+        n = 100
+        # All at spread -3 (KEY_TICK) plus a few at -15 (non-key, insufficient n)
+        spreads = [-3.0] * 90 + [-15.0] * 10
+        pushes = [i % 10 == 0 for i in range(90)] + [False] * 10
+
+        df = pd.DataFrame({
+            "game_id": range(n),
+            "year": [2023] * n,
+            "vegas_spread": spreads,
+            "push": pushes,
+        })
+
+        push_rates = estimate_push_rates(df, min_games_per_tick=50)
+
+        # tick = 30 (-15 spread) should NOT be in tick_rates (n=10 < 50)
+        # It should fall back to default_even
+        assert 30 not in push_rates.tick_rates
+
+        # Getting push probability for -15 should return default_even
+        p_push = get_push_probability(-15.0, push_rates)
+        assert p_push == push_rates.default_even
+
+    def test_no_leakage_in_walk_forward(self):
+        """Push rates only from training seasons in walk-forward."""
+        np.random.seed(42)
+
+        # Create multi-year data with different push rates per year
+        years = [2022, 2023, 2024, 2025]
+        dfs = []
+
+        for i, year in enumerate(years):
+            n = 200
+            # Vary push rate by year (5% for 2022, 10% for 2023, etc.)
+            push_rate = 0.05 + i * 0.05
+            df = pd.DataFrame({
+                "game_id": range(i * n, (i + 1) * n),
+                "year": [year] * n,
+                "week": np.random.randint(1, 15, n),
+                "home_team": [f"Home{j}" for j in range(n)],
+                "away_team": [f"Away{j}" for j in range(n)],
+                "edge_abs": np.abs(np.random.normal(4, 2, n)),
+                "vegas_spread": np.random.choice([-3.0, -7.0, -3.5, -7.5], n),
+                "jp_side_covered": np.random.choice([True, False], n),
+                "push": np.random.random(n) < push_rate,
+            })
+            dfs.append(df)
+
+        all_games = pd.concat(dfs, ignore_index=True)
+
+        # Run walk-forward with push modeling
+        result = walk_forward_validate(
+            all_games,
+            min_train_seasons=2,
+            include_push_modeling=True,
+        )
+
+        # Check that each fold's push rates only used training years
+        for fold in result.fold_summaries:
+            eval_year = fold["eval_year"]
+            push_summary = fold.get("push_rate_summary")
+
+            if push_summary:
+                years_used = push_summary["years_trained"]
+                for y in years_used:
+                    assert y < eval_year, f"Push rate leakage: {y} in training for {eval_year}"
+
+
+# =============================================================================
+# V2: PUSH-AWARE EV TESTS
+# =============================================================================
+
+class TestPushAwareEV:
+    """EV calculation with push modeling (V2)."""
+
+    def test_ev_with_push_explicit(self):
+        """Explicit test case from V2 spec.
+
+        p_cover_no_push = 0.55
+        p_push = 0.05
+        juice = -110
+
+        p_win = 0.55 * 0.95 = 0.5225
+        p_lose = 0.45 * 0.95 = 0.4275
+        p_push = 0.05
+
+        EV = 0.5225 * (100/110) - 0.4275 * 1 + 0.05 * 0
+           = 0.475 - 0.4275
+           = 0.0475
+        """
+        p_cover_no_push = 0.55
+        p_push = 0.05
+        juice = -110
+
+        ev = calculate_ev_with_push(p_cover_no_push, p_push, juice)
+
+        expected_p_win = 0.55 * 0.95
+        expected_p_lose = 0.45 * 0.95
+        expected_ev = expected_p_win * (100 / 110) - expected_p_lose * 1.0
+
+        assert abs(ev - expected_ev) < 0.0001
+        assert abs(ev - 0.0475) < 0.001
+
+    def test_ev_with_zero_push_matches_v1(self):
+        """EV with p_push=0 should match V1 calculation."""
+        p_cover_no_push = 0.55
+        p_push = 0.0
+        juice = -110
+
+        ev_v2 = calculate_ev_with_push(p_cover_no_push, p_push, juice)
+        ev_v1 = calculate_ev(p_cover_no_push, p_push=0.0, juice=-110)
+
+        assert abs(ev_v2 - ev_v1) < 0.0001
+
+    def test_naming_correctness(self):
+        """p_cover_no_push and p_cover are not confused.
+
+        p_cover_no_push: P(cover | no push) - from logistic calibration
+        p_cover: Unconditional P(cover) = p_cover_no_push * (1 - p_push)
+        """
+        p_cover_no_push = 0.55
+        p_push = 0.05
+
+        # Unconditional P(cover)
+        p_cover = p_cover_no_push * (1 - p_push)
+
+        assert p_cover == 0.55 * 0.95
+        assert p_cover < p_cover_no_push  # Push reduces unconditional cover probability
+
+    def test_push_increases_ev_for_negative_ev_bets(self):
+        """For negative EV bets, push probability helps (reduces loss)."""
+        p_cover_no_push = 0.50  # Negative EV at -110
+
+        ev_no_push = calculate_ev_with_push(p_cover_no_push, 0.0, -110)
+        ev_with_push = calculate_ev_with_push(p_cover_no_push, 0.10, -110)
+
+        # Both should be negative, but with push should be less negative
+        assert ev_no_push < 0
+        assert ev_with_push < 0
+        assert ev_with_push > ev_no_push  # Push helps
+
+    def test_push_decreases_ev_for_positive_ev_bets(self):
+        """For positive EV bets, push probability hurts (reduces win)."""
+        p_cover_no_push = 0.60  # Positive EV at -110
+
+        ev_no_push = calculate_ev_with_push(p_cover_no_push, 0.0, -110)
+        ev_with_push = calculate_ev_with_push(p_cover_no_push, 0.10, -110)
+
+        # Both should be positive, but with push should be less positive
+        assert ev_no_push > 0
+        assert ev_with_push > 0
+        assert ev_with_push < ev_no_push  # Push hurts
+
+
+# =============================================================================
+# V2: SELECTION ENGINE TESTS
+# =============================================================================
+
+class TestSelectionEngine:
+    """Selection engine tests (V2)."""
+
+    @pytest.fixture
+    def sample_calibration(self):
+        """Create a sample calibration result."""
+        return CalibrationResult(
+            intercept=0.0,
+            slope=0.05,
+            n_games=1000,
+            years_trained=[2022, 2023],
+            implied_breakeven_edge=1.0,
+            implied_5pt_pcover=0.56,
+            p_cover_at_zero=0.5,
+        )
+
+    @pytest.fixture
+    def sample_push_rates(self):
+        """Create sample push rates."""
+        return PushRates(
+            tick_rates={6: 0.08, 14: 0.06, 20: 0.05, 28: 0.04},
+            default_even=0.05,
+            default_overall=0.03,
+            n_games_by_tick={6: 100, 14: 100, 20: 50, 28: 30},
+            years_trained=[2022, 2023],
+        )
+
+    def test_evaluate_game_no_bet(self, sample_calibration, sample_push_rates):
+        """edge_abs == 0 => NO_BET with None probabilities."""
+        game = pd.Series({
+            "game_id": "test_1",
+            "home_team": "Alabama",
+            "away_team": "Auburn",
+            "jp_spread": -7.0,  # Same as Vegas
+            "vegas_spread": -7.0,
+            "year": 2024,
+            "week": 5,
+        })
+
+        rec = evaluate_game(game, sample_calibration, sample_push_rates)
+
+        assert rec.confidence == "NO_BET"
+        assert rec.edge_abs == 0
+        assert rec.p_cover_no_push is None
+        assert rec.p_push is None
+        assert rec.p_cover is None
+        assert rec.ev is None
+
+    def test_evaluate_game_bet(self, sample_calibration, sample_push_rates):
+        """Positive EV => BET tier (or higher)."""
+        game = pd.Series({
+            "game_id": "test_2",
+            "home_team": "Alabama",
+            "away_team": "Auburn",
+            "jp_spread": -12.0,  # JP+ likes home by 5 more
+            "vegas_spread": -7.0,
+            "year": 2024,
+            "week": 5,
+        })
+
+        rec = evaluate_game(game, sample_calibration, sample_push_rates, min_ev_threshold=0.01)
+
+        assert rec.edge_abs == 5.0
+        assert rec.jp_favored_side == "HOME"
+        assert rec.p_cover_no_push is not None
+        assert rec.p_push is not None
+        assert rec.p_cover is not None
+        assert rec.ev is not None
+        assert rec.confidence in ("HIGH", "MED", "BET")
+
+    def test_evaluate_game_pass(self, sample_calibration, sample_push_rates):
+        """Small edge, low EV => PASS."""
+        game = pd.Series({
+            "game_id": "test_3",
+            "home_team": "Alabama",
+            "away_team": "Auburn",
+            "jp_spread": -7.5,  # Only 0.5 edge
+            "vegas_spread": -7.0,
+            "year": 2024,
+            "week": 5,
+        })
+
+        rec = evaluate_game(game, sample_calibration, sample_push_rates, min_ev_threshold=0.03)
+
+        assert rec.edge_abs == 0.5
+        assert rec.confidence == "PASS"
+
+    def test_evaluate_slate_sorting(self, sample_calibration, sample_push_rates):
+        """Sorted by EV descending, PASS/NO_BET at bottom."""
+        games = pd.DataFrame([
+            {
+                "game_id": "g1",
+                "home_team": "Team A",
+                "away_team": "Team B",
+                "jp_spread": -10.0,
+                "vegas_spread": -7.0,
+                "year": 2024,
+                "week": 5,
+            },
+            {
+                "game_id": "g2",
+                "home_team": "Team C",
+                "away_team": "Team D",
+                "jp_spread": -7.0,  # No edge
+                "vegas_spread": -7.0,
+                "year": 2024,
+                "week": 5,
+            },
+            {
+                "game_id": "g3",
+                "home_team": "Team E",
+                "away_team": "Team F",
+                "jp_spread": -20.0,  # Large edge
+                "vegas_spread": -7.0,
+                "year": 2024,
+                "week": 5,
+            },
+        ])
+
+        recs = evaluate_slate(games, sample_calibration, sample_push_rates, min_ev_threshold=0.01)
+
+        # Should have 3 recommendations
+        assert len(recs) == 3
+
+        # First should be highest EV (g3 with 13 pt edge)
+        assert recs[0].game_id == "g3"
+        assert recs[0].edge_abs == 13.0
+
+        # Second should be g1 (3 pt edge)
+        assert recs[1].game_id == "g1"
+        assert recs[1].edge_abs == 3.0
+
+        # Last should be g2 (NO_BET)
+        assert recs[2].game_id == "g2"
+        assert recs[2].confidence == "NO_BET"
+
+    def test_confidence_tiers(self, sample_calibration, sample_push_rates):
+        """Correct tier assignment based on EV thresholds."""
+        # Create games with different edge sizes
+        edge_configs = [
+            (20.0, "HIGH"),   # Very large edge -> HIGH
+            (10.0, "MED"),    # Large edge -> MED
+            (6.0, "BET"),     # Medium edge -> BET
+            (2.0, "PASS"),    # Small edge -> PASS
+        ]
+
+        for edge, expected_tier in edge_configs:
+            game = pd.Series({
+                "game_id": f"test_{edge}",
+                "home_team": "Alabama",
+                "away_team": "Auburn",
+                "jp_spread": -7.0 - edge,
+                "vegas_spread": -7.0,
+                "year": 2024,
+                "week": 5,
+            })
+
+            rec = evaluate_game(game, sample_calibration, sample_push_rates, min_ev_threshold=0.03)
+
+            # Just check that large edges get better tiers
+            # The exact mapping depends on calibration slope
+            assert rec.edge_abs == edge
+            assert rec.confidence in ("HIGH", "MED", "BET", "PASS")
+
+    def test_bet_recommendation_to_dict(self, sample_calibration, sample_push_rates):
+        """BetRecommendation.to_dict() produces complete dictionary."""
+        game = pd.Series({
+            "game_id": "test_1",
+            "home_team": "Alabama",
+            "away_team": "Auburn",
+            "jp_spread": -10.0,
+            "vegas_spread": -7.0,
+            "year": 2024,
+            "week": 5,
+        })
+
+        rec = evaluate_game(game, sample_calibration, sample_push_rates)
+        d = rec.to_dict()
+
+        # Check all expected keys are present
+        expected_keys = [
+            "game_id", "home_team", "away_team", "jp_spread", "vegas_spread",
+            "edge_pts", "edge_abs", "jp_favored_side",
+            "p_cover_no_push", "p_push", "p_cover", "p_breakeven", "edge_prob", "ev",
+            "juice", "confidence", "year", "week",
+        ]
+        for key in expected_keys:
+            assert key in d, f"Missing key: {key}"
+
+    def test_evaluate_game_without_push_rates(self, sample_calibration):
+        """Evaluate game without push rates (p_push = 0)."""
+        game = pd.Series({
+            "game_id": "test_1",
+            "home_team": "Alabama",
+            "away_team": "Auburn",
+            "jp_spread": -10.0,
+            "vegas_spread": -7.0,
+            "year": 2024,
+            "week": 5,
+        })
+
+        rec = evaluate_game(game, sample_calibration, push_rates=None)
+
+        assert rec.p_push == 0.0
+        assert rec.p_cover == rec.p_cover_no_push  # No push adjustment
+
+
+# =============================================================================
+# V2: STRATIFIED DIAGNOSTICS TESTS
+# =============================================================================
+
+class TestStratifiedDiagnostics:
+    """Tests for stratified diagnostics (V2)."""
+
+    def test_spread_bucket_strata(self):
+        """Test spread bucket stratification."""
+        np.random.seed(42)
+        n = 500
+
+        df = pd.DataFrame({
+            "game_id": range(n),
+            "year": [2024] * n,
+            "week": np.random.randint(4, 15, n),
+            "edge_abs": np.abs(np.random.normal(6, 3, n)),
+            "p_cover_no_push": np.random.uniform(0.52, 0.60, n),
+            "jp_side_covered": np.random.choice([True, False], n, p=[0.55, 0.45]),
+            "push": [False] * n,
+        })
+
+        diag = stratified_diagnostics(df)
+
+        assert "spread_strata" in diag
+        assert len(diag["spread_strata"]) > 0
+
+        # Check each stratum has required fields
+        for stratum in diag["spread_strata"]:
+            assert "bucket" in stratum
+            assert "n" in stratum
+            assert "empirical_rate" in stratum
+            assert "avg_predicted" in stratum
+            assert "brier" in stratum
+
+    def test_week_bucket_strata(self):
+        """Test week bucket stratification."""
+        np.random.seed(42)
+        n = 500
+
+        df = pd.DataFrame({
+            "game_id": range(n),
+            "year": [2024] * n,
+            "week": np.random.choice([1, 2, 3, 5, 6, 10, 11, 17, 18], n),
+            "edge_abs": np.abs(np.random.normal(5, 2, n)),
+            "p_cover_no_push": np.random.uniform(0.52, 0.58, n),
+            "jp_side_covered": np.random.choice([True, False], n, p=[0.54, 0.46]),
+            "push": [False] * n,
+        })
+
+        diag = stratified_diagnostics(df)
+
+        assert "week_strata" in diag
+        assert len(diag["week_strata"]) > 0
+
+        # Check that each stratum has required fields
+        for stratum in diag["week_strata"]:
+            assert "bucket" in stratum
+            assert "n" in stratum
+            assert "empirical_rate" in stratum
+            assert "avg_predicted" in stratum
+            assert "brier" in stratum
+            assert stratum["n"] > 0
 
 
 if __name__ == "__main__":

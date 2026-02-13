@@ -34,6 +34,233 @@ from sklearn.linear_model import LogisticRegression
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# CALIBRATION MODE CONSTANTS
+# ============================================================================
+# Primary mode: ROLLING_2 (most recent 2 seasons) - good volume, solid signal
+# Ultra mode: INCLUDE_ALL (all prior seasons) - low volume, high conviction
+
+CALIBRATION_MODES = {
+    "primary": {
+        "training_window_seasons": 2,
+        "label": "ROLLING_2",
+        "description": "Most recent 2 seasons (realistic volume)",
+        "default_min_ev": 0.03,
+    },
+    "ultra": {
+        "training_window_seasons": None,  # All prior seasons
+        "label": "INCLUDE_ALL",
+        "description": "All prior seasons (high conviction, low volume)",
+        "default_min_ev": 0.05,
+    },
+}
+
+# Default mode for production
+DEFAULT_CALIBRATION_MODE = "primary"
+DEFAULT_TRAINING_WINDOW_SEASONS = CALIBRATION_MODES["primary"]["training_window_seasons"]
+
+# ============================================================================
+# PUSH RATE CONSTANTS (V2)
+# ============================================================================
+# Push rate tick-based keys for float safety
+# tick = int(round(abs(spread) * 2))
+# KEY_TICKS correspond to key integer spreads: 3, 7, 10, 14
+KEY_TICKS = [6, 14, 20, 28]  # spread * 2
+
+
+@dataclass
+class PushRates:
+    """Push rate estimates by tick bucket.
+
+    Ticks are computed as: tick = int(round(abs(spread) * 2))
+    - Odd ticks (half-point spreads like 3.5) => p_push = 0.0 by definition
+    - Even ticks (integer spreads) => use empirical rate or default
+
+    Attributes:
+        tick_rates: tick -> p_push for key ticks and integer ticks with n>=min_games
+        default_even: Fallback for even ticks (integer spreads) with insufficient data
+        default_overall: Overall average push rate (rarely used)
+        n_games_by_tick: Sample size per tick (for diagnostics)
+        years_trained: Years used for estimation (for auditability)
+    """
+
+    tick_rates: dict[int, float]
+    default_even: float
+    default_overall: float
+    n_games_by_tick: dict[int, int]
+    years_trained: list[int]
+
+    def __repr__(self) -> str:
+        key_rates = {t: self.tick_rates.get(t, self.default_even) for t in KEY_TICKS}
+        return (
+            f"PushRates(key_ticks={key_rates}, default_even={self.default_even:.4f}, "
+            f"n_ticks={len(self.tick_rates)}, years={self.years_trained})"
+        )
+
+
+def estimate_push_rates(
+    historical_games: pd.DataFrame,
+    min_games_per_tick: int = 50,
+) -> PushRates:
+    """Estimate push rates from historical games.
+
+    Args:
+        historical_games: DataFrame with vegas_spread, push columns
+        min_games_per_tick: Minimum games to get own bucket (except KEY_TICKS)
+
+    Returns:
+        PushRates with tick-based lookup
+
+    Logic:
+        1. Convert vegas_spread to tick = int(round(abs(spread) * 2))
+        2. Odd ticks (half-point spreads) => p_push = 0.0 by definition
+        3. KEY_TICKS always get own bucket regardless of sample size
+        4. Non-key even ticks with n >= min_games_per_tick get own bucket
+        5. Non-key even ticks with n < min_games_per_tick use default_even
+        6. Compute default_even as weighted avg of all even-tick games
+        7. Compute default_overall as fallback
+    """
+    if "vegas_spread" not in historical_games.columns:
+        raise ValueError("historical_games must have 'vegas_spread' column")
+    if "push" not in historical_games.columns:
+        raise ValueError("historical_games must have 'push' column")
+
+    # Filter to games with valid vegas_spread
+    df = historical_games[historical_games["vegas_spread"].notna()].copy()
+
+    if len(df) == 0:
+        raise ValueError("No games with valid vegas_spread for push rate estimation")
+
+    # Compute tick: int(round(abs(spread) * 2))
+    df["tick"] = (df["vegas_spread"].abs() * 2).round().astype(int)
+
+    # Overall push rate
+    default_overall = df["push"].mean()
+
+    # Even-tick games only (integer spreads that can push)
+    even_mask = df["tick"] % 2 == 0
+    even_df = df[even_mask]
+
+    if len(even_df) > 0:
+        default_even = even_df["push"].mean()
+    else:
+        default_even = default_overall
+
+    # Compute per-tick rates
+    tick_rates = {}
+    n_games_by_tick = {}
+
+    for tick in df["tick"].unique():
+        tick_df = df[df["tick"] == tick]
+        n = len(tick_df)
+        n_games_by_tick[tick] = n
+
+        # Odd ticks (half-point spreads) => p_push = 0.0
+        if tick % 2 == 1:
+            tick_rates[tick] = 0.0
+            continue
+
+        # Even ticks
+        push_rate = tick_df["push"].mean()
+
+        # KEY_TICKS always get own bucket
+        if tick in KEY_TICKS:
+            tick_rates[tick] = push_rate
+        elif n >= min_games_per_tick:
+            tick_rates[tick] = push_rate
+        # else: will use default_even
+
+    # Get years for auditability
+    if "year" in df.columns:
+        years_trained = sorted(df["year"].unique().tolist())
+    else:
+        years_trained = []
+
+    return PushRates(
+        tick_rates=tick_rates,
+        default_even=default_even,
+        default_overall=default_overall,
+        n_games_by_tick=n_games_by_tick,
+        years_trained=years_trained,
+    )
+
+
+def get_push_probability(
+    vegas_spread: float,
+    push_rates: PushRates,
+) -> float:
+    """Get push probability for a given Vegas spread.
+
+    Args:
+        vegas_spread: Vegas spread (any sign, uses abs())
+        push_rates: PushRates from estimate_push_rates
+
+    Returns:
+        p_push: Probability of push for this spread
+
+    Logic:
+        tick = int(round(abs(vegas_spread) * 2))
+        if tick is odd: return 0.0 (half-point spreads can't push)
+        if tick in tick_rates: return tick_rates[tick]
+        else: return default_even (or default_overall if needed)
+    """
+    tick = int(round(abs(vegas_spread) * 2))
+
+    # Odd ticks (half-point spreads) can't push
+    if tick % 2 == 1:
+        return 0.0
+
+    # Look up in tick_rates
+    if tick in push_rates.tick_rates:
+        return push_rates.tick_rates[tick]
+
+    # Fallback to default_even for integer spreads
+    return push_rates.default_even
+
+
+def get_push_probability_vectorized(
+    vegas_spreads: np.ndarray,
+    push_rates: PushRates,
+) -> np.ndarray:
+    """Vectorized push probability lookup.
+
+    Args:
+        vegas_spreads: Array of Vegas spreads
+        push_rates: PushRates from estimate_push_rates
+
+    Returns:
+        Array of p_push values
+    """
+    ticks = np.round(np.abs(vegas_spreads) * 2).astype(int)
+
+    result = np.zeros(len(ticks))
+
+    for i, tick in enumerate(ticks):
+        # Odd ticks can't push
+        if tick % 2 == 1:
+            result[i] = 0.0
+        elif tick in push_rates.tick_rates:
+            result[i] = push_rates.tick_rates[tick]
+        else:
+            result[i] = push_rates.default_even
+
+    return result
+
+
+def get_calibration_label(training_window_seasons: int | None) -> str:
+    """Get human-readable label for calibration mode.
+
+    Args:
+        training_window_seasons: Training window size (None = all prior)
+
+    Returns:
+        Label like "ROLLING_2" or "INCLUDE_ALL"
+    """
+    if training_window_seasons is None:
+        return "INCLUDE_ALL"
+    else:
+        return f"ROLLING_{training_window_seasons}"
+
 
 @dataclass
 class CalibrationResult:
@@ -57,15 +284,24 @@ class CalibrationResult:
 
 @dataclass
 class WalkForwardResult:
-    """Result of walk-forward validation."""
+    """Result of walk-forward validation.
 
-    game_results: pd.DataFrame  # Per-game results with p_cover_no_push
+    V2 additions:
+    - game_results now includes p_push, p_cover (unconditional), ev columns
+    - fold_summaries now includes push_rates info
+    - push_rate_summaries: Per-fold push rate diagnostics
+    """
+
+    game_results: pd.DataFrame  # Per-game results with p_cover_no_push, p_push, p_cover, ev
     fold_summaries: list[dict]  # Per-fold calibration summaries
     overall_brier: float  # Brier score vs actual outcomes
     overall_log_loss: float  # Log loss vs actual outcomes
     brier_vs_constant: float  # Brier score of constant 0.5 baseline
     brier_vs_best_constant: float  # Brier score of best constant (empirical mean)
     brier_skill_score: float  # 1 - Brier_model / Brier_best_constant
+    # V2 additions
+    push_rate_summaries: list[dict] = field(default_factory=list)  # Per-fold push rate diagnostics
+    include_push_modeling: bool = False  # Whether push modeling was used
 
 
 def load_and_normalize_game_data(
@@ -262,6 +498,7 @@ def walk_forward_validate(
     exclude_covid: bool = True,
     exclude_years_from_training: list[int] | None = None,
     training_window_seasons: int | None = None,
+    include_push_modeling: bool = True,
 ) -> WalkForwardResult:
     """Season-level walk-forward calibration.
 
@@ -269,8 +506,9 @@ def walk_forward_validate(
         1. Training: seasons < Y (optionally excluding specified years, optionally windowed)
         2. Filter training: exclude pushes and edge_abs == 0
         3. Fit calibration on training
-        4. Apply to season Y games with edge_abs > 0
-        5. For NO_BET games: p_cover = None
+        4. [V2] Estimate push rates from same training set
+        5. Apply to season Y with push-aware EV
+        6. Track p_cover_no_push, p_push, p_cover, EV
 
     Args:
         all_games: DataFrame with all games (normalized)
@@ -279,8 +517,10 @@ def walk_forward_validate(
         exclude_years_from_training: Years to exclude from training data
             (e.g., [2022] to exclude 2022's negative-slope data)
         training_window_seasons: If set, only use the most recent N seasons
-            prior to evaluation year (e.g., 3 means use Y-3, Y-2, Y-1).
-            If None, use all prior seasons.
+            prior to evaluation year (e.g., 2 means use Y-2, Y-1).
+            If None, use all prior seasons. Default production mode is 2 (ROLLING_2).
+        include_push_modeling: If True (V2 default), estimate push rates and
+            compute push-aware p_cover and EV. If False, use p_push=0.
 
     Returns:
         WalkForwardResult with per-game predictions and diagnostics
@@ -298,20 +538,33 @@ def walk_forward_validate(
 
     results = []
     fold_summaries = []
+    push_rate_summaries = []
 
     for eval_year in eval_years:
         if eval_year < first_eval_year:
             continue
 
         # Training: years strictly before eval_year
+        # Build list of eligible training years (excluding specified exclusions)
+        eligible_train_years = [y for y in years if y < eval_year and y not in exclude_from_train]
+
         if training_window_seasons is not None:
             # Rolling window: only use most recent N seasons
-            eligible_train_years = [y for y in years if y < eval_year and y not in exclude_from_train]
-            window_years = eligible_train_years[-training_window_seasons:]  # Most recent N
+            if len(eligible_train_years) < training_window_seasons:
+                # Guardrail: insufficient data for requested window
+                logger.warning(
+                    f"Fold {eval_year}: Only {len(eligible_train_years)} eligible training years "
+                    f"for window={training_window_seasons}. Using all {len(eligible_train_years)} years."
+                )
+                window_years = eligible_train_years  # Use all available
+            else:
+                window_years = eligible_train_years[-training_window_seasons:]  # Most recent N
             train_mask = all_games["year"].isin(window_years)
+            actual_train_years = window_years
         else:
             # All prior years (excluding specified)
             train_mask = (all_games["year"] < eval_year) & (~all_games["year"].isin(exclude_from_train))
+            actual_train_years = eligible_train_years
 
         train_df = all_games[train_mask]
 
@@ -332,15 +585,62 @@ def walk_forward_validate(
             logger.warning(f"Calibration failed for {eval_year}: {e}")
             continue
 
+        # [V2] Estimate push rates from same training set (no leakage)
+        push_rates = None
+        push_rate_summary = None
+        if include_push_modeling:
+            try:
+                push_rates = estimate_push_rates(train_df, min_games_per_tick=50)
+                push_rate_summary = {
+                    "eval_year": eval_year,
+                    "default_even": push_rates.default_even,
+                    "default_overall": push_rates.default_overall,
+                    "n_ticks": len(push_rates.tick_rates),
+                    "key_tick_rates": {t: push_rates.tick_rates.get(t, push_rates.default_even) for t in KEY_TICKS},
+                    "years_trained": push_rates.years_trained,
+                }
+                push_rate_summaries.append(push_rate_summary)
+            except ValueError as e:
+                logger.warning(f"Push rate estimation failed for {eval_year}: {e}")
+                # Fall back to no push modeling for this fold
+
         # Predict on eval set
         # Only games with edge_abs > 0 and not push get predictions
         bet_mask = (eval_df["edge_abs"] > 0) & (~eval_df["push"])
         eval_df["p_cover_no_push"] = np.nan
+        eval_df["p_push"] = np.nan
+        eval_df["p_cover"] = np.nan
+        eval_df["ev"] = np.nan
 
         if bet_mask.sum() > 0:
             edge_vals = eval_df.loc[bet_mask, "edge_abs"].values
-            p_cover = predict_cover_probability(edge_vals, calibration)
-            eval_df.loc[bet_mask, "p_cover_no_push"] = p_cover
+            p_cover_no_push = predict_cover_probability(edge_vals, calibration)
+            eval_df.loc[bet_mask, "p_cover_no_push"] = p_cover_no_push
+
+            # [V2] Add push probability and push-aware metrics
+            if push_rates is not None:
+                vegas_vals = eval_df.loc[bet_mask, "vegas_spread"].values
+                p_push_vals = get_push_probability_vectorized(vegas_vals, push_rates)
+                eval_df.loc[bet_mask, "p_push"] = p_push_vals
+
+                # Unconditional P(cover) = P(cover | no push) * (1 - p_push)
+                p_cover_vals = p_cover_no_push * (1 - p_push_vals)
+                eval_df.loc[bet_mask, "p_cover"] = p_cover_vals
+
+                # EV with push
+                # EV = P(win) * payout - P(lose) * stake
+                # P(win) = p_cover_no_push * (1 - p_push)
+                # P(lose) = (1 - p_cover_no_push) * (1 - p_push)
+                p_win = p_cover_no_push * (1 - p_push_vals)
+                p_lose = (1 - p_cover_no_push) * (1 - p_push_vals)
+                ev_vals = p_win * (100 / 110) - p_lose
+                eval_df.loc[bet_mask, "ev"] = ev_vals
+            else:
+                # No push modeling - p_push = 0
+                eval_df.loc[bet_mask, "p_push"] = 0.0
+                eval_df.loc[bet_mask, "p_cover"] = p_cover_no_push
+                ev_vals = p_cover_no_push * (100 / 110) - (1 - p_cover_no_push)
+                eval_df.loc[bet_mask, "ev"] = ev_vals
 
         # Add fold metadata
         eval_df["fold_intercept"] = calibration.intercept
@@ -350,7 +650,7 @@ def walk_forward_validate(
 
         results.append(eval_df)
 
-        # Fold summary
+        # Fold summary - include actual training years for auditability
         fold_summaries.append({
             "eval_year": eval_year,
             "n_train": calibration.n_games,
@@ -362,6 +662,10 @@ def walk_forward_validate(
             "implied_5pt_pcover": calibration.implied_5pt_pcover,
             "breakeven_edge": calibration.implied_breakeven_edge,
             "years_trained": calibration.years_trained,
+            "training_years_used": actual_train_years,  # Actual years used for this fold
+            "training_window_seasons": training_window_seasons,  # Config for auditability
+            "push_modeling": include_push_modeling and push_rates is not None,  # V2
+            "push_rate_summary": push_rate_summary,  # V2
         })
 
     if not results:
@@ -408,6 +712,8 @@ def walk_forward_validate(
         brier_vs_constant=brier_vs_constant,
         brier_vs_best_constant=brier_vs_best_constant,
         brier_skill_score=brier_skill_score,
+        push_rate_summaries=push_rate_summaries,
+        include_push_modeling=include_push_modeling,
     )
 
 
@@ -705,3 +1011,197 @@ def diagnose_fold_stability(fold_summaries: list[dict]) -> dict:
         "slope_violations": slope_violations,
         "folds": fold_summaries,
     }
+
+
+def stratified_diagnostics(
+    game_results: pd.DataFrame,
+    vegas_total: Optional[pd.Series] = None,
+) -> dict:
+    """Stratified calibration diagnostics.
+
+    Returns diagnostics stratified by:
+        1. vegas_total terciles (low/med/high) - if vegas_total provided
+        2. abs(vegas_spread) buckets: [0,3), [3,7), [7,10), [10,14), [14,+)
+        3. week buckets: weeks 1-3, 4-8, 9-15, 16+
+
+    Per stratum:
+        - N games
+        - Empirical cover rate
+        - Average predicted p_cover
+        - Brier score
+        - ATS% if bet selected
+
+    Args:
+        game_results: DataFrame with p_cover_no_push, jp_side_covered, edge_abs, week, vegas_spread
+        vegas_total: Optional Series of total lines (for tercile analysis)
+
+    Returns:
+        Dictionary with stratified diagnostics
+    """
+    # Filter to games with predictions (edge > 0, not push)
+    df = game_results[
+        game_results["p_cover_no_push"].notna() & ~game_results["push"]
+    ].copy()
+
+    if len(df) == 0:
+        return {"error": "No games with predictions"}
+
+    result = {
+        "n_games_total": len(df),
+        "spread_strata": [],
+        "week_strata": [],
+        "total_terciles": [],
+    }
+
+    # ----- Spread buckets -----
+    spread_buckets = [
+        ("[0,3)", 0, 3),
+        ("[3,7)", 3, 7),
+        ("[7,10)", 7, 10),
+        ("[10,14)", 10, 14),
+        ("[14,+)", 14, float("inf")),
+    ]
+
+    for label, low, high in spread_buckets:
+        mask = (df["edge_abs"] >= low) & (df["edge_abs"] < high)
+        stratum = df[mask]
+        n = len(stratum)
+
+        if n == 0:
+            continue
+
+        y_true = stratum["jp_side_covered"].astype(int).values
+        y_pred = stratum["p_cover_no_push"].values
+
+        result["spread_strata"].append({
+            "bucket": label,
+            "n": n,
+            "empirical_rate": y_true.mean(),
+            "avg_predicted": y_pred.mean(),
+            "brier": np.mean((y_pred - y_true) ** 2),
+            "wins": int(y_true.sum()),
+            "losses": n - int(y_true.sum()),
+        })
+
+    # ----- Week buckets -----
+    week_buckets = [
+        ("weeks 1-3", 1, 3),
+        ("weeks 4-8", 4, 8),
+        ("weeks 9-15", 9, 15),
+        ("weeks 16+", 16, 100),  # Postseason
+    ]
+
+    for label, low, high in week_buckets:
+        mask = (df["week"] >= low) & (df["week"] <= high)
+        stratum = df[mask]
+        n = len(stratum)
+
+        if n == 0:
+            continue
+
+        y_true = stratum["jp_side_covered"].astype(int).values
+        y_pred = stratum["p_cover_no_push"].values
+
+        result["week_strata"].append({
+            "bucket": label,
+            "n": n,
+            "empirical_rate": y_true.mean(),
+            "avg_predicted": y_pred.mean(),
+            "brier": np.mean((y_pred - y_true) ** 2),
+            "wins": int(y_true.sum()),
+            "losses": n - int(y_true.sum()),
+        })
+
+    # ----- Total terciles (if provided) -----
+    if vegas_total is not None and len(vegas_total) == len(game_results):
+        # Align vegas_total with filtered df
+        df_with_total = df.copy()
+        df_with_total["vegas_total"] = vegas_total.loc[df.index].values
+
+        # Filter to games with valid totals
+        df_with_total = df_with_total[df_with_total["vegas_total"].notna()]
+
+        if len(df_with_total) >= 30:
+            # Compute tercile thresholds
+            t1 = df_with_total["vegas_total"].quantile(0.33)
+            t2 = df_with_total["vegas_total"].quantile(0.67)
+
+            tercile_defs = [
+                ("low (< {:.1f})".format(t1), 0, t1),
+                ("med ({:.1f}-{:.1f})".format(t1, t2), t1, t2),
+                ("high (>= {:.1f})".format(t2), t2, float("inf")),
+            ]
+
+            for label, low, high in tercile_defs:
+                mask = (df_with_total["vegas_total"] >= low) & (df_with_total["vegas_total"] < high)
+                stratum = df_with_total[mask]
+                n = len(stratum)
+
+                if n == 0:
+                    continue
+
+                y_true = stratum["jp_side_covered"].astype(int).values
+                y_pred = stratum["p_cover_no_push"].values
+
+                result["total_terciles"].append({
+                    "bucket": label,
+                    "n": n,
+                    "empirical_rate": y_true.mean(),
+                    "avg_predicted": y_pred.mean(),
+                    "brier": np.mean((y_pred - y_true) ** 2),
+                    "wins": int(y_true.sum()),
+                    "losses": n - int(y_true.sum()),
+                })
+
+    return result
+
+
+def print_stratified_diagnostics(diag: dict) -> None:
+    """Print stratified diagnostics in a readable format.
+
+    Args:
+        diag: Output from stratified_diagnostics()
+    """
+    if "error" in diag:
+        print(f"Error: {diag['error']}")
+        return
+
+    print("\n" + "=" * 80)
+    print("STRATIFIED CALIBRATION DIAGNOSTICS")
+    print("=" * 80)
+    print(f"Total games: {diag['n_games_total']}")
+
+    # Spread strata
+    print("\nSPREAD BUCKETS:")
+    print("-" * 70)
+    print(f"{'Bucket':<12} | {'N':>6} | {'Emp%':>7} | {'Pred%':>7} | {'Brier':>7} | {'W-L':>10}")
+    print("-" * 70)
+    for s in diag["spread_strata"]:
+        wl = f"{s['wins']}-{s['losses']}"
+        print(f"{s['bucket']:<12} | {s['n']:>6} | {s['empirical_rate']*100:>6.1f}% | "
+              f"{s['avg_predicted']*100:>6.1f}% | {s['brier']:>7.4f} | {wl:>10}")
+    print("-" * 70)
+
+    # Week strata
+    print("\nWEEK BUCKETS:")
+    print("-" * 70)
+    print(f"{'Bucket':<12} | {'N':>6} | {'Emp%':>7} | {'Pred%':>7} | {'Brier':>7} | {'W-L':>10}")
+    print("-" * 70)
+    for s in diag["week_strata"]:
+        wl = f"{s['wins']}-{s['losses']}"
+        print(f"{s['bucket']:<12} | {s['n']:>6} | {s['empirical_rate']*100:>6.1f}% | "
+              f"{s['avg_predicted']*100:>6.1f}% | {s['brier']:>7.4f} | {wl:>10}")
+    print("-" * 70)
+
+    # Total terciles (if available)
+    if diag["total_terciles"]:
+        print("\nTOTAL TERCILES:")
+        print("-" * 70)
+        print(f"{'Bucket':<25} | {'N':>6} | {'Emp%':>7} | {'Pred%':>7} | {'Brier':>7}")
+        print("-" * 70)
+        for s in diag["total_terciles"]:
+            print(f"{s['bucket']:<25} | {s['n']:>6} | {s['empirical_rate']*100:>6.1f}% | "
+                  f"{s['avg_predicted']*100:>6.1f}% | {s['brier']:>7.4f}")
+        print("-" * 70)
+
+    print("=" * 80)
