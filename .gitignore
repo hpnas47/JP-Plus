@@ -62,3 +62,4 @@ env/
 # Local API cache
 .cache/
 logs/
+output/
