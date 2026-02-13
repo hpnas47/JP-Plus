@@ -25,60 +25,6 @@ Instead of asking "how many points did they score?", JP+ asks "how efficiently d
 
 ---
 
-## Model Integrity
-
-JP+ V2 was built with rigorous validation discipline. Every feature, weight, and adjustment was tested against **3,445 regular season games across 4 years (2022-2025)** before inclusion.
-
-### Walk-Forward Methodology
-
-The model is **truly walk-forward**: when predicting Week 10, it only sees data from Weeks 1-9. No future information ever leaks into training. This is enforced at the code level with chronology guards that assert `max_training_week < prediction_week`.
-
-This matters because many models accidentally use future data (opponent strength that includes later games, season-end ratings applied retroactively). JP+ can't cheat — every backtest prediction uses only what was knowable at the time.
-
-### The Rejection Pattern
-
-**14 features were tested and rejected** during V2 development because they degraded betting edge despite often improving raw accuracy (MAE). Examples:
-
-| Rejected Feature | Failure Mode |
-|------------------|--------------|
-| Finishing Drives (4 variants) | Already captured by play-level efficiency |
-| Margin-of-Victory calibration | Outcome contamination — made model more like Vegas |
-| Penalty discipline metrics | Market already prices penalties |
-| Time decay (recency weighting) | Weakened opponent-adjustment matrix |
-| ST Empirical Bayes shrinkage | Compressed spreads, killed disagreement with Vegas |
-
-These rejections taught us critical lessons:
-- **Sub-metric redundancy**: Any metric measuring a subset of Success Rate + Explosiveness is already captured
-- **Outcome contamination**: Using game outcomes (wins, MOV) makes the model converge toward market consensus
-- **Market-visible signals**: Information in every box score (penalties, turnovers) is already priced
-
-### Edge Over Accuracy
-
-JP+ optimizes for **betting edge (ATS %), not prediction accuracy (MAE)**. These often conflict:
-
-| Change | MAE Impact | ATS Impact | Decision |
-|--------|------------|------------|----------|
-| ST Shrinkage | -0.05 pts (better) | -0.5% (worse) | **Rejected** |
-| Blended Priors | -0.36 pts (better) | -1.1% (worse) | **Rejected** |
-| HFA Offset | +0.02 pts (worse) | +0.6% (better) | **Approved** |
-
-The insight: Vegas lines are already optimized for accuracy. To find edge, JP+ must **disagree** with Vegas — not converge toward it. Features that improve MAE often do so by making predictions more Vegas-like, which destroys betting value.
-
-### Multi-Year Stability
-
-Every approved feature must improve (or not degrade) performance across **all 4 backtest years**, not just cherry-picked seasons. Single-year improvements that regress in other years indicate overfitting.
-
-**V2 Core Performance (Weeks 4-15):**
-
-| Metric | 2022 | 2023 | 2024 | 2025 | Pooled |
-|--------|------|------|------|------|--------|
-| 5+ Edge (Close) | 52.7% | 55.1% | 55.1% | 56.2% | **55.1%** |
-| 5+ Edge (Open) | 54.1% | 57.6% | 58.8% | 57.8% | **57.0%** |
-
-The model is profitable in every year, not just on average.
-
----
-
 ## What We Measure
 
 ### Efficiency Components
@@ -504,9 +450,9 @@ Historical backtest shows weather provides no ATS improvement (market already pr
 
 ---
 
-## Production Betting Workflow
+## Edge Execution Engine
 
-JP+ provides automated bet selection logic that adapts to timing and season phase.
+JP+ includes an execution layer that optimizes bet selection based on timing, edge size, and season phase. This isn't just a model — it's a complete system for identifying and filtering high-value plays.
 
 ### Edge-Aware Mode (Core Season)
 

@@ -1178,11 +1178,18 @@ python scripts/run_weekly.py --year 2025 --week 10 --use-delta-cache
 | `--qb-out` | None | Teams whose starting QB is out (space-separated) |
 | `--use-delta-cache` | Off | Load historical weeks from Parquet cache, fetch only current week from API |
 
-### Phase 1 Betting Controls (Weeks 1-3 only)
+### Edge Execution Engine
 
-These optional risk controls help manage overconfident early-season predictions. Both are **disabled by default**.
+The Edge Execution Engine optimizes bet selection based on timing, edge size, and season phase:
 
-#### SP+ Agreement Gate
+- **Core Season (Weeks 4-15):** Edge-Aware mode automatically selects Fixed or LSA. See [Edge-Aware Production Mode](#edge-aware-production-mode) above.
+- **Phase 1 (Weeks 1-3):** Optional SP+ gate and kill-switch controls (below).
+
+#### Phase 1 Risk Controls
+
+Optional controls for managing overconfident early-season predictions. Both are **disabled by default**.
+
+##### SP+ Agreement Gate
 
 Cross-references JP+ picks against SP+ predictions to filter overconfident bets.
 
@@ -1213,7 +1220,7 @@ python scripts/run_weekly.py --sp-gate --sp-gate-mode veto_opposes --sp-gate-sp-
 | `confirm_only` | 18.7% | **60.0%** |
 | `veto_opposes` | 67.0% | 52.2% |
 
-#### Kill-Switch Protection
+##### Kill-Switch Protection
 
 Disables or throttles Phase 1 betting after a poor Week 1.
 
