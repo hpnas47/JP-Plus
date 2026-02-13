@@ -4,6 +4,49 @@
 
 ---
 
+## Session: February 13, 2026
+
+### Theme: Codebase Cleanup & Critical Bug Fixes
+
+---
+
+#### Phase 1 Diagnostic Scripts — REMOVED
+**Status**: Deleted (cleanup)
+
+Removed 9 one-off diagnostic scripts created during Phase 1 SP+ gate research:
+- `scripts/phase1_lambda_sweep.py`
+- `scripts/phase1_sp_comparison.py`
+- `scripts/phase1_common_set_analysis.py`
+- `scripts/phase1_strict_common_set.py`
+- `scripts/phase1_sp_agreement_filter.py`
+- `scripts/backtest_phase1_sp_gate.py`
+- `scripts/phase1_2022_anomaly_diagnostics.py`
+- `scripts/backtest_phase1_killswitch.py`
+- `scripts/analyze_sp_divergence.py`
+
+**Retained**: Core reusable modules in `src/predictions/`:
+- `sp_gate.py` — SP+ agreement gating logic (integrated with `run_weekly.py`)
+- `phase1_killswitch.py` — Kill-switch regime protection logic
+
+---
+
+#### Critical Bug Fixes in backtest.py — COMMITTED
+**Status**: Fixed 3 bugs
+
+**Bug 1: LSA Vegas Spread Column Name (CRITICAL - silent data loss)**
+- `"spread"` → `"spread_close"` in LSA training lookup
+- Previous: Vegas spread was ALWAYS None, silently disabling `--lsa-filter-vegas` and `--lsa-weighted-training`
+
+**Bug 2: Parameter Shadowing in Phase 1 Shrinkage (landmine)**
+- Renamed local `hfa_value` → `game_hfa` to avoid shadowing function parameter
+- Prevented potential future bugs from reusing shadowed variable
+
+**Bug 3: Cache Save Gated Behind Non-Empty Plays (logic error)**
+- Moved cache save outside `len(efficiency_plays_df) > 0` check
+- Now caches games data even if plays API fails
+
+---
+
 ## Session: February 12, 2026 (Night)
 
 ### Theme: Postseason Exclusion & Week-Varying Shrinkage Experiment

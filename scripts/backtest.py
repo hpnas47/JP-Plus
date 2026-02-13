@@ -1022,9 +1022,9 @@ def walk_forward_predict(
                     if betting_df is not None and len(betting_df) > 0:
                         game_betting = betting_df.filter(pl.col("game_id") == game["id"])
                         if len(game_betting) > 0:
-                            # Use closing spread (spread column), not opening
-                            if "spread" in game_betting.columns:
-                                vegas_spread = game_betting["spread"][0]
+                            # Use closing spread (spread_close column), not opening
+                            if "spread_close" in game_betting.columns:
+                                vegas_spread = game_betting["spread_close"][0]
 
                     # Add to training data (extended format with weight and vegas)
                     weight = lsa_model._compute_sample_weight(vegas_spread) if lsa_model else 1.0
@@ -1041,9 +1041,9 @@ def walk_forward_predict(
                 # Formula: NewSpread = (OldSpread - HFA) * Shrinkage + HFA
                 # This reduces overconfidence in prior-driven predictions while preserving HFA
                 if phase1_shrinkage < 1.0 and pred_week <= 3:
-                    hfa_value = pred.components.home_field
-                    rating_diff = final_spread - hfa_value
-                    final_spread = rating_diff * phase1_shrinkage + hfa_value
+                    game_hfa = pred.components.home_field
+                    rating_diff = final_spread - game_hfa
+                    final_spread = rating_diff * phase1_shrinkage + game_hfa
 
                 results.append({
                     "game_id": game["id"],  # For reliable Vegas line matching
@@ -2803,16 +2803,17 @@ def fetch_all_season_data(
                         f"{avg_plays_per_game:.0f} plays/game) for {year}"
                     )
 
-            # Save processed season to cache (only if we fetched from API)
-            if effective_use_cache and cached_season is None:
-                season_cache.save_season(
-                    year,
-                    games_df,
-                    betting_df,
-                    efficiency_plays_df,
-                    turnover_plays_df,
-                    st_plays_df,
-                )
+        # Save processed season to cache (only if we fetched from API)
+        # Independent of play count - cache games even if plays API fails
+        if effective_use_cache and cached_season is None and len(games_df) > 0:
+            season_cache.save_season(
+                year,
+                games_df,
+                betting_df,
+                efficiency_plays_df,
+                turnover_plays_df,
+                st_plays_df,
+            )
 
         # Fetch FBS teams for EFM filtering
         fbs_teams_list = client.get_fbs_teams(year)
