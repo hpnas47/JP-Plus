@@ -3761,6 +3761,12 @@ def main():
         help="Output CSV file for predictions",
     )
     parser.add_argument(
+        "--export-ats",
+        type=str,
+        default=None,
+        help="Export ATS results CSV (includes Vegas spreads) for calibration module",
+    )
+    parser.add_argument(
         "--no-priors",
         action="store_true",
         help="Disable preseason priors",
@@ -4433,6 +4439,28 @@ def main():
     if args.output:
         results["predictions"].to_csv(args.output, index=False)
         logger.info(f"Predictions saved to {args.output}")
+
+    # Export ATS results CSV for calibration module
+    if args.export_ats:
+        ats_df = results.get("ats_results")
+        if ats_df is not None and len(ats_df) > 0:
+            # Ensure all required columns are present
+            export_cols = [
+                "game_id", "year", "week", "home_team", "away_team",
+                "predicted_spread", "actual_margin", "spread_open", "spread_close",
+            ]
+            # Add optional columns if present
+            optional_cols = ["vegas_spread", "edge", "pick", "ats_win", "ats_push", "clv"]
+            for col in optional_cols:
+                if col in ats_df.columns:
+                    export_cols.append(col)
+
+            # Filter to available columns only
+            available_cols = [c for c in export_cols if c in ats_df.columns]
+            ats_df[available_cols].to_csv(args.export_ats, index=False)
+            logger.info(f"ATS results saved to {args.export_ats} ({len(ats_df)} games)")
+        else:
+            logger.warning("No ATS results to export")
 
 
 if __name__ == "__main__":
