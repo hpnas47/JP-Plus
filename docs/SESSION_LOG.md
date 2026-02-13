@@ -66,6 +66,24 @@ Removed 9 one-off diagnostic scripts created during Phase 1 SP+ gate research:
 
 ---
 
+#### Additional Bug Fixes in run_selection.py — COMMITTED
+**Status**: Fixed 3 more bugs (`8d274a4`)
+
+**Bug 4: Gate Category Counter Crash in run_predict**
+- Double-if generator expression executed `.iloc[0]` before length guard, causing IndexError
+- Type mismatch: `r.game_id` was int but `slate_pred['game_id']` was string/float from CSV, causing silent zero matches
+- **Fix**: Build set of non-PASS game_ids first (cast to int), then filter gate_results against that set
+
+**Bug 5: run_mode_comparison Still Overwrote EV with p_push=0**
+- Same issue as compare_strategies: `df["ev"] = calculate_ev_vectorized()` discarded push-aware EV
+- **Fix**: Applied same pattern — preserve existing `ev` column if valid, only recompute as fallback
+
+**Bug 6: Sensitivity Report Fold Alignment Still Positional**
+- Same issue as run_mode_comparison: `fold_exc = r_exc["fold_details"][i]` crashed when fold counts differed
+- **Fix**: Build dict keyed by `year`, iterate over intersection of years present in both configs
+
+---
+
 ## Session: February 12, 2026 (Night)
 
 ### Theme: Postseason Exclusion & Week-Varying Shrinkage Experiment
