@@ -50,44 +50,132 @@ logger = logging.getLogger(__name__)
 # First-time HCs should NOT be listed - they get excluded from adjustment entirely.
 # The pedigree score should reflect record BEFORE the hire, not including current job.
 COACH_PEDIGREE = {
-    # Elite tier (1.27 - 1.30): 65%+ win rate with prior HC experience
+    # ==========================================================================
+    # ELITE TIER (1.27 - 1.35): 65%+ win rate, significant P5/NFL HC experience
+    # ==========================================================================
+    "Bill Belichick": 1.35,     # NFL legend (302-163), 6x Super Bowl
     "Brian Kelly": 1.30,        # Notre Dame (113-40) before LSU
     "Lincoln Riley": 1.30,      # Oklahoma (55-10) before USC
     "Luke Fickell": 1.30,       # Cincinnati (57-18) before Wisconsin
     "Lane Kiffin": 1.30,        # FAU, Ole Miss success before LSU
     "Hugh Freeze": 1.27,        # Ole Miss, Liberty before Auburn
-    "Kalen DeBoer": 1.25,       # Fresno State success before Washington/Alabama
+
+    # ==========================================================================
+    # STRONG TIER (1.20 - 1.26): Proven P5/G5 HC success
+    # ==========================================================================
+    "Kalen DeBoer": 1.25,       # Fresno State, Washington success before Alabama
     "Billy Napier": 1.25,       # Louisiana (40-12) before Florida
-    "Mario Cristobal": 1.20,    # Oregon (35-13) before Miami
-
-    # Strong tier (1.20 - 1.25): Proven G5 HC success
     "Curt Cignetti": 1.25,      # JMU dominance (19-4) before Indiana
-    "Jon Sumrall": 1.25,        # Tulane success (32-9) before Florida
-    "Manny Diaz": 1.20,         # Miami experience before Duke
+    "Jon Sumrall": 1.25,        # Tulane (32-9) before Florida
+    "Dan Mullen": 1.25,         # Florida (34-15), Mississippi State (69-46) before UNLV
+    "Sonny Dykes": 1.25,        # TCU (29-16, national runner-up), SMU before TCU
+    "Bronco Mendenhall": 1.22,  # BYU (99-43), Virginia (36-38) before New Mexico
+    "Willie Fritz": 1.22,       # Tulane (55-37), Georgia Southern before Houston
+    "Tom Herman": 1.20,         # Texas (32-18), Houston (22-4) before FAU
+    "Mario Cristobal": 1.20,    # Oregon (35-13) before Miami
+    "Manny Diaz": 1.20,         # Miami (21-15) before Duke
+    "Jeff Brohm": 1.20,         # Purdue (36-34) before Louisville return
     "Ryan Silverfield": 1.21,   # Memphis (42-20) before Arkansas
-    "Jamey Chadwell": 1.21,     # Coastal Carolina before Liberty
-    "Joey McGuire": 1.10,       # Limited HC experience before Texas Tech
+    "Jamey Chadwell": 1.21,     # Coastal Carolina (40-13) before Liberty
+    "Bill O'Brien": 1.20,       # Penn State (29-11), NFL HC before Boston College
 
-    # Above average tier (1.10 - 1.19): Some HC experience
-    "Matt Rhule": 1.15,         # Temple, Baylor before Nebraska
-    "Brent Venables": 1.10,     # First P5 HC job but DC pedigree - borderline
+    # ==========================================================================
+    # ABOVE AVERAGE TIER (1.10 - 1.19): Some HC success, or elite coordinator
+    # ==========================================================================
+    "Barry Odom": 1.18,         # Missouri (25-25), UNLV success before current
+    "Marcus Freeman": 1.15,     # Elite Notre Dame DC, limited HC but elite trajectory
+    "Matt Rhule": 1.15,         # Temple (28-23), Baylor (19-20) before Nebraska
+    "Mike Elko": 1.15,          # Duke (17-18), elite DC pedigree before Texas A&M
+    "Jonathan Smith": 1.15,     # Oregon State (28-34) rebuild before Michigan State
+    "Jim Mora": 1.15,           # UCLA (46-30), NFL HC before UConn
+    "Derek Mason": 1.12,        # Vanderbilt (27-55), elite DC before Middle Tennessee
+    "Ken Niumatalolo": 1.12,    # Navy (109-83), triple-option specialist
+    "Joey McGuire": 1.10,       # Limited HC before Texas Tech, strong recruiter
+    "Brent Venables": 1.10,     # First P5 HC but elite Clemson DC pedigree
+    "Tony Elliott": 1.10,       # Elite Clemson OC before Virginia
+    "Jeff Tedford": 1.08,       # Cal (82-57), Fresno return
+    "Jerry Kill": 1.08,         # Minnesota (29-29), Northern Illinois before NMSU
 
-    # Below average tier: Concerning prior HC record
-    "Jedd Fisch": 0.95,         # Below .500 at Arizona before Washington
+    # ==========================================================================
+    # AVERAGE TIER (1.00 - 1.09): Mixed results or lateral moves
+    # ==========================================================================
+    "Rhett Lashlee": 1.05,      # SMU (29-19), coordinator background
+    "Scott Satterfield": 1.05,  # App State (51-24), struggled at Louisville (25-24)
+    "Ryan Walters": 1.05,       # Illinois DC success before Purdue
+    "G.J. Kinne": 1.05,         # Texas State turnaround before current
+    "Eric Morris": 1.05,        # North Texas, offensive mind
+    "Tim Beck": 1.05,           # Coastal Carolina, coordinator background
+    "Trent Dilfer": 1.05,       # UAB, NFL QB turned coach
+    "Kevin Wilson": 1.05,       # Indiana (26-47), Tulsa after OC stint
+    "Jay Norvell": 1.05,        # Nevada (33-26) before Colorado State
+    "Joe Moorhead": 1.02,       # Mississippi State (14-12) before Akron
+    "Clay Helton": 1.00,        # USC (46-24) before Georgia Southern
+    "Stan Drayton": 1.00,       # First HC at Temple, NFL RB coach
+    "Major Applewhite": 1.00,   # Houston (15-11), OC background
+    "Scotty Walden": 1.00,      # Austin Peay, UTEP
+    "Chad Lunsford": 1.00,      # Georgia Southern (28-21) before FAU
+    "Sean Lewis": 1.00,         # Kent State (24-31) before San Diego State
+    "Tony Sanchez": 0.98,       # UNLV (19-40) before New Mexico State
+
+    # ==========================================================================
+    # BELOW AVERAGE TIER (0.85 - 0.99): Concerning prior HC record
+    # ==========================================================================
+    "Jedd Fisch": 0.95,         # Below .500 at Arizona (16-16) before Washington
+    "Rich Rodriguez": 0.95,     # Michigan (15-22), Arizona (43-35), mixed bag
+    "Scott Frost": 0.85,        # UCF (19-7) but Nebraska disaster (16-31)
     "Jeff Lebby": 0.90,         # Limited/poor HC record
     # Note: First-time HCs go in FIRST_TIME_HCS, not here with pedigree 0
 }
 
 # First-time HCs - explicitly excluded from coaching change adjustment
 # These coaches have no prior HC record, so we have no basis to predict improvement
+# Categories: Internal promotions, first P5 HC jobs, FCS-only backgrounds
 FIRST_TIME_HCS = {
-    "Dan Lanning",      # First HC job at Oregon (2022) - elite DC but no HC record
-    "Deion Sanders",    # No prior FBS HC record before Colorado
-    "Brent Key",        # Internal promotion at Georgia Tech
-    "Kenny Dillingham", # First HC job at Arizona State
-    "Troy Taylor",      # FCS only before Stanford
-    "Sherrone Moore",   # Internal promotion at Michigan
-    "Pete Golding",     # First HC job
+    # 2022 hires
+    "Dan Lanning",          # First HC job at Oregon - elite DC but no HC record
+    "Brent Pry",            # First HC at Virginia Tech - elite DC (Penn State, Clemson)
+    "Jake Dickert",         # Internal promotion at Washington State
+    "Michael Desormeaux",   # First HC at Louisiana - internal promotion
+
+    # 2023 hires
+    "Deion Sanders",        # No prior FBS HC record before Colorado (HBCU only)
+    "Brent Key",            # Internal promotion at Georgia Tech
+    "Kenny Dillingham",     # First HC job at Arizona State
+    "Troy Taylor",          # FCS only (Sacramento State) before Stanford
+    "David Braun",          # Internal promotion at Northwestern
+    "Spencer Danielson",    # Internal promotion at Boise State
+
+    # 2024 hires
+    "Sherrone Moore",       # Internal promotion at Michigan
+    "Deshaun Foster",       # Internal promotion at UCLA - no HC experience
+    "Trent Bray",           # Internal promotion at Oregon State
+    "Fran Brown",           # First HC at Syracuse - elite recruiter, no HC record
+    "Brent Brennan",        # San Jose State (FCS-level results) before Arizona
+    "Pete Kaligis",         # Internal/interim at Washington State
+    "Freddie Kitchens",     # NFL OC, no college HC before North Carolina
+
+    # 2025 hires
+    "Pete Golding",         # First HC job - DC background
+    "Frank Reich",          # NFL HC but no college HC before Stanford
+    "Eddie George",         # Tennessee State (FCS) before Bowling Green
+    "Dowell Loggains",      # First HC at App State - NFL OC background
+    "Blake Harrell",        # Internal promotion at East Carolina
+
+    # Interim coaches (excluded - too short tenure to evaluate)
+    "Jim Leonhard",         # Wisconsin interim (2022)
+    "Cadillac Williams",    # Auburn interim (2022)
+    "Mickey Joseph",        # Nebraska interim (2022)
+    "Elijah Robinson",      # Texas A&M interim (2023)
+    "Nunzio Campanile",     # Syracuse interim (2023)
+    "Greg Knox",            # Mississippi State interim (2023)
+    "Slade Nagle",          # Tulane interim (2023)
+    "Trooper Taylor",       # Duke interim (2023)
+    "Gerad Parker",         # Troy interim (2024)
+    "Reed Stringer",        # Southern Miss interim (2024)
+    "Everett Withers",      # Temple interim (2024)
+    "Chad Scott",           # West Virginia interim (2024)
+    "Jay Sawvel",           # Wyoming interim (2024)
+    "Nate Dreiling",        # Utah State interim (2024)
 }
 
 # Manual coaching change overrides: {year: {team: coach_name}}
