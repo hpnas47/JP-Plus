@@ -80,6 +80,45 @@ All adjustments pass through a smoothing layer to prevent over-prediction when m
 | Phase 1 MAE | 15.33 | 14.00 | -1.33 |
 | Core 5+ Edge | 54.7% | 54.7% | unchanged |
 
+### Credible Rebuild Adjustment
+
+**The Problem:** The model penalizes teams with low Returning Production (RP) — the percentage of last year's statistical production returning. This makes sense: a team losing 93% of their production should regress heavily. But sometimes low-RP teams have legitimate reasons for optimism: elite recruiting classes or strong portal additions that won't show up in RP data.
+
+**The Solution:** Credible Rebuild identifies teams with extremely low RP (≤35%) who have strong talent signals (recruiting or portal), and reduces their regression penalty. This helps calibration in Weeks 1-3 when the efficiency model hasn't yet captured the new roster's quality.
+
+**Qualification Criteria:**
+- Returning Production ≤ 35%
+- AND at least one of:
+  - Talent (recruiting) normalized score ≥ 0.65
+  - Portal normalized score ≥ 0.65
+
+**How It Works:**
+1. **Credibility Score:** Average of talent_norm and portal_norm (0-1 scale)
+2. **Max Relief:** 25% reduction in regression factor (conservative cap)
+3. **Linear Week Taper:** Full relief at Week 1, decreases linearly to 0 by Week 5
+4. **Bounded:** Relief can never make a triggered team better than a team at the RP cutoff
+
+**Trigger Rate by Year:**
+
+| Year | Triggered | Total | Rate | Mean Relief |
+|------|-----------|-------|------|-------------|
+| 2022 | 14 | 234 | 6.0% | +0.31 pts |
+| 2023 | 14 | 239 | 5.9% | +0.18 pts |
+| 2024 | 13 | 135 | 9.6% | +0.24 pts |
+| 2025 | 17 | 137 | 12.4% | +0.34 pts |
+
+**Notable Triggered Teams:**
+- 2022 Ole Miss (RP=3%): +0.97 pts — Lane Kiffin's portal army
+- 2024 Florida State (RP=21%): +0.39 pts — post-CFP exodus
+- 2025 Colorado (RP=7%): +0.35 pts — qualifies on talent despite portal loss
+
+| Metric | Without Rebuild | With Rebuild | Delta |
+|--------|-----------------|--------------|-------|
+| Phase 1 5+ Edge | 50.2% | 50.4% | +0.2% |
+| Core 5+ Edge | 55.1% | 55.1% | unchanged |
+
+The feature is conservative by design: triggers on <15% of teams, applies modest relief, and tapers to zero before Core phase begins.
+
 ### Fixed vs LSA: Two Approaches to Situational Adjustments
 
 JP+ applies situational adjustments (home field, rest, travel, letdown spots, etc.) to modify the base spread. There are two methods for calculating these adjustments:

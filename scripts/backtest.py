@@ -2633,6 +2633,7 @@ def fetch_all_season_data(
     force_refresh: bool = False,
     use_blended_priors: bool = False,
     blend_schedule: Optional[BlendSchedule] = None,
+    credible_rebuild_enabled: bool = True,
 ) -> dict[int, SeasonData]:
     """Fetch and cache all season data for backtest.
 
@@ -2645,6 +2646,7 @@ def fetch_all_season_data(
         force_refresh: If True, bypass cache and force fresh API calls (default False)
         use_blended_priors: Whether to use blended SP+/own-prior system
         blend_schedule: Custom BlendSchedule for blended priors (uses default if None)
+        credible_rebuild_enabled: Whether to apply credible rebuild relief (default True)
 
     Returns:
         Dict mapping year to SeasonData namedtuple with all required DataFrames.
@@ -2841,12 +2843,18 @@ def fetch_all_season_data(
                         logger.warning(
                             "Historical ratings not found, falling back to SP+-only"
                         )
-                        priors = PreseasonPriors(client)
+                        priors = PreseasonPriors(
+                            client,
+                            credible_rebuild_enabled=credible_rebuild_enabled,
+                        )
                         priors.calculate_preseason_ratings(
                             year, use_portal=use_portal, portal_scale=portal_scale
                         )
                 else:
-                    priors = PreseasonPriors(client)
+                    priors = PreseasonPriors(
+                        client,
+                        credible_rebuild_enabled=credible_rebuild_enabled,
+                    )
                     priors.calculate_preseason_ratings(
                         year,
                         use_portal=use_portal,
@@ -3130,6 +3138,8 @@ def run_backtest(
     qb_fix_misattribution: bool = False,
     # Blended prior schedule
     blend_schedule: Optional[BlendSchedule] = None,
+    # Credible Rebuild adjustment
+    credible_rebuild_enabled: bool = True,
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -3145,6 +3155,7 @@ def run_backtest(
         explosiveness_weight: EFM IsoPPP weight (default 0.45)
         turnover_weight: EFM turnover margin weight (default 0.10)
         garbage_time_weight: EFM garbage time play weight (default 0.1)
+        credible_rebuild_enabled: Apply credible rebuild relief for low-RP teams (default True)
         asymmetric_garbage: Only penalize trailing team in garbage time (default True)
         fcs_penalty_elite: Points for elite FCS teams (default 18.0)
         fcs_penalty_standard: Points for standard FCS teams (default 32.0)
@@ -3192,6 +3203,7 @@ def run_backtest(
             force_refresh=force_refresh,
             use_blended_priors=use_blended_priors,
             blend_schedule=blend_schedule,
+            credible_rebuild_enabled=credible_rebuild_enabled,
         )
     else:
         # Shallow copy to avoid mutating caller's dict (sweep reuses cached_data)
@@ -4054,6 +4066,12 @@ def main():
         action="store_true",
         help="Zero out Week 1 QB adjustment for unverified starters. Prevents misattribution of departed QB data.",
     )
+    # Credible Rebuild Adjustment (reduces extra regression for low-RP teams with quality priors)
+    parser.add_argument(
+        "--no-credible-rebuild",
+        action="store_true",
+        help="Disable credible rebuild adjustment (reduced regression for low-RP teams with high talent/portal)",
+    )
     # Dual-Cap Sweep Mode
     parser.add_argument(
         "--sweep-dual-st-cap",
@@ -4131,6 +4149,7 @@ def main():
             use_cache=not args.no_cache,
             force_refresh=args.force_refresh,
             use_blended_priors=args.blended_priors,
+            credible_rebuild_enabled=not args.no_credible_rebuild,
         )
 
         results = run_backtest(
@@ -4209,6 +4228,7 @@ def main():
         use_cache=not args.no_cache,
         force_refresh=args.force_refresh,
         use_blended_priors=args.blended_priors,
+        credible_rebuild_enabled=not args.no_credible_rebuild,
     )
 
     # P3.4: Print data sanity report
@@ -4305,6 +4325,8 @@ def main():
         qb_use_prior_season=not args.no_qb_prior_season,
         qb_phase1_only=args.qb_phase1_only and not args.no_qb_phase1_only,
         qb_fix_misattribution=args.qb_fix_misattribution,
+        # Credible Rebuild adjustment
+        credible_rebuild_enabled=not args.no_credible_rebuild,
     )
 
     # P3.4: Print results with ATS data for sanity report

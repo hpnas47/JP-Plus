@@ -217,6 +217,9 @@ class PreseasonRating:
     coaching_adjustment: float = 0.0  # Rating adjustment from coaching change
     portal_adjustment: float = 0.0  # Transfer portal impact on returning production
     talent_discount: float = 1.0  # Reserved for future per-team talent floor scaling
+    # Credible Rebuild fields (for week-tapered relief in blend_with_inseason)
+    rebuild_credibility: float = 0.0  # 0-1 score based on talent + portal signals
+    rebuild_relief_delta: float = 0.0  # Point gain from reduced regression (applied with week taper)
 
 
 class PreseasonPriors:
@@ -236,6 +239,14 @@ class PreseasonPriors:
         talent_weight: float = 0.4,
         regression_factor: float = 0.3,
         use_talent_decay: bool = True,
+        # Credible Rebuild config (reduces extra regression for low-RP teams with quality priors)
+        credible_rebuild_enabled: bool = True,
+        credible_rebuild_rp_cutoff: float = 0.35,  # Only trigger if RP <= this
+        credible_rebuild_max_relief: float = 0.25,  # Max 25% regression reduction (conservative)
+        credible_rebuild_week_end: int = 5,  # Linear taper to 0 by this week
+        credible_rebuild_talent_threshold: float = 0.65,  # Min talent_norm to qualify
+        credible_rebuild_portal_threshold: float = 0.65,  # Min portal_norm to qualify
+        credible_rebuild_use_coach: bool = False,  # Include coach pedigree (experimental)
     ) -> None:
         """Initialize preseason priors calculator.
 
@@ -246,12 +257,28 @@ class PreseasonPriors:
             regression_factor: How much to regress prior ratings toward mean (0-1)
             use_talent_decay: If True, decay talent_floor_weight from 0.08→0.03 over weeks 0-10.
                 If False, use static talent_floor_weight all season (legacy behavior).
+            credible_rebuild_enabled: Enable credible rebuild adjustment for low-RP teams
+            credible_rebuild_rp_cutoff: RP threshold to consider for rebuild relief (0.35 = 35%)
+            credible_rebuild_max_relief: Maximum regression reduction (0.25 = 25% less regression)
+            credible_rebuild_week_end: Week by which relief tapers to 0 (linear decay, protects Core)
+            credible_rebuild_talent_threshold: Min talent_norm to qualify (0.65 default)
+            credible_rebuild_portal_threshold: Min portal_norm to qualify (0.65 default)
+            credible_rebuild_use_coach: Include coach pedigree in credibility (experimental)
         """
         self.client = client
         self.prior_year_weight = prior_year_weight
         self.talent_weight = talent_weight
         self.regression_factor = regression_factor
         self.use_talent_decay = use_talent_decay
+
+        # Credible Rebuild config
+        self.credible_rebuild_enabled = credible_rebuild_enabled
+        self.credible_rebuild_rp_cutoff = credible_rebuild_rp_cutoff
+        self.credible_rebuild_max_relief = credible_rebuild_max_relief
+        self.credible_rebuild_week_end = credible_rebuild_week_end
+        self.credible_rebuild_talent_threshold = credible_rebuild_talent_threshold
+        self.credible_rebuild_portal_threshold = credible_rebuild_portal_threshold
+        self.credible_rebuild_use_coach = credible_rebuild_use_coach
 
         self.preseason_ratings: dict[str, PreseasonRating] = {}
 
@@ -1056,6 +1083,160 @@ class PreseasonPriors:
 
         return base_regression
 
+    def _compute_credible_rebuild_relief(
+        self,
+        team: str,
+        returning_ppa: Optional[float],
+        talent_normalized: float,
+        portal_impact: float,
+        raw_prior: Optional[float],
+        mean_prior: float,
+        coach_pedigree: Optional[float] = None,
+    ) -> tuple[float, float, float, dict]:
+        """Compute credible rebuild relief for low-RP teams with quality priors.
+
+        For teams with extremely low returning production (RP <= cutoff), if they have
+        high talent and/or strong portal impact, we reduce the extra regression caused
+        by low RP. This prevents overly penalizing credible rebuilds in early weeks.
+
+        The relief reduces regression but is BOUNDED:
+        - reg_new >= reg_cutoff (can't be better than teams at the RP cutoff)
+        - max_relief caps the percentage reduction
+
+        Args:
+            team: Team name (for logging)
+            returning_ppa: Returning production percentage (0-1), or None
+            talent_normalized: Normalized talent score on SP+ scale
+            portal_impact: Net portal impact (positive = gained talent)
+            raw_prior: Raw prior rating (for regression calculation)
+            mean_prior: Mean prior rating
+            coach_pedigree: Optional coach pedigree score (if use_coach enabled)
+
+        Returns:
+            Tuple of (credibility, relief_delta, new_regression, diagnostics_dict)
+            - credibility: 0-1 score based on talent + portal signals
+            - relief_delta: Point gain from reduced regression (0 if not triggered)
+            - new_regression: Adjusted regression factor
+            - diagnostics: Dict with intermediate values for logging
+        """
+        diag = {
+            "triggered": False,
+            "reason": "not_low_rp",
+            "rp": returning_ppa,
+            "talent_raw": talent_normalized,
+            "talent_norm": 0.0,
+            "portal_raw": portal_impact,
+            "portal_norm": 0.0,
+            "credibility": 0.0,
+            "relief": 0.0,
+            "reg_base": 0.0,
+            "reg_cutoff": 0.0,
+            "reg_new": 0.0,
+        }
+
+        # Not enabled or RP above cutoff - no adjustment
+        if not self.credible_rebuild_enabled:
+            diag["reason"] = "disabled"
+            reg_base = self._get_regression_factor(returning_ppa, raw_prior, mean_prior)
+            return 0.0, 0.0, reg_base, diag
+
+        if returning_ppa is None or returning_ppa > self.credible_rebuild_rp_cutoff:
+            reg_base = self._get_regression_factor(returning_ppa, raw_prior, mean_prior)
+            diag["reg_base"] = reg_base
+            diag["reg_new"] = reg_base
+            if returning_ppa is not None and returning_ppa > self.credible_rebuild_rp_cutoff:
+                diag["reason"] = "rp_above_cutoff"
+            return 0.0, 0.0, reg_base, diag
+
+        # RP is low - compute credibility from talent + portal signals
+        diag["reason"] = "low_rp"
+
+        # Compute base regression and regression at cutoff (for clamping)
+        reg_base = self._get_regression_factor(returning_ppa, raw_prior, mean_prior)
+        reg_cutoff = self._get_regression_factor(self.credible_rebuild_rp_cutoff, raw_prior, mean_prior)
+        diag["reg_base"] = reg_base
+        diag["reg_cutoff"] = reg_cutoff
+
+        # Normalize talent to [0, 1] using logistic of z-score
+        # talent_normalized is on SP+ scale (z-score * 12), so divide by 12 to get z-score
+        # Then use logistic: 1 / (1 + exp(-k * z)) with k=2 for reasonable spread
+        # z=0 (average) -> 0.5, z=1.5 (top ~7%) -> 0.95, z=-1.5 -> 0.05
+        talent_z = talent_normalized / 12.0 if talent_normalized else 0.0
+        talent_norm = 1.0 / (1.0 + np.exp(-2.0 * talent_z))
+        diag["talent_norm"] = talent_norm
+
+        # Normalize portal to [0, 1]
+        # portal_impact is already scaled (typically -0.12 to +0.12 after cap)
+        # Map: 0.0 -> 0.5, +0.12 -> 1.0, -0.12 -> 0.0
+        portal_norm = 0.5 + (portal_impact / 0.24) if portal_impact else 0.5
+        portal_norm = max(0.0, min(1.0, portal_norm))
+        diag["portal_norm"] = portal_norm
+
+        # EXPLICIT THRESHOLD CHECK: Must have RP <= cutoff AND (talent >= threshold OR portal >= threshold)
+        # This ensures we only trigger on tail-case teams with real quality signals
+        talent_qualifies = talent_norm >= self.credible_rebuild_talent_threshold
+        portal_qualifies = portal_norm >= self.credible_rebuild_portal_threshold
+
+        if not (talent_qualifies or portal_qualifies):
+            # Team is low-RP but doesn't meet quality thresholds - no relief
+            diag["reason"] = "below_quality_threshold"
+            diag["credibility"] = 0.0
+            diag["reg_new"] = reg_base
+            return 0.0, 0.0, reg_base, diag
+
+        # Compute credibility (0.5 * talent + 0.5 * portal)
+        credibility = 0.5 * talent_norm + 0.5 * portal_norm
+
+        # Optionally incorporate coach pedigree (small tiebreaker)
+        if self.credible_rebuild_use_coach and coach_pedigree is not None and coach_pedigree > 1.0:
+            # Coach adds up to 10% boost to credibility (scaled by pedigree - 1.0)
+            coach_boost = min(0.10, (coach_pedigree - 1.0) * 0.33)
+            credibility = min(1.0, credibility + coach_boost)
+
+        diag["credibility"] = credibility
+        diag["triggered"] = True
+        diag["reason"] = "credible_rebuild"
+
+        # Compute relief: max_relief * credibility
+        # But bound so reg_new >= reg_cutoff (can't be better than cutoff teams)
+        relief = self.credible_rebuild_max_relief * credibility
+        reg_candidate = reg_base * (1 - relief)
+        reg_new = max(reg_candidate, reg_cutoff)
+
+        # STABILITY ASSERTIONS: Ensure no inversion
+        # 1. reg_new must be less than reg_base (we're reducing regression, not increasing)
+        # 2. reg_new must be >= reg_cutoff (can't be better than teams at cutoff)
+        assert reg_new <= reg_base, (
+            f"STABILITY VIOLATION: reg_new ({reg_new:.4f}) > reg_base ({reg_base:.4f}) "
+            f"for {team}. Relief should reduce, not increase regression."
+        )
+        assert reg_new >= reg_cutoff - 1e-9, (
+            f"STABILITY VIOLATION: reg_new ({reg_new:.4f}) < reg_cutoff ({reg_cutoff:.4f}) "
+            f"for {team}. Triggered team can't have better regression than cutoff team."
+        )
+
+        # Actual effective relief after clamping
+        actual_relief = 1 - (reg_new / reg_base) if reg_base > 0 else 0
+        diag["relief"] = actual_relief
+        diag["reg_new"] = reg_new
+
+        # Compute point delta from relief
+        # With regression, rating = raw_prior * (1 - reg) + mean_prior * reg
+        # Delta = (raw_prior - mean_prior) * (reg_base - reg_new)
+        relief_delta = 0.0
+        rating_baseline = 0.0
+        rating_adjusted = 0.0
+        if raw_prior is not None:
+            relief_delta = (raw_prior - mean_prior) * (reg_base - reg_new)
+            # Log rating impact for debugging
+            rating_baseline = raw_prior * (1 - reg_base) + mean_prior * reg_base
+            rating_adjusted = raw_prior * (1 - reg_new) + mean_prior * reg_new
+            diag["rating_baseline"] = rating_baseline
+            diag["rating_adjusted"] = rating_adjusted
+            diag["rating_delta"] = relief_delta
+
+        return credibility, relief_delta, reg_new, diag
+
     def _calculate_coaching_change_weights(
         self,
         team: str,
@@ -1317,23 +1498,48 @@ class PreseasonPriors:
             # Calculate team-specific regression factor based on:
             # 1. RAW returning production (roster continuity — higher = less regression)
             # 2. Distance from mean (farther = less regression — asymmetric)
+            # 3. Credible Rebuild relief for low-RP teams with quality priors
             #
             # IMPORTANT: Use raw ret_ppa here, NOT portal-adjusted.
             # Portal impact is a directional talent change, not a continuity signal.
             # Adding portal talent to a bad team should HELP them (move toward mean),
             # not anchor them to their bad prior by reducing regression.
             # Portal effect is applied as a direct rating adjustment below.
-            team_regression = self._get_regression_factor(
-                ret_ppa,
+            talent_norm_value = talent_normalized.get(team, 0.0)
+
+            # Compute credible rebuild relief (returns adjusted regression factor)
+            # Note: coach_pedigree is passed as None here; use_coach is disabled by default
+            # If enabled in future, this computation would need to move after coach lookup
+            rebuild_cred, rebuild_delta, team_regression, rebuild_diag = self._compute_credible_rebuild_relief(
+                team=team,
+                returning_ppa=ret_ppa,
+                talent_normalized=talent_norm_value,
+                portal_impact=portal_adj,
                 raw_prior=raw_prior,
                 mean_prior=mean_prior,
+                coach_pedigree=None,  # Coach lookup happens later; disabled by default
             )
 
+            # Log triggered credible rebuilds
+            if rebuild_diag["triggered"]:
+                logger.debug(
+                    f"CREDIBLE REBUILD: {team} year={year} "
+                    f"rp={ret_ppa:.1%} reg_base={rebuild_diag['reg_base']:.3f} "
+                    f"reg_new={rebuild_diag['reg_new']:.3f} "
+                    f"talent_norm={rebuild_diag['talent_norm']:.2f} "
+                    f"portal_norm={rebuild_diag['portal_norm']:.2f} "
+                    f"credibility={rebuild_cred:.2f} relief={rebuild_diag['relief']:.1%}"
+                )
+
             # Get prior year rating (regressed toward mean)
+            # NOTE: rebuild_delta is applied in blend_with_inseason with week taper
+            # Here we use the BASE regression (not relieved) for the stored rating
+            # The relief_delta is stored separately and applied with week taper
+            base_regression = self._get_regression_factor(ret_ppa, raw_prior, mean_prior)
             if raw_prior is not None:
                 regressed_prior = (
-                    raw_prior * (1 - team_regression)
-                    + mean_prior * team_regression
+                    raw_prior * (1 - base_regression)
+                    + mean_prior * base_regression
                 )
                 prior_confidence = 0.8
             else:
@@ -1466,6 +1672,8 @@ class PreseasonPriors:
                 coaching_adjustment=coaching_adj,
                 portal_adjustment=portal_adj,
                 talent_discount=1.0,
+                rebuild_credibility=rebuild_cred,
+                rebuild_relief_delta=rebuild_delta,
             )
 
         logger.info(f"Generated preseason ratings for {len(self.preseason_ratings)} teams")
@@ -1487,6 +1695,58 @@ class PreseasonPriors:
                 logger.debug(
                     f"  {team} ({coach}): {direction}{abs(adj):.1f} pts "
                     f"(talent #{t_rank}, perf #{p_rank})"
+                )
+
+        # Log credible rebuild adjustments with comprehensive diagnostics
+        if self.credible_rebuild_enabled:
+            # Count all teams with RP data for trigger rate calculation
+            teams_with_rp = [
+                r for r in self.preseason_ratings.values()
+                if r.returning_ppa is not None
+            ]
+            total_evaluated = len(teams_with_rp)
+
+            # Identify triggered teams (those with non-zero relief)
+            rebuild_teams = [
+                r for r in self.preseason_ratings.values()
+                if r.rebuild_credibility > 0 and r.rebuild_relief_delta > 0.01
+            ]
+            triggered_count = len(rebuild_teams)
+            trigger_rate = triggered_count / total_evaluated if total_evaluated > 0 else 0
+
+            if rebuild_teams:
+                # Compute mean stats for triggered teams
+                mean_rp = sum(r.returning_ppa for r in rebuild_teams) / triggered_count
+                mean_relief = sum(r.rebuild_relief_delta for r in rebuild_teams) / triggered_count
+
+                # Log summary with trigger rate
+                logger.info(
+                    f"Credible Rebuild triggered for {triggered_count}/{total_evaluated} teams "
+                    f"({trigger_rate:.1%}) — RP <= {self.credible_rebuild_rp_cutoff:.0%}, "
+                    f"talent >= {self.credible_rebuild_talent_threshold:.0%} OR portal >= {self.credible_rebuild_portal_threshold:.0%}"
+                )
+                logger.info(
+                    f"  Mean RP: {mean_rp:.1%}, Mean relief: +{mean_relief:.2f} pts"
+                )
+
+                # Warn if trigger rate exceeds 20%
+                if trigger_rate > 0.20:
+                    logger.warning(
+                        f"CREDIBLE REBUILD WARNING: Trigger rate {trigger_rate:.1%} exceeds 20% target. "
+                        f"Consider tightening thresholds (talent={self.credible_rebuild_talent_threshold}, "
+                        f"portal={self.credible_rebuild_portal_threshold})."
+                    )
+
+                # Log individual teams with rating deltas
+                for r in sorted(rebuild_teams, key=lambda x: -x.rebuild_relief_delta):
+                    logger.debug(
+                        f"  {r.team}: RP={r.returning_ppa:.0%}, cred={r.rebuild_credibility:.2f}, "
+                        f"relief=+{r.rebuild_relief_delta:.2f} pts"
+                    )
+            else:
+                logger.debug(
+                    f"Credible Rebuild: 0/{total_evaluated} teams triggered "
+                    f"(no low-RP teams met quality thresholds)"
                 )
 
         return self.preseason_ratings
@@ -1621,17 +1881,32 @@ class PreseasonPriors:
         # Track high-talent outlier impact for diagnostics
         high_talent_reductions = []
 
+        # Credible Rebuild: compute week taper (1.0 at week 0, 0.0 at week_end)
+        # Relief is strongest early season, fades to protect Core phase
+        rebuild_taper = max(0.0, 1.0 - games_played / self.credible_rebuild_week_end)
+        rebuild_applied = []  # Track for diagnostics
+
         for team in all_teams:
             preseason = self.get_preseason_rating(team)
             inseason = inseason_ratings.get(team, 0.0)
 
             # P0.1: Use normalized talent (already on SP+ rating scale) for persistent floor
             talent_rating = 0.0
+            rebuild_delta = 0.0
             if team in self.preseason_ratings:
                 talent_rating = self.preseason_ratings[team].talent_rating_normalized
+                # Apply week-tapered credible rebuild relief
+                if self.credible_rebuild_enabled and rebuild_taper > 0:
+                    rebuild_delta = (
+                        self.preseason_ratings[team].rebuild_relief_delta * rebuild_taper
+                    )
+                    if rebuild_delta > 0.1:  # Only track significant adjustments
+                        rebuild_applied.append((team, rebuild_delta))
 
+            # Apply blended rating with optional rebuild relief
+            # The relief_delta adjusts the preseason component (reduces regression penalty)
             blended[team] = (
-                preseason * prior_weight
+                (preseason + rebuild_delta) * prior_weight
                 + inseason * inseason_weight
                 + talent_rating * effective_talent_weight
             )
@@ -1658,6 +1933,22 @@ class PreseasonPriors:
                     f"(static={talent * talent_floor_weight:.2f} → "
                     f"decayed={talent * effective_talent_weight:.2f})"
                 )
+
+        # Log Credible Rebuild applications (reduced regression for low-RP + quality priors)
+        if rebuild_applied and rebuild_taper > 0:
+            rebuild_applied.sort(key=lambda x: -x[1])  # Sort by relief magnitude
+            logger.debug(
+                f"Credible Rebuild: {len(rebuild_applied)} teams received relief "
+                f"(week {games_played}, taper={rebuild_taper:.2f}):"
+            )
+            for team, delta in rebuild_applied[:10]:
+                pr = self.preseason_ratings.get(team)
+                if pr:
+                    logger.debug(
+                        f"  {team}: +{delta:.2f} pts "
+                        f"(cred={pr.rebuild_credibility:.2f}, "
+                        f"RP={pr.returning_ppa:.2f})"
+                    )
 
         return blended
 
