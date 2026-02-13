@@ -28,12 +28,12 @@ Walk-forward backtest across 4 seasons covering the full CFB calendar (3,657 gam
 
 ### Performance by Season Phase
 
-| Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 5+ Edge (Close) | 5+ Edge (Open) |
-|-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
-| Calibration | 1-3 | 960 | 14.01 | 17.51 | 46.9% | 47.1% | 47.9% | 51.1% | 50.9% |
-| **Core** | **4-15** | **2,485** | **12.51** | **15.82** | **51.7%** | **53.0%** | **53.1%** | **55.1%** | **57.0%** |
-| Postseason | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% | 47.7% | 47.3% | 48.7% |
-| **Full Season** | All | 3,657 | 12.92 | 16.29 | 50.2% | 51.2% | 51.3% | 53.3% | 54.6% |
+| Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
+|-------|-------|-------|-----|------|---------------|--------------|-----------------|----------------|-----------------|----------------|
+| Calibration | 1-3 | 960 | 14.01 | 17.51 | 46.9% | 47.1% | 47.9% | 49.1% | 51.1% | 50.9% |
+| **Core** | **4-15** | **2,485** | **12.51** | **15.82** | **51.7%** | **53.0%** | **53.1%** | **55.4%** | **55.1%** | **57.0%** |
+| Postseason | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% | 47.7% | 47.6% | 47.3% | 48.7% |
+| **Full Season** | All | 3,657 | 12.92 | 16.29 | 50.2% | 51.2% | 51.3% | 53.2% | 53.3% | 54.6% |
 
 **Phase insights:**
 - **Calibration (Weeks 1-3)**: Model relies heavily on preseason priors; ATS underperforms until in-season data accumulates

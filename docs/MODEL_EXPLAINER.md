@@ -294,18 +294,6 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 When measured against opening lines (the price available when bets are placed), CLV is strongly positive (+0.74 at 5+ edge) and monotonically increasing with edge size — meaning the market moves toward JP+'s predictions by closing. This is a classic indicator of real edge.
 
-### Reality Check
-
-Vegas lines are set by professionals with decades of experience and access to information we don't have (injury reports, locker room intel, sharp money). Beating them consistently is hard. The goal is to find spots where JP+ has an edge, not to win every bet.
-
----
-
-## What JP+ Is NOT
-
-- **Not a betting system** — It's a tool for analysis, not guaranteed profits
-- **Not magic** — College football is chaotic; upsets happen
-- **Not complete** — Still being refined and improved
-
 ---
 
 ## 2025 Season Performance
@@ -363,14 +351,6 @@ End-of-season power ratings including all postseason (bowls + CFP through Nation
 **Indiana** — National Champions. Beat Alabama 38-3, Oregon 56-22, and Miami 27-21 in CFP. JP+ #2 overall with the #2 offense in the country. Their championship run validates the explosive offense that JP+ identified all season.
 
 **Spread Calculation:** Team A rating - Team B rating = expected point spread (before game-specific adjustments).
-
----
-
-## Data Sources
-
-- **Play-by-play data:** College Football Data API (collegefootballdata.com)
-- **Historical betting lines (2022-2025):** CFBD API (91% opening line coverage)
-- **Future betting lines (2026+):** The Odds API (opening + closing captures)
 
 ---
 
@@ -516,6 +496,25 @@ Cold turns the ball into a rock (harder to catch and kick).
 ### Backtest Note
 
 Historical backtest shows weather provides no ATS improvement (market already prices it). The edge is in **timing** — acting on Thursday forecasts before the market adjusts totals.
+
+---
+
+## Reality Check
+
+Vegas lines are set by professionals with decades of experience and access to information we don't have (injury reports, locker room intel, sharp money). Beating them consistently is hard. The goal is to find spots where JP+ has an edge, not to win every bet.
+
+**What JP+ is NOT:**
+- **Not a betting system** — It's a tool for analysis, not guaranteed profits
+- **Not magic** — College football is chaotic; upsets happen
+- **Not complete** — Still being refined and improved
+
+---
+
+## Data Sources
+
+- **Play-by-play data:** College Football Data API (collegefootballdata.com)
+- **Historical betting lines (2022-2025):** CFBD API (91% opening line coverage)
+- **Future betting lines (2026+):** The Odds API (opening + closing captures)
 
 ---
 
