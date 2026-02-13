@@ -10,7 +10,8 @@
 - **Market Blindness:** Never use the Vegas line as a training target or feature input. Disagreement with Vegas is the goal, not an error.
 - **Process Over Resume:** Rankings must be derived from Efficiency (Success Rate), not Outcomes (Points/Wins). Exception: Turnover Margin (10%) as regressed modifier.
 - **No Mercy Rule:** Never dampen predicted margins solely to lower MAE in blowouts. We model team capability, not coaching psychology.
-- **Full Season for Final Ratings:** Never generate "Final" Power Ratings from partial data. End-of-season rankings must include postseason (Bowls, CFP).
+- **Regular Season for Metrics:** Backtest metrics use regular season only (weeks 1-15). Postseason excluded due to unmodeled factors: coaching changes, opt-outs, transfer portal, motivation variance.
+- **Full Season for Final Ratings:** End-of-season power ratings include all games through National Championship to capture each team's full body of work.
 
 ## Sign Conventions (Immutable)
 - **Internal (SpreadGenerator):** Positive (+) = Home Team Favored
@@ -60,10 +61,11 @@
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,657 | 12.92 | 16.29 | 50.2% | 51.2% |
 | Phase 1 (Calibration) | 1–3 | 960 | 14.01 | 17.51 | 46.9% | 47.1% |
 | **Phase 2 (Core)** | **4–15** | **2,485** | **12.51** | **15.82** | **51.7%** | **53.0%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% |
+| **Regular Season** | **1–15** | **3,445** | **12.90** | **16.27** | **50.3%** | **51.5%** |
+| 3+ Edge (Regular) | 1–15 | 2,009 | — | — | 51.5% (1034-975) | 53.5% (1095-952) |
+| 5+ Edge (Regular) | 1–15 | 1,305 | — | — | 53.6% (700-605) | 54.9% (743-610) |
 | 3+ Edge (Core) | 4–15 | 1,389 | — | — | 53.1% (737-652) | 55.4% (791-637) |
 | 5+ Edge (Core) | 4–15 | 841 | — | — | 55.1% (463-378) | 57.0% (509-384) |
 
@@ -112,10 +114,9 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
 
 | Slice | Weeks | Games | MAE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 2,127 | 13.07 | 54.1% | 53.6% |
 | Phase 1 (Calibration) | 1–3 | 169 | 12.42 | 57.9% | 55.4% |
 | **Phase 2 (Core)** | **4–15** | **1,824** | **13.09** | **53.9%** | **53.4%** |
-| Phase 3 (Postseason) | 16+ | 134 | 13.57 | 53.2% | 54.8% |
+| **Regular Season** | **1–15** | **1,993** | **13.03** | **54.3%** | **53.6%** |
 | 3+ Edge (Core) | 4–15 | 985 | — | 54.7% (539-446) | 54.2% (528-447) |
 | 5+ Edge (Core) | 4–15 | 613 | — | 54.5% (334-279) | 55.3% (330-267) |
 

@@ -186,12 +186,11 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 
 | Phase | Weeks | Games | MAE | RMSE | ATS % (Close) | ATS % (Open) | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|----------------|-----------------|----------------|
-| Calibration | 1–3 | 960 | 14.00 | 17.60 | 48.6% | 47.5% | 48.9% (301-315) | 49.4% (300-307) | 50.5% (223-219) | 50.6% (226-221) |
-| **Core** | **4–15** | **2,485** | **12.51** | **15.81** | **51.7%** | **53.0%** | **53.4%** (746-650) | **55.6%** (796-636) | **54.7%** (463-383) | **57.2%** (515-386) |
-| Postseason | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% | 47.2% (51-57) | 47.6% (49-54) | 47.3% (35-39) | 48.7% (37-39) |
-| **Full** | **All** | **3,657** | **12.92** | **16.33** | **50.7%** | **51.4%** | **51.8%** (1098-1022) | **53.5%** (1145-997) | **52.9%** (721-641) | **54.6%** (778-646) |
+| Calibration | 1–3 | 960 | 14.01 | 17.51 | 46.9% | 47.1% | 47.9% (297-323) | 49.1% (304-315) | 51.1% (237-227) | 50.9% (234-226) |
+| **Core** | **4–15** | **2,485** | **12.51** | **15.82** | **51.7%** | **53.0%** | **53.1%** (737-652) | **55.4%** (791-637) | **55.1%** (463-378) | **57.0%** (509-384) |
+| **Regular Season** | **1–15** | **3,445** | **12.90** | **16.27** | **50.3%** | **51.5%** | **51.5%** (1034-975) | **53.5%** (1095-952) | **53.6%** (700-605) | **54.9%** (743-610) |
 
-**The profitable zone is Weeks 4-15.** Early-season predictions rely too heavily on preseason priors, and bowl games have unmodeled factors (opt-outs, motivation, long layoffs).
+**The profitable zone is Weeks 4-15 (Core).** Early-season predictions rely too heavily on preseason priors. Postseason (bowls, CFP) is excluded from JP+ metrics — opt-outs, coaching changes, transfer portal, and motivation variance make it essentially a different sport.
 
 #### Core Season ATS by Edge (Weeks 4–15, 2,485 games)
 
@@ -227,15 +226,15 @@ Walk-forward backtest across 4 seasons (3,657 games). Model trained only on data
 
 Opening line performance significantly exceeds closing line, indicating the model captures value that the market prices out by game time.
 
-### MAE & RMSE by Season
+### MAE & RMSE by Season (Regular Season Only)
 
-| Year | Games (Full) | MAE (Full) | RMSE (Full) | MAE (Core) | MAE (Cal) | MAE (Post) |
-|------|-------------|------------|-------------|------------|-----------|------------|
-| 2022 | 896 | 13.27 | 16.82 | 12.67 | 14.96 | 12.86 |
-| 2023 | 910 | 12.80 | 16.23 | 12.48 | 13.06 | 16.10 |
-| 2024 | 918 | 13.12 | 16.38 | 12.66 | 14.97 | 12.04 |
-| 2025 | 933 | 12.50 | 15.86 | 12.25 | 13.09 | 12.71 |
-| **All** | **3,657** | **12.92** | **16.33** | **12.51** | **14.00** | **13.38** |
+| Year | Games | MAE | RMSE | MAE (Core) | MAE (Cal) |
+|------|-------|-----|------|------------|-----------|
+| 2022 | 852 | 13.30 | 16.88 | 12.67 | 14.96 |
+| 2023 | 866 | 12.74 | 16.13 | 12.48 | 13.06 |
+| 2024 | 872 | 13.08 | 16.35 | 12.66 | 14.97 |
+| 2025 | 855 | 12.47 | 15.80 | 12.25 | 13.09 |
+| **All** | **3,445** | **12.90** | **16.27** | **12.51** | **14.01** |
 
 2025 was JP+'s best year by MAE (12.25 Core), improving from 12.67 in 2022. The trend reflects more seasons of data improving prior calibration.
 
@@ -243,7 +242,7 @@ Opening line performance significantly exceeds closing line, indicating the mode
 
 *CLV measures how the market moves after we identify an edge. Positive CLV = the closing line moved toward our prediction, meaning sharp money agrees with us.*
 
-#### Full Season (Weeks 1+, 3,621 games with lines)
+#### Regular Season (Weeks 1-15, 3,445 games)
 
 | Edge Filter | N | Mean CLV (vs Close) | CLV > 0 | ATS % (Close) |
 |-------------|---|-------------------|---------|---------------|
@@ -284,19 +283,18 @@ JP+'s most recent season — best Core MAE (12.25) and solid 5+ Edge performance
 |-------|-------|-------|-----|------|---------------|--------------|-----------------|-----------------|----------------|
 | Calibration | 1-3 | 244 | 13.09 | 16.60 | 51.2% | 49.6% | 86-66 (56.6%) | 67-47 (58.8%) | 65-49 (57.0%) |
 | **Core** | **4-15** | **638** | **12.25** | **15.60** | **51.9%** | **52.5%** | **177-150 (54.1%)** | **100-86 (53.8%)** | **113-89 (55.9%)** |
-| Postseason | 16+ | 46 | 12.71 | 15.62 | 43.5% | 43.5% | 12-15 (44.4%) | 8-8 (50.0%) | 8-6 (57.1%) |
-| **Full Season** | **All** | **933** | **12.50** | **15.86** | **50.8%** | **51.0%** | **275-231 (54.4%)** | **175-141 (55.4%)** | **186-144 (56.4%)** |
+| **Regular Season** | **1-15** | **882** | **12.47** | **15.80** | **51.7%** | **51.7%** | **263-216 (54.9%)** | **167-133 (55.7%)** | **178-138 (56.3%)** |
 
 **2025 highlights:**
 - Calibration phase shows strongest 5+ Edge (58.8% Close, 57.0% Open) — QB Continuous helping early-season predictions
 - Core 5+ Edge solid at 53.8% (Close) and 55.9% (Open)
-- Postseason weakness persists (43.5% ATS) — bowl opt-outs and motivation remain unmodeled
+- Regular Season 5+ Edge: 55.7% (Close), 56.3% (Open)
 
 ---
 
 ## 2025 JP+ Top 25
 
-End-of-season power ratings including all postseason (bowls + CFP through National Championship):
+End-of-season power ratings including all games through the National Championship. Note: Backtest metrics use regular season only (weeks 1-15) due to postseason betting edge degradation, but final ratings include postseason to capture each team's full body of work.
 
 | Rank | Team | Overall | Off (rank) | Def (rank) | ST (rank) |
 |------|------|---------|------------|------------|-----------|
@@ -360,7 +358,7 @@ predicted_total = home_expected + away_expected
 
 ### Totals Model Performance (2023-2025)
 
-*Walk-forward backtest across 3 seasons (2,127 games). 2022 excluded — scoring environment transition year with 49% ATS.*
+*Walk-forward backtest across 3 seasons (1,993 regular season games). 2022 excluded — scoring environment transition year with 49% ATS.*
 
 #### Performance by Phase (vs Closing Line)
 
@@ -368,8 +366,7 @@ predicted_total = home_expected + away_expected
 |-------|-------|-------|-----|-------|---------|---------|
 | Calibration | 1-3 | 169 | 12.42 | 57.9% | 56.7% (59-45) | **61.1%** (44-28) |
 | **Core** | **4-15** | **1,824** | **13.09** | **53.9%** | **54.7%** (539-446) | **54.5%** (334-279) |
-| Postseason | 16+ | 134 | 13.57 | 53.2% | 55.0% (44-36) | 56.5% (26-20) |
-| **Full Season** | **All** | **2,127** | **13.07** | **54.1%** | **54.9%** (642-527) | **55.3%** (404-327) |
+| **Regular Season** | **1-15** | **1,993** | **13.03** | **54.3%** | **54.9%** (598-491) | **55.0%** (378-307) |
 
 #### Performance by Phase (vs Opening Line)
 
@@ -377,8 +374,7 @@ predicted_total = home_expected + away_expected
 |-------|-------|-------|-----|-------|---------|---------|
 | Calibration | 1-3 | 169 | 12.42 | 55.4% | 57.0% (57-43) | **58.7%** (37-26) |
 | **Core** | **4-15** | **1,824** | **13.09** | **53.4%** | **54.2%** (528-447) | **55.3%** (330-267) |
-| Postseason | 16+ | 134 | 13.57 | 54.8% | 55.6% (45-36) | 55.8% (24-19) |
-| **Full Season** | **All** | **2,127** | **13.57** | **53.6%** | **54.5%** (630-526) | **55.6%** (391-312) |
+| **Regular Season** | **1-15** | **1,993** | **13.03** | **53.6%** | **54.4%** (585-490) | **55.6%** (367-293) |
 
 #### Full Season by Year
 
