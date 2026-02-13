@@ -4,6 +4,67 @@
 
 ---
 
+## Session: February 12, 2026 (Night)
+
+### Theme: Postseason Exclusion & Week-Varying Shrinkage Experiment
+
+---
+
+#### Postseason Exclusion from Metrics — COMMITTED
+**Status**: Committed (`25302ec`, `1db6e1f`, `59e10d0`)
+**Files**: `CLAUDE.md`, `docs/MODEL_EXPLAINER.md`, `docs/MODEL_ARCHITECTURE.md`
+
+**Rationale**: Postseason (bowls, CFP) has unmodeled factors that degrade betting edge:
+- Coaching changes mid-cycle
+- Transfer portal activity
+- Player opt-outs
+- Motivation variance
+- 3-4 week layoffs
+
+**Changes**:
+- Backtest metrics now use **Regular Season only (weeks 1-15)**
+- Removed "Full (1-Post)" and "Phase 3 (Postseason)" rows from all performance tables
+- Added "Regular Season" aggregate row (3,445 games for spreads, 1,993 for totals)
+- **Final power ratings STILL include postseason** — captures full body of work for end-of-season rankings
+
+**New Baseline (Regular Season, 2022-2025)**:
+| Metric | Value |
+|--------|-------|
+| Games | 3,445 |
+| MAE | 12.90 |
+| 5+ Edge (Close) | 53.6% (700-605) |
+| 5+ Edge (Open) | 54.9% (743-610) |
+
+---
+
+#### Week-Varying Phase 1 Shrinkage — REJECTED
+**Status**: Tested and reverted
+**Hypothesis**: Model Strategist recommended week-specific shrinkage (W1=0.95, W2=0.90, W3=0.85) based on MSE escalation pattern through Phase 1
+
+**Test Results**:
+| Configuration | 5+ Edge (Close) | 5+ Edge (Open) |
+|---------------|-----------------|----------------|
+| **Baseline (uniform 0.90)** | **50.7%** (237-230) | **51.3%** (235-223) |
+| W1=0.95, W2=0.90, W3=0.85 | 50.2% (233-231) | 51.1% (232-222) |
+| W1=0.88, W2=0.90, W3=0.92 (inverse) | 50.8% (241-233) | 51.0% (235-226) |
+
+**Failure Mode**: Same as documented rejection pattern — highest-conviction bets (5+ pts) already well-calibrated. Week-varying approach improved 3+ Edge (+1.2%) but degraded 5+ Edge (-0.5%).
+
+**Decision**: Uniform 0.90 shrinkage remains optimal. Code reverted.
+
+---
+
+#### Prior Source Analysis (Model Strategist)
+**Status**: Research completed, no action needed
+
+**Question**: Would switching from SP+ to FPI/Sagarin improve Phase 1 edge?
+
+**Finding**: SP+, FPI, and Sagarin are effectively the same signal (r=0.970 between SP+ and FPI). Switching would be "changing the font on a spreadsheet."
+
+**Key insight**: The problem is not WHICH prior, but HOW MUCH to trust ANY prior. The blended priors experiment (Rejection #14) already proved this — using JP+'s own historical ratings as prior resulted in -1.1% 5+ Edge degradation.
+
+---
+
 ## Session: February 12, 2026 (Evening)
 
 ### Theme: Phase 1 Spread Shrinkage Research & Implementation
