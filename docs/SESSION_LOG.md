@@ -47,6 +47,25 @@ Removed 9 one-off diagnostic scripts created during Phase 1 SP+ gate research:
 
 ---
 
+#### Bug Fixes in run_selection.py — COMMITTED
+**Status**: Fixed 3 bugs (`2618a0c`)
+
+**Bug 1: Push Modeling Inconsistency (EV mismatch between pipelines)**
+- `compare_strategies()` was recomputing EV with `p_push=0`, discarding push-aware EV from `walk_forward_validate()`
+- `run_predict()` was computing EV without push rates, causing production/backtest mismatch
+- **Fix**: `compare_strategies()` now preserves existing `ev` column if valid; `run_predict()` now estimates push rates from training data and computes push-aware EV
+- **Impact**: For integer spreads at key numbers (3, 7), push rates are 5-8%, shifting EV by 0.004-0.005
+
+**Bug 2: IndexError in run_mode_comparison Fold Alignment**
+- Loop used positional indexing `r_ult["fold_summaries"][i]`, crashing when modes have different fold counts
+- **Fix**: Align folds by `eval_year` using dict lookup, iterate over intersection of years
+
+**Bug 3: Division by Zero in print_strategy_comparison**
+- `oa['overlap_old_ev3']/oa['old_total']*100` crashes when no games have `edge_abs >= 5.0`
+- **Fix**: Guard with `if oa['old_total'] > 0`, print "N/A" otherwise
+
+---
+
 ## Session: February 12, 2026 (Night)
 
 ### Theme: Postseason Exclusion & Week-Varying Shrinkage Experiment
