@@ -61,6 +61,12 @@ from src.spread_selection.policies.phase1_sp_gate import (
     fetch_sp_spreads_vegas,
     merge_gate_results_to_df,
 )
+from src.spread_selection.strategies.phase1_edge_confirm import (
+    Phase1EdgeConfirmConfig,
+    evaluate_slate_edge_confirm,
+    recommendations_to_dataframe as edge_confirm_to_dataframe,
+    summarize_recommendations as summarize_edge_confirm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -670,10 +676,11 @@ def run_mode_comparison(
             training_window_seasons=config["training_window_seasons"],
         )
 
-        # Calculate EV
+        # Calculate EV (preserve existing if valid, same pattern as compare_strategies)
         df = wf_result.game_results.copy()
         df = df[df["p_cover_no_push"].notna() & ~df["push"]]
-        df["ev"] = calculate_ev_vectorized(df["p_cover_no_push"].values)
+        if "ev" not in df.columns or df["ev"].isna().all():
+            df["ev"] = calculate_ev_vectorized(df["p_cover_no_push"].values)
 
         # Compute aggregate metrics
         avg_slope = np.mean([f["slope"] for f in wf_result.fold_summaries])
@@ -971,9 +978,15 @@ def run_sensitivity_report(
     print("|           | N Train | Slope    | N Train | Slope    |")
     print("|-----------|---------|----------|---------|----------|")
 
-    for i, fold_inc in enumerate(r_inc["fold_details"]):
-        fold_exc = r_exc["fold_details"][i]
-        print(f"| {fold_inc['year']:>9} | {fold_inc['n_train']:>7} | {fold_inc['slope']:.6f} | "
+    # Align folds by eval year instead of positional index
+    inc_folds_by_year = {f["year"]: f for f in r_inc["fold_details"]}
+    exc_folds_by_year = {f["year"]: f for f in r_exc["fold_details"]}
+    common_years = sorted(set(inc_folds_by_year.keys()) & set(exc_folds_by_year.keys()))
+
+    for eval_year in common_years:
+        fold_inc = inc_folds_by_year[eval_year]
+        fold_exc = exc_folds_by_year[eval_year]
+        print(f"| {eval_year:>9} | {fold_inc['n_train']:>7} | {fold_inc['slope']:.6f} | "
               f"{fold_exc['n_train']:>7} | {fold_exc['slope']:.6f} |")
 
     # Strategy comparison
@@ -1039,12 +1052,18 @@ def run_predict(
     week: Optional[int] = None,
     output_dir: str = "data/spread_selection/outputs",
     sp_gate_config: Optional[Phase1SPGateConfig] = None,
+    edge_confirm_config: Optional[Phase1EdgeConfirmConfig] = None,
 ) -> None:
     """Generate predictions for upcoming games.
 
-    Emits separate bet lists for each requested mode:
-    - PRIMARY (ROLLING_2): Realistic volume, training_window_seasons=2
-    - ULTRA (INCLUDE_ALL): High conviction, training_window_seasons=None
+    Emits TWO separate bet lists:
+    - LIST A (PRIMARY/ULTRA): EV-based recommendations from calibrated selection engine
+    - LIST B (PHASE1_EDGE_CONFIRM): Edge-based Phase 1 with SP+ confirm gate (if enabled)
+
+    LIST B is SEPARATE from LIST A and does NOT use EV-based selection.
+    Based on diagnostic findings (2026-02-13):
+    - Edge-based selection shows expected pattern: confirm (62.2%) > oppose (56.9%)
+    - EV-based Phase 1 volume is too small (N=27) and gating destroys it (N=2)
 
     Args:
         slate_csv: Path to CSV with upcoming slate
@@ -1055,20 +1074,26 @@ def run_predict(
         year: Year for predictions (default: infer from slate)
         week: Week for predictions (default: infer from slate)
         output_dir: Output directory for prediction files
-        sp_gate_config: Optional Phase 1 SP+ gate configuration (default OFF)
+        sp_gate_config: Optional Phase 1 SP+ gate for EV-based selection (default OFF)
+        edge_confirm_config: Optional Phase 1 Edge+Confirm strategy config (LIST B, default OFF)
     """
     from scipy.special import expit
 
     print(f"\n{'=' * 80}")
     print("SPREAD SELECTION PREDICTION")
     print("=" * 80)
-    print(f"Modes: {', '.join(emit_modes)}")
+    print(f"LIST A Modes: {', '.join(emit_modes)}")
     print(f"PRIMARY min EV: {primary_min_ev:.2f}")
     print(f"ULTRA min EV:   {ultra_min_ev:.2f}")
     if sp_gate_config and sp_gate_config.enabled:
-        print(f"SP+ Gate: ENABLED (mode={sp_gate_config.mode}, weeks={sp_gate_config.weeks})")
+        print(f"SP+ Gate (LIST A): ENABLED (mode={sp_gate_config.mode}, weeks={sp_gate_config.weeks})")
     else:
-        print(f"SP+ Gate: DISABLED")
+        print(f"SP+ Gate (LIST A): DISABLED")
+    if edge_confirm_config and edge_confirm_config.enabled:
+        print(f"LIST B (PHASE1_EDGE_CONFIRM): ENABLED (jp_edge>={edge_confirm_config.jp_edge_min}, "
+              f"sp_edge>={edge_confirm_config.sp_edge_min})")
+    else:
+        print(f"LIST B (PHASE1_EDGE_CONFIRM): DISABLED")
     print("=" * 80)
 
     # Create output directory
@@ -1327,9 +1352,15 @@ def run_predict(
             # Log category breakdown
             if gate_results:
                 from collections import Counter
-                cats = Counter(r.category.value for r in gate_results if
-                               slate_pred[slate_pred['game_id'] == r.game_id]['tier'].iloc[0] != "PASS"
-                               if len(slate_pred[slate_pred['game_id'] == r.game_id]) > 0)
+                # Build set of non-PASS game_ids with consistent type (int)
+                non_pass_game_ids = set(
+                    int(gid) for gid in slate_pred[slate_pred["tier"] != "PASS"]["game_id"]
+                )
+                # Count categories only for gate results whose game_id is in the non-PASS set
+                cats = Counter(
+                    r.category.value for r in gate_results
+                    if r.game_id in non_pass_game_ids
+                )
                 if cats:
                     print(f"    Categories: {dict(cats)}")
         else:
@@ -1425,6 +1456,176 @@ def run_predict(
                     f"{row['edge_abs']:>5.1f}p | {row['p_cover_no_push']:>5.1%} | "
                     f"{row['ev']:>+5.2f} | {row['tier']:<5}"
                 )
+
+    # =========================================================================
+    # LIST B: PHASE1_EDGE_CONFIRM (Edge-based with SP+ confirmation)
+    # This is SEPARATE from LIST A (EV-based) and does NOT use EV selection
+    # =========================================================================
+    if edge_confirm_config and edge_confirm_config.enabled and week in edge_confirm_config.weeks:
+        print(f"\n{'=' * 80}")
+        print("LIST B: PHASE1_EDGE_CONFIRM STRATEGY")
+        print("=" * 80)
+        print(f"Selection: |edge| >= {edge_confirm_config.jp_edge_min} + SP+ confirm (edge >= {edge_confirm_config.sp_edge_min})")
+        print(f"Missing SP+: {edge_confirm_config.missing_sp_behavior}")
+        print("=" * 80)
+
+        # Fetch SP+ spreads for this week (if not already fetched)
+        try:
+            from src.api.cfbd_client import CFBDClient
+            client = CFBDClient()
+            list_b_sp_spreads = fetch_sp_spreads_vegas(client, year, [week])
+            print(f"  Fetched {len(list_b_sp_spreads)} SP+ spreads for week {week}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch SP+ spreads for LIST B: {e}")
+            list_b_sp_spreads = {}
+
+        # Prepare slate for edge+confirm evaluation
+        # Need: game_id, season, week, home_team, away_team, jp_spread, vegas_spread
+        list_b_slate = slate_df.copy()
+        if "season" not in list_b_slate.columns:
+            list_b_slate["season"] = year
+
+        # Run edge+confirm evaluation
+        selected_recs, all_recs = evaluate_slate_edge_confirm(
+            list_b_slate,
+            list_b_sp_spreads,
+            edge_confirm_config,
+        )
+
+        print(f"\n  Results (PHASE1_EDGE_CONFIRM):")
+        print(f"    Candidates (|edge| >= {edge_confirm_config.jp_edge_min}): {len(all_recs)}")
+        print(f"    Selected (SP+ confirms): {len(selected_recs)}")
+
+        # Convert to DataFrame and save
+        if selected_recs:
+            list_b_df = edge_confirm_to_dataframe(selected_recs)
+
+            # Write LIST B outputs
+            list_b_csv_path = output_path / f"bets_phase1_edge_confirm_{year}_week{week}.csv"
+            list_b_df.to_csv(list_b_csv_path, index=False)
+            print(f"  Wrote: {list_b_csv_path}")
+
+            list_b_json_path = output_path / f"bets_phase1_edge_confirm_{year}_week{week}.json"
+            list_b_json = {
+                "metadata": {
+                    "strategy": "PHASE1_EDGE_CONFIRM",
+                    "selection_basis": "EDGE",
+                    "jp_edge_min": edge_confirm_config.jp_edge_min,
+                    "sp_edge_min": edge_confirm_config.sp_edge_min,
+                    "missing_sp_behavior": edge_confirm_config.missing_sp_behavior,
+                    "year": year,
+                    "week": week,
+                    "n_candidates": len(all_recs),
+                    "n_selected": len(selected_recs),
+                    "n_sp_spreads_fetched": len(list_b_sp_spreads),
+                    "generated_at": datetime.now().isoformat(),
+                },
+                "bets": list_b_df.to_dict(orient="records"),
+            }
+            with open(list_b_json_path, "w") as f:
+                json.dump(list_b_json, f, indent=2, default=str)
+            print(f"  Wrote: {list_b_json_path}")
+
+            # Print bet summary
+            print(f"\n  TOP BETS (PHASE1_EDGE_CONFIRM):")
+            print(f"  {'-' * 70}")
+            print(f"  {'Game':<40} | {'Side':<6} | {'Edge':>7} | {'SP+ Edge':>8}")
+            print(f"  {'-' * 70}")
+            for rec in selected_recs[:10]:
+                game = f"{rec.away_team} @ {rec.home_team}"
+                if len(game) > 38:
+                    game = game[:35] + "..."
+                sp_edge_str = f"{rec.sp_edge_pts:+.1f}" if rec.sp_edge_pts is not None else "N/A"
+                print(f"  {game:<40} | {rec.bet_side:<6} | {rec.edge_pts:>+6.1f}p | {sp_edge_str:>8}")
+        else:
+            print(f"\n  No games selected for LIST B (no SP+ confirms)")
+
+    elif edge_confirm_config and edge_confirm_config.enabled:
+        print(f"\n  LIST B: Week {week} not in Phase 1 weeks {edge_confirm_config.weeks}, skipping")
+
+    # =========================================================================
+    # OVERLAP/CONFLICT REPORT (when both List A and List B are generated)
+    # =========================================================================
+    if (edge_confirm_config and edge_confirm_config.enabled and
+        week in edge_confirm_config.weeks and
+        'bets' in dir() and len(bets) > 0 and
+        'selected_recs' in dir() and len(selected_recs) > 0):
+
+        print(f"\n{'=' * 80}")
+        print("LIST A vs LIST B OVERLAP/CONFLICT REPORT")
+        print("=" * 80)
+
+        # Build overlap DataFrame
+        # List A: bets DataFrame with game_id, jp_favored_side, ev
+        lista_games = set(bets['game_id'].values)
+        lista_sides = {int(row['game_id']): row['jp_favored_side'] for _, row in bets.iterrows()}
+        lista_evs = {int(row['game_id']): row['ev'] for _, row in bets.iterrows()}
+
+        # List B: selected_recs with game_id, bet_side
+        listb_games = {rec.game_id for rec in selected_recs}
+        listb_sides = {rec.game_id: rec.bet_side for rec in selected_recs}
+        listb_edges = {rec.game_id: rec.edge_abs for rec in selected_recs}
+
+        # Build overlap records
+        all_games = lista_games | listb_games
+        overlap_records = []
+
+        for game_id in all_games:
+            in_a = game_id in lista_games
+            in_b = game_id in listb_games
+            side_a = lista_sides.get(game_id)
+            side_b = listb_sides.get(game_id)
+            ev_a = lista_evs.get(game_id)
+            edge_b = listb_edges.get(game_id)
+
+            # Determine agreement/conflict
+            if in_a and in_b:
+                agrees = side_a == side_b
+                conflict = side_a != side_b
+            else:
+                agrees = None
+                conflict = None
+
+            overlap_records.append({
+                'game_id': game_id,
+                'in_primary': in_a,
+                'primary_side': side_a,
+                'primary_ev': ev_a,
+                'in_phase1_edge_confirm': in_b,
+                'phase1_side': side_b,
+                'phase1_edge_abs': edge_b,
+                'side_agrees': agrees,
+                'conflict': conflict,
+            })
+
+        overlap_df = pd.DataFrame(overlap_records)
+
+        # Compute summary stats
+        n_both = len([r for r in overlap_records if r['in_primary'] and r['in_phase1_edge_confirm']])
+        n_agrees = len([r for r in overlap_records if r['side_agrees'] is True])
+        n_conflicts = len([r for r in overlap_records if r['conflict'] is True])
+        n_only_a = len([r for r in overlap_records if r['in_primary'] and not r['in_phase1_edge_confirm']])
+        n_only_b = len([r for r in overlap_records if not r['in_primary'] and r['in_phase1_edge_confirm']])
+
+        print(f"  Games in List A (PRIMARY): {len(lista_games)}")
+        print(f"  Games in List B (PHASE1_EDGE_CONFIRM): {len(listb_games)}")
+        print(f"  Games in BOTH lists: {n_both}")
+        print(f"    - Side agrees: {n_agrees}")
+        print(f"    - Side CONFLICTS: {n_conflicts}")
+        print(f"  Games in List A only: {n_only_a}")
+        print(f"  Games in List B only: {n_only_b}")
+
+        if n_conflicts > 0:
+            print(f"\n  *** WARNING: {n_conflicts} CONFLICTS DETECTED ***")
+            print(f"  The betting engine should review these games before placing bets.")
+            conflict_games = [r for r in overlap_records if r['conflict'] is True]
+            for cg in conflict_games[:5]:
+                print(f"    game_id={cg['game_id']}: List A says {cg['primary_side']}, List B says {cg['phase1_side']}")
+
+        # Write overlap CSV
+        overlap_csv_path = output_path / f"overlap_primary_vs_phase1_edge_confirm_{year}_week{week}.csv"
+        overlap_df.to_csv(overlap_csv_path, index=False)
+        print(f"\n  Wrote: {overlap_csv_path}")
 
     print("\n" + "=" * 80)
     print("PREDICTION COMPLETE")
@@ -1833,6 +2034,24 @@ Examples:
         choices=["ev", "edge"],
         help="Candidate selection basis: 'ev' for EV-based, 'edge' for edge-based (default: ev)"
     )
+    # Phase 1 Edge+Confirm Strategy arguments (LIST B - separate from EV-based LIST A)
+    predict_parser.add_argument(
+        "--phase1-edge-confirm", action="store_true", default=False,
+        help="Enable Phase 1 Edge+Confirm strategy (LIST B, separate from EV-based LIST A)"
+    )
+    predict_parser.add_argument(
+        "--phase1-edge-confirm-jp-edge-min", type=float, default=5.0,
+        help="JP+ edge threshold for Phase 1 Edge+Confirm (default: 5.0)"
+    )
+    predict_parser.add_argument(
+        "--phase1-edge-confirm-sp-edge-min", type=float, default=2.0,
+        help="SP+ edge threshold for CONFIRM status (default: 2.0)"
+    )
+    predict_parser.add_argument(
+        "--phase1-edge-confirm-missing-behavior", type=str, default="reject",
+        choices=["reject", "treat_neutral"],
+        help="How to handle games without SP+ (default: reject)"
+    )
 
     # Backtest command (V2)
     backtest_parser = subparsers.add_parser(
@@ -1911,7 +2130,7 @@ Examples:
             compare_modes=args.compare_modes,
         )
     elif args.command == "predict":
-        # Build SP+ gate config
+        # Build SP+ gate config (applies to EV-based LIST A)
         sp_gate_config = None
         if args.sp_gate:
             sp_gate_config = Phase1SPGateConfig(
@@ -1921,6 +2140,16 @@ Examples:
                 jp_edge_min=args.sp_gate_jp_edge_min,
                 missing_sp_behavior=args.sp_gate_missing_behavior,
                 candidate_basis=args.sp_gate_candidate_basis,
+            )
+
+        # Build Phase1EdgeConfirm config (LIST B - separate from EV-based LIST A)
+        edge_confirm_config = None
+        if args.phase1_edge_confirm:
+            edge_confirm_config = Phase1EdgeConfirmConfig(
+                enabled=True,
+                jp_edge_min=args.phase1_edge_confirm_jp_edge_min,
+                sp_edge_min=args.phase1_edge_confirm_sp_edge_min,
+                missing_sp_behavior=args.phase1_edge_confirm_missing_behavior,
             )
 
         run_predict(
@@ -1933,6 +2162,7 @@ Examples:
             week=args.week,
             output_dir=args.output_dir,
             sp_gate_config=sp_gate_config,
+            edge_confirm_config=edge_confirm_config,
         )
     else:
         parser.print_help()
