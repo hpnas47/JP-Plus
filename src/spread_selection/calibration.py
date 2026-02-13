@@ -261,11 +261,12 @@ def walk_forward_validate(
     min_train_seasons: int = 2,
     exclude_covid: bool = True,
     exclude_years_from_training: list[int] | None = None,
+    training_window_seasons: int | None = None,
 ) -> WalkForwardResult:
     """Season-level walk-forward calibration.
 
     For each evaluation season Y:
-        1. Training: seasons < Y (optionally excluding specified years)
+        1. Training: seasons < Y (optionally excluding specified years, optionally windowed)
         2. Filter training: exclude pushes and edge_abs == 0
         3. Fit calibration on training
         4. Apply to season Y games with edge_abs > 0
@@ -277,6 +278,9 @@ def walk_forward_validate(
         exclude_covid: If True, exclude 2020 from evaluation folds
         exclude_years_from_training: Years to exclude from training data
             (e.g., [2022] to exclude 2022's negative-slope data)
+        training_window_seasons: If set, only use the most recent N seasons
+            prior to evaluation year (e.g., 3 means use Y-3, Y-2, Y-1).
+            If None, use all prior seasons.
 
     Returns:
         WalkForwardResult with per-game predictions and diagnostics
@@ -299,8 +303,16 @@ def walk_forward_validate(
         if eval_year < first_eval_year:
             continue
 
-        # Training: all years strictly before eval_year, excluding specified years
-        train_mask = (all_games["year"] < eval_year) & (~all_games["year"].isin(exclude_from_train))
+        # Training: years strictly before eval_year
+        if training_window_seasons is not None:
+            # Rolling window: only use most recent N seasons
+            eligible_train_years = [y for y in years if y < eval_year and y not in exclude_from_train]
+            window_years = eligible_train_years[-training_window_seasons:]  # Most recent N
+            train_mask = all_games["year"].isin(window_years)
+        else:
+            # All prior years (excluding specified)
+            train_mask = (all_games["year"] < eval_year) & (~all_games["year"].isin(exclude_from_train))
+
         train_df = all_games[train_mask]
 
         # Evaluation: eval_year only
