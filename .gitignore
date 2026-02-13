@@ -63,3 +63,4 @@ env/
 .cache/
 logs/
 output/
+data/spread_selection/*.csv
