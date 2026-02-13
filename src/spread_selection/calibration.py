@@ -260,11 +260,12 @@ def walk_forward_validate(
     all_games: pd.DataFrame,
     min_train_seasons: int = 2,
     exclude_covid: bool = True,
+    exclude_years_from_training: list[int] | None = None,
 ) -> WalkForwardResult:
     """Season-level walk-forward calibration.
 
     For each evaluation season Y:
-        1. Training: seasons < Y (keep 2020 in training for later folds)
+        1. Training: seasons < Y (optionally excluding specified years)
         2. Filter training: exclude pushes and edge_abs == 0
         3. Fit calibration on training
         4. Apply to season Y games with edge_abs > 0
@@ -274,11 +275,14 @@ def walk_forward_validate(
         all_games: DataFrame with all games (normalized)
         min_train_seasons: Minimum seasons required for training
         exclude_covid: If True, exclude 2020 from evaluation folds
+        exclude_years_from_training: Years to exclude from training data
+            (e.g., [2022] to exclude 2022's negative-slope data)
 
     Returns:
         WalkForwardResult with per-game predictions and diagnostics
     """
     years = sorted(all_games["year"].unique())
+    exclude_from_train = set(exclude_years_from_training or [])
 
     if exclude_covid and 2020 in years:
         eval_years = [y for y in years if y != 2020]
@@ -295,8 +299,8 @@ def walk_forward_validate(
         if eval_year < first_eval_year:
             continue
 
-        # Training: all years strictly before eval_year
-        train_mask = all_games["year"] < eval_year
+        # Training: all years strictly before eval_year, excluding specified years
+        train_mask = (all_games["year"] < eval_year) & (~all_games["year"].isin(exclude_from_train))
         train_df = all_games[train_mask]
 
         # Evaluation: eval_year only

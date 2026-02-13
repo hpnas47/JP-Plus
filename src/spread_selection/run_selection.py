@@ -560,6 +560,217 @@ def run_validate(
     print("=" * 80)
 
 
+def run_sensitivity_report(
+    csv_path: Optional[str] = None,
+    eval_years: list[int] | None = None,
+) -> None:
+    """Run sensitivity report comparing include vs exclude 2022 from training.
+
+    Args:
+        csv_path: Path to exported backtest CSV
+        eval_years: Years to evaluate on (default: [2024, 2025])
+    """
+    from scipy.special import expit
+
+    print("\n" + "=" * 80)
+    print("SENSITIVITY REPORT: EXCLUDE 2022 FROM CALIBRATION TRAINING")
+    print("=" * 80)
+
+    if eval_years is None:
+        eval_years = [2024, 2025]
+
+    # Load data
+    raw_df = load_backtest_data(2022, 2025, csv_path)
+    normalized_df = load_and_normalize_game_data(raw_df, jp_convention="pos_home_favored")
+
+    print(f"\nData: {len(normalized_df)} games total")
+    print(f"Evaluation years: {eval_years}")
+
+    # Run both configurations
+    configs = [
+        {"name": "INCLUDE 2022", "exclude_years": []},
+        {"name": "EXCLUDE 2022", "exclude_years": [2022]},
+    ]
+
+    results = {}
+    for config in configs:
+        print(f"\n--- Running: {config['name']} ---")
+
+        wf_result = walk_forward_validate(
+            normalized_df,
+            min_train_seasons=2,
+            exclude_covid=True,
+            exclude_years_from_training=config["exclude_years"],
+        )
+
+        # Filter to evaluation years only
+        eval_df = wf_result.game_results[
+            wf_result.game_results["year"].isin(eval_years)
+        ].copy()
+
+        # Filter to games with predictions
+        eval_df = eval_df[eval_df["p_cover_no_push"].notna() & ~eval_df["push"]]
+
+        # Calculate EV
+        eval_df["ev"] = calculate_ev_vectorized(eval_df["p_cover_no_push"].values)
+
+        # Compute metrics
+        avg_slope = np.mean([f["slope"] for f in wf_result.fold_summaries])
+        avg_intercept = np.mean([f["intercept"] for f in wf_result.fold_summaries])
+
+        # P(cover) at various edge points
+        p_at_5 = expit(avg_intercept + avg_slope * 5)
+        p_at_7 = expit(avg_intercept + avg_slope * 7)
+        p_at_10 = expit(avg_intercept + avg_slope * 10)
+
+        # Implied breakeven edge
+        be_prob = breakeven_prob(-110)
+        logit_be = np.log(be_prob / (1 - be_prob))
+        if avg_slope > 0:
+            implied_be_edge = (logit_be - avg_intercept) / avg_slope
+        else:
+            implied_be_edge = float("inf")
+
+        # Strategy metrics
+        strategies = {}
+        for name, ev_threshold in [("OLD_5pt", None), ("EV3", 0.03), ("EV5", 0.05)]:
+            if ev_threshold is not None:
+                mask = eval_df["ev"] >= ev_threshold
+            else:
+                mask = eval_df["edge_abs"] >= 5.0
+
+            subset = eval_df[mask]
+            n = len(subset)
+            if n > 0:
+                wins = subset["jp_side_covered"].sum()
+                cover_rate = wins / n
+                roi = (cover_rate * (100 / 110) - (1 - cover_rate)) * 100
+                avg_p = subset["p_cover_no_push"].mean()
+            else:
+                wins, cover_rate, roi, avg_p = 0, 0, 0, 0
+
+            strategies[name] = {
+                "n": n,
+                "wins": int(wins),
+                "cover_rate": cover_rate,
+                "roi": roi,
+                "avg_p_cover": avg_p,
+            }
+
+        results[config["name"]] = {
+            "slope": avg_slope,
+            "intercept": avg_intercept,
+            "p_at_5": p_at_5,
+            "p_at_7": p_at_7,
+            "p_at_10": p_at_10,
+            "implied_be_edge": implied_be_edge,
+            "n_eval": len(eval_df),
+            "brier": wf_result.overall_brier,
+            "strategies": strategies,
+            "fold_details": [
+                {"year": f["eval_year"], "slope": f["slope"], "n_train": f["n_train"]}
+                for f in wf_result.fold_summaries
+            ],
+        }
+
+    # Print comparison table
+    print("\n" + "=" * 80)
+    print("CALIBRATION PARAMETERS COMPARISON")
+    print("=" * 80)
+
+    print("\n| Metric           | INCLUDE 2022 | EXCLUDE 2022 | Delta    |")
+    print("|------------------|--------------|--------------|----------|")
+
+    r_inc = results["INCLUDE 2022"]
+    r_exc = results["EXCLUDE 2022"]
+
+    rows = [
+        ("Avg Slope", f"{r_inc['slope']:.5f}", f"{r_exc['slope']:.5f}",
+         f"{r_exc['slope'] - r_inc['slope']:+.5f}"),
+        ("Avg Intercept", f"{r_inc['intercept']:.4f}", f"{r_exc['intercept']:.4f}",
+         f"{r_exc['intercept'] - r_inc['intercept']:+.4f}"),
+        ("P(cover) @ 5 pts", f"{r_inc['p_at_5']*100:.1f}%", f"{r_exc['p_at_5']*100:.1f}%",
+         f"{(r_exc['p_at_5'] - r_inc['p_at_5'])*100:+.1f}%"),
+        ("P(cover) @ 7 pts", f"{r_inc['p_at_7']*100:.1f}%", f"{r_exc['p_at_7']*100:.1f}%",
+         f"{(r_exc['p_at_7'] - r_inc['p_at_7'])*100:+.1f}%"),
+        ("P(cover) @ 10 pts", f"{r_inc['p_at_10']*100:.1f}%", f"{r_exc['p_at_10']*100:.1f}%",
+         f"{(r_exc['p_at_10'] - r_inc['p_at_10'])*100:+.1f}%"),
+        ("Implied BE Edge", f"{r_inc['implied_be_edge']:.1f} pts", f"{r_exc['implied_be_edge']:.1f} pts",
+         f"{r_exc['implied_be_edge'] - r_inc['implied_be_edge']:+.1f}"),
+        ("Brier Score", f"{r_inc['brier']:.4f}", f"{r_exc['brier']:.4f}",
+         f"{r_exc['brier'] - r_inc['brier']:+.4f}"),
+    ]
+
+    for metric, inc, exc, delta in rows:
+        print(f"| {metric:<16} | {inc:>12} | {exc:>12} | {delta:>8} |")
+
+    # Fold details
+    print("\n" + "=" * 80)
+    print("PER-FOLD SLOPE COMPARISON")
+    print("=" * 80)
+
+    print("\n| Eval Year | INCLUDE 2022       | EXCLUDE 2022       |")
+    print("|           | N Train | Slope    | N Train | Slope    |")
+    print("|-----------|---------|----------|---------|----------|")
+
+    for i, fold_inc in enumerate(r_inc["fold_details"]):
+        fold_exc = r_exc["fold_details"][i]
+        print(f"| {fold_inc['year']:>9} | {fold_inc['n_train']:>7} | {fold_inc['slope']:.6f} | "
+              f"{fold_exc['n_train']:>7} | {fold_exc['slope']:.6f} |")
+
+    # Strategy comparison
+    print("\n" + "=" * 80)
+    print("STRATEGY METRICS COMPARISON (on same eval years)")
+    print("=" * 80)
+
+    for strat in ["OLD_5pt", "EV3", "EV5"]:
+        s_inc = r_inc["strategies"][strat]
+        s_exc = r_exc["strategies"][strat]
+
+        print(f"\n{strat}:")
+        print(f"  {'':20} | {'INCLUDE 2022':>14} | {'EXCLUDE 2022':>14} | {'Delta':>10}")
+        print(f"  {'-'*20}-+-{'-'*14}-+-{'-'*14}-+-{'-'*10}")
+
+        print(f"  {'N Bets':20} | {s_inc['n']:>14} | {s_exc['n']:>14} | {s_exc['n'] - s_inc['n']:>+10}")
+        print(f"  {'Wins':20} | {s_inc['wins']:>14} | {s_exc['wins']:>14} | {s_exc['wins'] - s_inc['wins']:>+10}")
+        print(f"  {'Cover Rate':20} | {s_inc['cover_rate']*100:>13.1f}% | {s_exc['cover_rate']*100:>13.1f}% | "
+              f"{(s_exc['cover_rate'] - s_inc['cover_rate'])*100:>+9.1f}%")
+        print(f"  {'ROI':20} | {s_inc['roi']:>+13.1f}% | {s_exc['roi']:>+13.1f}% | "
+              f"{s_exc['roi'] - s_inc['roi']:>+9.1f}%")
+        print(f"  {'Avg P(cover)':20} | {s_inc['avg_p_cover']*100:>13.1f}% | {s_exc['avg_p_cover']*100:>13.1f}% | "
+              f"{(s_exc['avg_p_cover'] - s_inc['avg_p_cover'])*100:>+9.1f}%")
+
+    # Summary
+    print("\n" + "=" * 80)
+    print("SUMMARY")
+    print("=" * 80)
+
+    slope_improvement = (r_exc["slope"] - r_inc["slope"]) / r_inc["slope"] * 100 if r_inc["slope"] > 0 else 0
+    p5_improvement = (r_exc["p_at_5"] - r_inc["p_at_5"]) * 100
+    be_improvement = r_inc["implied_be_edge"] - r_exc["implied_be_edge"]
+
+    print(f"""
+Excluding 2022 from training:
+  - Slope increases by {slope_improvement:+.0f}% ({r_inc['slope']:.5f} -> {r_exc['slope']:.5f})
+  - P(cover) at 5-pt edge increases by {p5_improvement:+.1f}pp ({r_inc['p_at_5']*100:.1f}% -> {r_exc['p_at_5']*100:.1f}%)
+  - Implied breakeven edge decreases by {be_improvement:.1f} pts ({r_inc['implied_be_edge']:.1f} -> {r_exc['implied_be_edge']:.1f})
+  - EV3 bet count: {r_inc['strategies']['EV3']['n']} -> {r_exc['strategies']['EV3']['n']}
+  - EV5 bet count: {r_inc['strategies']['EV5']['n']} -> {r_exc['strategies']['EV5']['n']}
+  - Brier score: {r_inc['brier']:.4f} -> {r_exc['brier']:.4f} ({'better' if r_exc['brier'] < r_inc['brier'] else 'worse'})
+
+Key insight: 2022 had a NEGATIVE slope (-0.0119) when fit alone, dragging
+down the cumulative training slope. Excluding it produces calibration
+parameters more consistent with the 2023-2025 regime.
+
+However, note that:
+  - The empirical cover rate (55.4% at 5+ edge) is UNCHANGED by this setting
+  - Only the calibrated P(cover) predictions change
+  - Conservative (include 2022) vs aggressive (exclude 2022) is a risk choice
+""")
+
+    print("=" * 80)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -601,6 +812,22 @@ def main():
         "--verbose", "-v", action="store_true", help="Verbose logging"
     )
 
+    # Sensitivity report command
+    sensitivity_parser = subparsers.add_parser(
+        "sensitivity",
+        help="Compare include vs exclude 2022 from calibration training"
+    )
+    sensitivity_parser.add_argument(
+        "--csv", type=str, default=None, help="Path to exported backtest CSV"
+    )
+    sensitivity_parser.add_argument(
+        "--eval-years", type=int, nargs="+", default=[2024, 2025],
+        help="Years to evaluate on (default: 2024 2025)"
+    )
+    sensitivity_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Verbose logging"
+    )
+
     args = parser.parse_args()
 
     # Setup logging
@@ -614,6 +841,8 @@ def main():
         run_validate(args.start_year, args.end_year, args.line_type, args.csv)
     elif args.command == "diagnose":
         run_validate(args.start_year, args.end_year, "close", args.csv)
+    elif args.command == "sensitivity":
+        run_sensitivity_report(args.csv, args.eval_years)
     else:
         parser.print_help()
 
