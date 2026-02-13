@@ -4,7 +4,95 @@
 
 ---
 
-## Session: February 13, 2026
+## Session: February 13, 2026 (PM)
+
+### Theme: Phase 1 SP+ Policy Finalization
+
+---
+
+#### Dual-List Architecture Implemented — COMMITTED
+**Status**: Complete
+
+Implemented comprehensive dual-list betting system for Phase 1 (weeks 1-3):
+
+**List A (ENGINE_EV PRIMARY)**
+- EV-based calibrated selection engine output
+- `is_official_engine=True`, `execution_default=True`
+- NO SP+ filtering applied (tagging only for monitoring)
+- Uses CLOSE lines for EV computation
+
+**List B (PHASE1_EDGE)**
+- Edge-based selection (|jp_edge| >= 5.0 vs OPEN lines)
+- `is_official_engine=False`, `execution_default=False`
+- Auto-emitted in weeks 1-3 for visibility
+- Optional HYBRID_VETO_2 overlay (default OFF)
+
+**New Files:**
+- `src/spread_selection/strategies/phase1_edge_baseline.py` — LIST B strategy logic
+- `docs/PHASE1_SP_POLICY.md` — Policy documentation and research conclusions
+
+**CLI Additions:**
+- `--no-phase1-edge-list` — Disable automatic List B emission
+- `--phase1-edge-veto` — Enable HYBRID_VETO_2 overlay
+- `--phase1-edge-veto-sp-oppose-min` — SP+ threshold (default 2.0)
+- `--phase1-edge-veto-jp-band-high` — Upper JP+ band (default 8.0)
+
+---
+
+#### Phase 1 SP+ Filtering Research — FROZEN
+**Status**: Research concluded, no further experiments
+
+**Backtest Results (2022-2025, N=395 games at 5+ edge):**
+
+| Approach | Overall ATS% | 2025 ATS% | Verdict |
+|----------|-------------|-----------|---------|
+| EDGE_BASELINE | 49.9% | 59.8% | Baseline |
+| SP+ Confirm-Only | 45.9% | N/A | REJECTED (catastrophic 2022) |
+| VETO_OPPOSES_2 | 50.9% | 59.4% | REJECTED (vetoes 2025 winners 62.5%) |
+| VETO_OPPOSES_3 | 50.1% | 59.0% | REJECTED (vetoes 2025 winners 71.4%) |
+| HYBRID_VETO_3 | 49.7% | 59.3% | REJECTED (vetoes 2025 winners 75%) |
+| **HYBRID_VETO_2** | **50.3%** | **60.2%** | **APPROVED (optional, default OFF)** |
+
+**HYBRID_VETO_2 Rule:**
+- VETO if: oppose AND |sp_edge|>=2.0 AND 5.0<=|jp_edge|<8.0
+- NEVER veto if: |jp_edge|>=8.0 (high-conviction protected)
+- ROI improvement: -3.5% → -2.7% (+0.8pp)
+- Retention: 94.2%
+
+**Final Conclusions:**
+1. SP+ confirm-only gating failed catastrophically in 2022 (18.8% ATS)
+2. Simple veto approaches remove winners in 2025 (model's best year)
+3. HYBRID_VETO_2 is the only approach that passes all guardrails
+4. Default stance: **SP+ as tagging-only**, HYBRID_VETO_2 available but OFF
+
+---
+
+#### Week Summary & Overlap Reporting — COMMITTED
+**Status**: Complete
+
+When both lists are generated in Phase 1, automatically writes:
+- `week_summary_{year}_week{week}.json` — Counts and config snapshot
+- `overlap_engine_primary_vs_phase1_edge_{year}_week{week}.csv` — Conflict detection
+
+**Overlap Report Fields:**
+- `in_engine_primary`, `engine_side`, `engine_ev`
+- `in_phase1_edge`, `phase1_side`, `phase1_edge_abs`
+- `side_agrees`, `conflict`, `recommended_resolution`
+
+---
+
+#### Validator Schema Updates — COMMITTED
+**Status**: Complete
+
+Updated `scripts/validate_spread_selection_outputs.py`:
+- New metadata fields: `list_family`, `list_name`, `selection_basis`, etc.
+- Week summary JSON schema validation
+- Overlap CSV schema validation (new and legacy formats)
+- List B veto field validation
+
+---
+
+## Session: February 13, 2026 (AM)
 
 ### Theme: Codebase Cleanup & Critical Bug Fixes
 
