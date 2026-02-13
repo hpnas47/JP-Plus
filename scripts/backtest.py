@@ -299,7 +299,7 @@ def fetch_season_data(
                 "away_team": game.away_team,
                 "home_points": game.home_points,
                 "away_points": game.away_points,
-                "neutral_site": game.neutral_site or True,  # Bowl games are usually neutral
+                "neutral_site": game.neutral_site if game.neutral_site is not None else True,  # Default to neutral if API returns None
             })
             postseason_count += 1
         if postseason_count > 0:
