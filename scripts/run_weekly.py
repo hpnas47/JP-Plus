@@ -216,6 +216,14 @@ def parse_args():
         default=0.40,
         help="Kill-switch triggers if ATS%% <= this value. Default: 0.40",
     )
+    # Slate export for selection engine integration
+    parser.add_argument(
+        "--export-slate",
+        type=str,
+        default=None,
+        help="Export slate CSV with LSA-recommended spreads for selection engine. "
+             "E.g., --export-slate data/spread_selection/slate_2026_week2.csv",
+    )
     return parser.parse_args()
 
 
@@ -644,6 +652,7 @@ def run_predictions(
     killswitch_action: str = "disable_phase1_bets",
     killswitch_trigger_ats: float = 0.40,
     season_results_df: pd.DataFrame = None,
+    export_slate: str = None,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -669,6 +678,8 @@ def run_predictions(
         killswitch_trigger_ats: Trigger threshold (if ATS% <= this). Default 0.40.
         season_results_df: DataFrame with prior weeks' betting results for kill-switch.
             Required columns: week, bet_placed, ats_outcome.
+        export_slate: Path to export slate CSV for selection engine integration.
+            If provided, exports slate with LSA-recommended spreads.
 
     Returns:
         Dictionary with results summary
@@ -1183,6 +1194,39 @@ def run_predictions(
     # Compute value play count for downstream consumers
     value_plays_count = len(value_plays_df)
 
+    # === SLATE EXPORT FOR SELECTION ENGINE ===
+    # Exports slate CSV with LSA-recommended spreads for run_selection.py predict
+    if export_slate and 'jp_spread_recommended' in comparison_df.columns:
+        from pathlib import Path
+        slate_path = Path(export_slate)
+        slate_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build slate with required columns for selection engine
+        slate_df = comparison_df[[
+            'game_id', 'home_team', 'away_team',
+            'jp_spread_fixed', 'jp_spread_lsa', 'jp_spread_recommended',
+            'vegas_spread', 'bet_timing_rec',
+        ]].copy()
+
+        # Add year/week columns
+        slate_df['year'] = year
+        slate_df['week'] = week
+
+        # Rename jp_spread_recommended to jp_spread for selection engine compatibility
+        slate_df['jp_spread'] = slate_df['jp_spread_recommended']
+
+        # Add spread_open if available (selection engine prefers this)
+        if 'vegas_open' in comparison_df.columns:
+            slate_df['spread_open'] = comparison_df['vegas_open']
+        else:
+            slate_df['spread_open'] = comparison_df['vegas_spread']
+
+        # Export
+        slate_df.to_csv(slate_path, index=False)
+        logger.info(f"Slate exported for selection engine: {slate_path}")
+        logger.info(f"  {len(slate_df)} games with LSA-recommended spreads")
+        logger.info(f"  Timing recommendations: {dict(slate_df['bet_timing_rec'].value_counts())}")
+
     # P3.7: Generate reports (skip with --no-reports for faster testing)
     excel_path = None
     html_path = None
@@ -1237,6 +1281,7 @@ def run_predictions(
         "value_plays": value_plays_count,
         "excel_path": str(excel_path) if excel_path else None,
         "html_path": str(html_path) if html_path else None,
+        "slate_path": export_slate if export_slate else None,
     }
 
 
@@ -1305,6 +1350,7 @@ def main():
         killswitch_trigger_ats=args.killswitch_trigger_ats,
         # Note: season_results_df must be provided externally for kill-switch to work
         season_results_df=None,
+        export_slate=args.export_slate,
     )
 
     if results["success"]:
@@ -1315,6 +1361,9 @@ def main():
             print(f"\nReports saved to:")
             print(f"  Excel: {results['excel_path']}")
             print(f"  HTML: {results['html_path']}")
+        if results.get("slate_path"):
+            print(f"\nSlate exported for selection engine:")
+            print(f"  {results['slate_path']}")
     else:
         print(f"\nPrediction run failed: {results.get('error', 'Unknown error')}")
         sys.exit(1)
