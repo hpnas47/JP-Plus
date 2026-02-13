@@ -56,25 +56,25 @@
 
 ## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-12)
 
-**With QB Continuous Phase1-only mode enabled** (`--qb-continuous --qb-scale 5.0 --qb-phase1-only`)
+**With QB Continuous Phase1-only + Phase 1 Shrinkage enabled**
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,657 | 12.92 | 16.33 | 50.7% | 51.4% |
-| Phase 1 (Calibration) | 1–3 | 992 | 13.96 | 17.57 | 48.6% | 47.5% |
-| **Phase 2 (Core)** | **4–15** | **2,489** | **12.51** | **15.81** | **51.7%** | **53.0%** |
+| **Full (`--start-week 1`)** | 1–Post | 3,657 | 12.92 | 16.29 | 50.2% | 51.2% |
+| Phase 1 (Calibration) | 1–3 | 960 | 14.01 | 17.51 | 46.9% | 47.1% |
+| **Phase 2 (Core)** | **4–15** | **2,485** | **12.51** | **15.82** | **51.7%** | **53.0%** |
 | Phase 3 (Postseason) | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% |
 | 3+ Edge (Core) | 4–15 | 1,389 | — | — | 53.1% (737-652) | 55.4% (791-637) |
-| 5+ Edge (Core) | 4–15 | 842 | — | — | 55.1% (464-378) | 57.1% (511-384) |
+| 5+ Edge (Core) | 4–15 | 841 | — | — | 55.1% (463-378) | 57.0% (509-384) |
 
-**Phase 1 Improvement with QB Continuous:**
-| Metric | Without QB | With QB Phase1-only | Delta |
-|--------|------------|---------------------|-------|
-| 5+ Edge (Close) | 50.2% (269-267) | 50.5% (223-219) | **+0.3%** |
-| 5+ Edge (Open) | ~50.2% | 50.6% (226-221) | **+0.4%** |
-| MAE | 15.33 | 14.00 | -1.33 |
+**Phase 1 Improvement with Shrinkage=0.90:**
+| Metric | Without Shrinkage | With Shrinkage | Delta |
+|--------|-------------------|----------------|-------|
+| 5+ Edge (Close) | 50.4% (225-221) | **51.1%** (237-227) | **+0.7%** |
+| 5+ Edge (Open) | 50.4% (225-221) | **50.9%** (234-226) | **+0.5%** |
+| RMSE | 17.57 | 17.45 | -0.12 |
 
-Core (weeks 4-15) performance is **unchanged** with Phase1-only mode.
+Core (weeks 4-15) performance is **unchanged** with Phase 1 shrinkage.
 
 ### Edge-Aware Production Mode (DEFAULT in 2026)
 
@@ -105,7 +105,8 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
 - **ST Spread Cap:** ±2.5 pts (APPROVED 2026-02-10). Caps ST differential's effect on spread without shrinking ratings toward zero.
 - **FCS Strength Estimator:** Dynamic, walk-forward-safe FCS penalties (APPROVED 2026-02-10). Replaces static elite list with Bayesian shrinkage (k=8, baseline=-28, intercept=10, slope=0.8). Penalty range [10, 45] pts. CLI: `--fcs-static` for baseline comparison.
 - **LSA Edge-Aware Mode:** DEFAULT for 2026 production. Automatically uses LSA for 5+ edge closing bets, Fixed otherwise. No flags needed — `run_weekly.py` handles timing/edge logic automatically. CLI: `--no-lsa` to force Fixed-only mode.
-- **QB Continuous Rating:** DEFAULT for 2026. Walk-forward-safe QB quality estimates using PPA data with shrinkage (K=200) and prior season decay (0.3). **Phase1-only mode** applies QB adjustment only for weeks 1-3 where EFM hasn't yet captured QB quality. Improves Phase 1 5+ Edge by +0.6% without affecting Core. CLI: `--no-qb-continuous` to disable.
+- **QB Continuous Rating:** DEFAULT for 2026. Walk-forward-safe QB quality estimates using PPA data with shrinkage (K=200) and prior season decay (0.3). **Phase1-only mode** applies QB adjustment only for weeks 1-3 where EFM hasn't yet captured QB quality. CLI: `--no-qb-continuous` to disable.
+- **Phase 1 Spread Shrinkage:** DEFAULT for 2026 (APPROVED 2026-02-12). Applies 0.90x shrinkage to rating differential for weeks 1-3, preserving HFA. Formula: `NewSpread = (OldSpread - HFA) * 0.90 + HFA`. Reduces overconfidence in prior-driven predictions. Improves Phase 1 5+ Edge by +0.7% (Close) and +0.5% (Open). CLI: `--no-phase1-shrinkage` to disable, `--phase1-shrinkage 0.85` to adjust.
 
 ## ✅ Totals Model Baseline (2023-2025 backtest, as of 2026-02-08)
 

@@ -656,6 +656,8 @@ def walk_forward_predict(
     qb_use_prior_season: bool = True,
     qb_phase1_only: bool = False,
     qb_fix_misattribution: bool = False,
+    lock_prior_weeks: int = 0,  # Force 100% prior weight for weeks <= this value
+    phase1_shrinkage: float = 0.90,  # Shrinkage for Phase 1 spread predictions
 ) -> tuple[list[dict], list[tuple]]:
     """Perform walk-forward prediction using Efficiency Foundation Model.
 
@@ -850,7 +852,12 @@ def walk_forward_predict(
 
             # Blend with preseason priors if available
             if preseason_priors is not None and preseason_priors.preseason_ratings:
-                games_played = pred_week - 1
+                # Phase 1 Purity Test: Lock to 100% prior if pred_week <= lock_prior_weeks
+                if lock_prior_weeks > 0 and pred_week <= lock_prior_weeks:
+                    games_played = 0  # Forces 100% prior weight
+                    logger.debug(f"Week {pred_week}: LOCKED to 100% prior (lock_prior_weeks={lock_prior_weeks})")
+                else:
+                    games_played = pred_week - 1
                 blended = preseason_priors.blend_with_inseason(
                     team_ratings,
                     games_played=games_played,
@@ -1020,6 +1027,14 @@ def walk_forward_predict(
                         learned_situ = lsa_model.predict(features)
                         # Replace fixed situational with learned
                         final_spread = pred.spread - pred.components.situational + learned_situ
+
+                # Phase 1 Shrinkage: Apply spread compression for weeks 1-3
+                # Formula: NewSpread = (OldSpread - HFA) * Shrinkage + HFA
+                # This reduces overconfidence in prior-driven predictions while preserving HFA
+                if phase1_shrinkage < 1.0 and pred_week <= 3:
+                    hfa_value = pred.components.home_field
+                    rating_diff = final_spread - hfa_value
+                    final_spread = rating_diff * phase1_shrinkage + hfa_value
 
                 results.append({
                     "game_id": game["id"],  # For reliable Vegas line matching
@@ -2942,6 +2957,8 @@ def _process_single_season(
     qb_phase1_only: bool = False,
     qb_fix_misattribution: bool = False,
     fcs_use_deviation: bool = True,  # Use FBS team's deviation from FBS mean for FCS games
+    lock_prior_weeks: int = 0,  # Force 100% prior weight for weeks <= this value
+    phase1_shrinkage: float = 0.90,  # Shrinkage for Phase 1 spread predictions
 ) -> tuple:
     """Process a single season in a worker process for parallel backtesting.
 
@@ -3058,6 +3075,8 @@ def _process_single_season(
         qb_use_prior_season=qb_use_prior_season,
         qb_phase1_only=qb_phase1_only,
         qb_fix_misattribution=qb_fix_misattribution,
+        lock_prior_weeks=lock_prior_weeks,
+        phase1_shrinkage=phase1_shrinkage,
     )
 
     # Calculate ATS
@@ -3140,6 +3159,10 @@ def run_backtest(
     blend_schedule: Optional[BlendSchedule] = None,
     # Credible Rebuild adjustment
     credible_rebuild_enabled: bool = True,
+    # Phase 1 Purity Test
+    lock_prior_weeks: int = 0,  # Force 100% prior weight for weeks <= this value
+    # Phase 1 Spread Shrinkage
+    phase1_shrinkage: float = 0.90,  # Shrinkage for weeks 1-3 predictions
 ) -> dict:
     """Run full backtest across specified years using EFM.
 
@@ -3301,6 +3324,10 @@ def run_backtest(
         qb_use_prior_season=qb_use_prior_season,
         qb_phase1_only=qb_phase1_only,
         qb_fix_misattribution=qb_fix_misattribution,
+        # Phase 1 Purity Test
+        lock_prior_weeks=lock_prior_weeks,
+        # Phase 1 Spread Shrinkage
+        phase1_shrinkage=phase1_shrinkage,
     )
 
     # LSA requires sequential processing: prior years' data feeds later years
@@ -4095,6 +4122,28 @@ def main():
         default="0.25,0.50,0.75,1.00",
         help="Comma-separated HFA offset values to sweep. Default: 0.25,0.50,0.75,1.00",
     )
+    # Phase 1 Purity Test: Force 100% prior weight for early weeks
+    parser.add_argument(
+        "--lock-prior-weeks",
+        type=int,
+        default=0,
+        help="Force 100%% prior weight (0%% in-season) for weeks <= this value. Default: 0 (disabled). "
+             "Use 3 for Phase 1 purity test.",
+    )
+    # Phase 1 Spread Shrinkage (APPROVED 2026-02-12)
+    parser.add_argument(
+        "--phase1-shrinkage",
+        type=float,
+        default=0.90,
+        help="Shrinkage factor for Phase 1 (weeks 1-3) spread predictions. "
+             "Formula: NewSpread = (OldSpread - HFA) * Shrinkage + HFA. "
+             "Default: 0.90 (APPROVED: +0.6%% 5+ Edge). Use 1.0 to disable.",
+    )
+    parser.add_argument(
+        "--no-phase1-shrinkage",
+        action="store_true",
+        help="Disable Phase 1 spread shrinkage (use 1.0 factor)",
+    )
 
     args = parser.parse_args()
 
@@ -4327,6 +4376,10 @@ def main():
         qb_fix_misattribution=args.qb_fix_misattribution,
         # Credible Rebuild adjustment
         credible_rebuild_enabled=not args.no_credible_rebuild,
+        # Phase 1 Purity Test
+        lock_prior_weeks=args.lock_prior_weeks,
+        # Phase 1 Spread Shrinkage
+        phase1_shrinkage=1.0 if args.no_phase1_shrinkage else args.phase1_shrinkage,
     )
 
     # P3.4: Print results with ATS data for sanity report
