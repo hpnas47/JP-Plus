@@ -61,14 +61,229 @@ from src.spread_selection.policies.phase1_sp_gate import (
     fetch_sp_spreads_vegas,
     merge_gate_results_to_df,
 )
-from src.spread_selection.strategies.phase1_edge_confirm import (
-    Phase1EdgeConfirmConfig,
-    evaluate_slate_edge_confirm,
-    recommendations_to_dataframe as edge_confirm_to_dataframe,
-    summarize_recommendations as summarize_edge_confirm,
+from src.spread_selection.strategies.phase1_edge_baseline import (
+    Phase1EdgeBaselineConfig,
+    Phase1EdgeVetoConfig,
+    Phase1EdgeRecommendation,
+    Phase1EdgeResult,
+    evaluate_slate_edge_baseline,
+    recommendations_to_dataframe as edge_baseline_to_dataframe,
+    summarize_recommendations as baseline_summarize_recommendations,
 )
 
 logger = logging.getLogger(__name__)
+
+# Team abbreviations for display formatting
+TEAM_ABBREVS = {
+    "Florida International": "FIU",
+    "St. Francis (PA)": "St. Francis",
+    "East Tennessee State": "ETSU",
+    "Oklahoma State": "Okla St",
+    "Sacramento State": "Sac State",
+    "Western Michigan": "W. Michigan",
+    "South Alabama": "S. Alabama",
+    "Southern Illinois": "S. Illinois",
+    "Bethune-Cookman": "B-Cookman",
+    "East Texas A&M": "E. Texas A&M",
+    "North Carolina": "UNC",
+    "North Carolina A&T": "NC A&T",
+    "Western Kentucky": "WKU",
+    "Western Carolina": "W. Carolina",
+    "Northern Illinois": "N. Illinois",
+    "Eastern Washington": "E. Washington",
+    "Jacksonville State": "Jax State",
+    "Florida Atlantic": "FAU",
+    "Washington State": "Wash St",
+    "Central Michigan": "C. Michigan",
+    "Mississippi State": "Miss St",
+}
+
+
+def _abbreviate_team(team: str) -> str:
+    """Abbreviate team name for display."""
+    return TEAM_ABBREVS.get(team, team)
+
+
+def _format_matchup(away_team: str, home_team: str, max_len: int = 28) -> str:
+    """Format matchup as 'Away @ Home', truncated to max_len."""
+    away_abbrev = _abbreviate_team(away_team)
+    home_abbrev = _abbreviate_team(home_team)
+    matchup = f"{away_abbrev} @ {home_abbrev}"
+    if len(matchup) > max_len:
+        matchup = matchup[:max_len - 3] + "..."
+    return matchup
+
+
+def _format_bet_line(bet_team: str, spread: float) -> str:
+    """Format bet as 'Team +/-X.X'."""
+    team_abbrev = _abbreviate_team(bet_team)
+    return f"{team_abbrev} {spread:+.1f}"
+
+
+def format_primary_engine_table(
+    bets_df: pd.DataFrame,
+    results_df: Optional[pd.DataFrame] = None,
+) -> str:
+    """Format Primary Edge Execution Engine bets as display table.
+
+    Args:
+        bets_df: DataFrame with bets (columns: game_id, home_team, away_team,
+                 edge_abs, ev, jp_favored_side, vegas_spread)
+        results_df: Optional DataFrame with actual results (columns: game_id,
+                    actual_margin, home_covered)
+
+    Returns:
+        Formatted table string
+    """
+    lines = []
+    lines.append("=" * 95)
+    lines.append("Primary Edge Execution Engine (EV >= 3%)")
+    lines.append("=" * 95)
+    lines.append("Selection: EV calibrated on close | Bet execution: OPEN line")
+    lines.append("-" * 95)
+    lines.append(f"{'#':<3} {'Matchup':<30} | {'Edge':>6} | {'~EV':>6} | {'Bet (Open)':<18} | {'Result':<8}")
+    lines.append("-" * 95)
+
+    for i, (_, row) in enumerate(bets_df.iterrows(), 1):
+        matchup = _format_matchup(row["away_team"], row["home_team"])
+
+        # Determine bet team and spread for display
+        if row["jp_favored_side"] == "HOME":
+            bet_team = row["home_team"]
+            # For home bets, use the negative of vegas_spread (home is favored)
+            bet_spread = row.get("spread_open", row.get("vegas_spread", 0))
+        else:
+            bet_team = row["away_team"]
+            # For away bets, use positive spread
+            bet_spread = -row.get("spread_open", row.get("vegas_spread", 0))
+
+        bet_line = _format_bet_line(bet_team, bet_spread)
+
+        # Result (if available)
+        result_str = ""
+        if results_df is not None:
+            game_result = results_df[results_df["game_id"] == row["game_id"]]
+            if len(game_result) > 0:
+                result_row = game_result.iloc[0]
+                # Determine if bet covered
+                if row["jp_favored_side"] == "HOME":
+                    covered = result_row.get("home_covered", False)
+                else:
+                    # Away bet: cover_margin = actual_margin + vegas_spread
+                    # If away bet, we bet on away, so: -actual_margin > spread_open
+                    actual_margin = result_row.get("actual_margin", 0)
+                    spread_open = row.get("spread_open", row.get("vegas_spread", 0))
+                    covered = (-actual_margin) > spread_open
+                result_str = "✓ WIN" if covered else "✗ LOSS"
+
+        lines.append(f"{i:<3} {matchup:<30} | {row['edge_abs']:>5.1f}p | {row['ev']:>+5.2f} | {bet_line:<18} | {result_str:<8}")
+
+    lines.append("-" * 95)
+    return "\n".join(lines)
+
+
+def format_phase1_edge_table(
+    recs: list,
+    results_df: Optional[pd.DataFrame] = None,
+) -> str:
+    """Format Phase 1 Edge >= 5.0 bets as display table.
+
+    Args:
+        recs: List of Phase1EdgeRecommendation objects
+        results_df: Optional DataFrame with actual results
+
+    Returns:
+        Formatted table string
+    """
+    lines = []
+    lines.append("=" * 85)
+    lines.append("Phase 1 Edge >= 5.0 vs Open (excluding Primary Engine)")
+    lines.append("=" * 85)
+    lines.append("Selection: |edge| >= 5.0 vs OPEN, NOT in Primary | Bet execution: OPEN line")
+    lines.append("-" * 85)
+    lines.append(f"{'#':<3} {'Matchup':<30} | {'Edge':>6} | {'Bet (Open)':<18} | {'Result':<8}")
+    lines.append("-" * 85)
+
+    for i, rec in enumerate(recs, 1):
+        matchup = _format_matchup(rec.away_team, rec.home_team)
+
+        # Determine bet spread for display
+        if rec.bet_side == "HOME":
+            bet_spread = rec.vegas_spread
+        else:
+            bet_spread = -rec.vegas_spread
+
+        bet_line = _format_bet_line(rec.bet_team, bet_spread)
+
+        # Result (if available)
+        result_str = ""
+        if results_df is not None:
+            game_result = results_df[results_df["game_id"] == rec.game_id]
+            if len(game_result) > 0:
+                result_row = game_result.iloc[0]
+                actual_margin = result_row.get("actual_margin", 0)
+                if rec.bet_side == "HOME":
+                    covered = actual_margin > -rec.vegas_spread
+                else:
+                    covered = (-actual_margin) > rec.vegas_spread
+                result_str = "✓ WIN" if covered else "✗ LOSS"
+
+        lines.append(f"{i:<3} {matchup:<30} | {rec.edge_abs:>5.1f}p | {bet_line:<18} | {result_str:<8}")
+
+    lines.append("-" * 85)
+    return "\n".join(lines)
+
+
+def format_week_summary(
+    week: int,
+    primary_bets: int,
+    primary_record: tuple[int, int],
+    phase1_edge_bets: int,
+    phase1_edge_record: tuple[int, int],
+    total_fbs_games: int,
+) -> str:
+    """Format week summary block.
+
+    Args:
+        week: Week number
+        primary_bets: Number of Primary Engine bets
+        primary_record: (wins, losses) tuple for Primary
+        phase1_edge_bets: Number of Phase 1 Edge bets
+        phase1_edge_record: (wins, losses) tuple for Phase 1 Edge
+        total_fbs_games: Total FBS vs FBS games that week
+
+    Returns:
+        Formatted summary string
+    """
+    lines = []
+    lines.append("=" * 95)
+    lines.append(f"WEEK {week} SUMMARY")
+    lines.append("=" * 95)
+
+    # Primary Engine
+    p_w, p_l = primary_record
+    p_total = p_w + p_l
+    p_pct = 100 * p_w / p_total if p_total > 0 else 0
+    lines.append(f"Primary Engine (EV >= 3%):           {primary_bets:>2} bets | {p_w}-{p_l} ({p_pct:.1f}% ATS)")
+
+    # Phase 1 Edge
+    e_w, e_l = phase1_edge_record
+    e_total = e_w + e_l
+    e_pct = 100 * e_w / e_total if e_total > 0 else 0
+    lines.append(f"Phase 1 Edge >= 5.0 (non-Primary):   {phase1_edge_bets:>2} bets | {e_w}-{e_l} ({e_pct:.1f}% ATS)")
+
+    # Combined
+    combined_bets = primary_bets + phase1_edge_bets
+    combined_w = p_w + e_w
+    combined_l = p_l + e_l
+    combined_total = combined_w + combined_l
+    combined_pct = 100 * combined_w / combined_total if combined_total > 0 else 0
+    lines.append(f"Combined (all edge >= 5.0):          {combined_bets:>2} bets | {combined_w}-{combined_l} ({combined_pct:.1f}% ATS)")
+
+    lines.append(f"Total games that week:               {total_fbs_games:>2}")
+    lines.append("=" * 95)
+
+    return "\n".join(lines)
 
 
 def load_backtest_data(
@@ -1052,18 +1267,20 @@ def run_predict(
     week: Optional[int] = None,
     output_dir: str = "data/spread_selection/outputs",
     sp_gate_config: Optional[Phase1SPGateConfig] = None,
-    edge_confirm_config: Optional[Phase1EdgeConfirmConfig] = None,
+    emit_phase1_edge_list: bool = True,
+    phase1_edge_jp_min: float = 5.0,
+    phase1_edge_veto_config: Optional[Phase1EdgeVetoConfig] = None,
+    fbs_only: bool = True,
+    distinct_lists: bool = True,
 ) -> None:
     """Generate predictions for upcoming games.
 
-    Emits TWO separate bet lists:
-    - LIST A (PRIMARY/ULTRA): EV-based recommendations from calibrated selection engine
-    - LIST B (PHASE1_EDGE_CONFIRM): Edge-based Phase 1 with SP+ confirm gate (if enabled)
+    Emits TWO separate bet lists in Phase 1 (weeks 1-3):
+    - LIST A (ENGINE_EV PRIMARY/ULTRA): EV-based recommendations from calibrated engine
+    - LIST B (PHASE1_EDGE): Edge-based Phase 1 list (auto-emitted in weeks 1-3)
 
-    LIST B is SEPARATE from LIST A and does NOT use EV-based selection.
-    Based on diagnostic findings (2026-02-13):
-    - Edge-based selection shows expected pattern: confirm (62.2%) > oppose (56.9%)
-    - EV-based Phase 1 volume is too small (N=27) and gating destroys it (N=2)
+    LIST A is the official engine output (execution_default=True for PRIMARY).
+    LIST B is for visibility only (execution_default=False, is_official_engine=False).
 
     Args:
         slate_csv: Path to CSV with upcoming slate
@@ -1075,25 +1292,34 @@ def run_predict(
         week: Week for predictions (default: infer from slate)
         output_dir: Output directory for prediction files
         sp_gate_config: Optional Phase 1 SP+ gate for EV-based selection (default OFF)
-        edge_confirm_config: Optional Phase 1 Edge+Confirm strategy config (LIST B, default OFF)
+        emit_phase1_edge_list: Whether to emit LIST B in Phase 1 (default True)
+        phase1_edge_jp_min: JP+ edge threshold for LIST B (default 5.0)
+        phase1_edge_veto_config: Optional HYBRID_VETO_2 config for LIST B (default OFF)
+        fbs_only: If True (default), exclude FCS games from bet recommendations
+        distinct_lists: If True (default), Phase 1 Edge excludes games in Primary Engine
     """
     from scipy.special import expit
 
     print(f"\n{'=' * 80}")
     print("SPREAD SELECTION PREDICTION")
     print("=" * 80)
-    print(f"LIST A Modes: {', '.join(emit_modes)}")
-    print(f"PRIMARY min EV: {primary_min_ev:.2f}")
-    print(f"ULTRA min EV:   {ultra_min_ev:.2f}")
+    print(f"LIST A (ENGINE_EV): {', '.join(emit_modes).upper()}")
+    print(f"  PRIMARY min EV: {primary_min_ev:.2f}")
+    print(f"  ULTRA min EV:   {ultra_min_ev:.2f}")
     if sp_gate_config and sp_gate_config.enabled:
-        print(f"SP+ Gate (LIST A): ENABLED (mode={sp_gate_config.mode}, weeks={sp_gate_config.weeks})")
+        print(f"  SP+ Gate: ENABLED (mode={sp_gate_config.mode}) -- NOT RECOMMENDED")
     else:
-        print(f"SP+ Gate (LIST A): DISABLED")
-    if edge_confirm_config and edge_confirm_config.enabled:
-        print(f"LIST B (PHASE1_EDGE_CONFIRM): ENABLED (jp_edge>={edge_confirm_config.jp_edge_min}, "
-              f"sp_edge>={edge_confirm_config.sp_edge_min})")
-    else:
-        print(f"LIST B (PHASE1_EDGE_CONFIRM): DISABLED")
+        print(f"  SP+ Gate: DISABLED (recommended)")
+    print(f"LIST B (PHASE1_EDGE): {'AUTO in weeks 1-3' if emit_phase1_edge_list else 'DISABLED'}")
+    if emit_phase1_edge_list:
+        print(f"  JP+ edge threshold: {phase1_edge_jp_min}")
+        if phase1_edge_veto_config and phase1_edge_veto_config.enabled:
+            print(f"  HYBRID_VETO_2: ENABLED (sp_oppose>={phase1_edge_veto_config.sp_oppose_min}, "
+                  f"jp_band=[{phase1_edge_veto_config.jp_band_low},{phase1_edge_veto_config.jp_band_high}))")
+        else:
+            print(f"  HYBRID_VETO_2: DISABLED (default)")
+    print(f"FBS-only filter: {'ENABLED' if fbs_only else 'DISABLED'}")
+    print(f"Distinct lists: {'ENABLED' if distinct_lists else 'DISABLED'}")
     print("=" * 80)
 
     # Create output directory
@@ -1104,6 +1330,29 @@ def run_predict(
     print(f"\nLoading slate from {slate_csv}...")
     slate_df = pd.read_csv(slate_csv)
     print(f"  Loaded {len(slate_df)} games")
+
+    # FBS-only filter
+    fbs_teams = set()
+    if fbs_only:
+        try:
+            from src.api.cfbd_client import CFBDClient
+            client = CFBDClient()
+            # Get year from slate or current year
+            filter_year = year if year else (int(slate_df["year"].iloc[0]) if "year" in slate_df.columns else datetime.now().year)
+            fbs_list = client.get_fbs_teams(year=filter_year)
+            fbs_teams = {t.school for t in fbs_list}
+            logger.info(f"[PREDICT] Fetched {len(fbs_teams)} FBS teams for {filter_year}")
+
+            # Filter to FBS vs FBS games only
+            pre_filter_count = len(slate_df)
+            fbs_mask = slate_df["home_team"].isin(fbs_teams) & slate_df["away_team"].isin(fbs_teams)
+            slate_df = slate_df[fbs_mask].copy()
+            filtered_count = pre_filter_count - len(slate_df)
+            if filtered_count > 0:
+                print(f"  FBS filter: removed {filtered_count} FCS games, {len(slate_df)} FBS vs FBS remaining")
+        except Exception as e:
+            logger.warning(f"Failed to fetch FBS teams for filtering: {e}. Proceeding with all games.")
+            print(f"  WARNING: FBS filter unavailable ({e}), using all games")
 
     # Validate required columns
     required = ["game_id", "home_team", "away_team"]
@@ -1410,6 +1659,16 @@ def run_predict(
             } if sp_gate_config and sp_gate_config.should_apply(week) else {"enabled": False},
         }
 
+        # Add required metadata fields to bets DataFrame (LIST A schema)
+        is_primary = (mode == "primary")
+        bets["list_family"] = "ENGINE_EV"
+        bets["list_name"] = mode.upper()  # "PRIMARY" or "ULTRA"
+        bets["selection_basis"] = "EV"
+        bets["is_official_engine"] = is_primary
+        bets["execution_default"] = is_primary
+        bets["line_type"] = "close"  # List A uses close lines for EV
+        bets["rationale"] = bets["ev"].apply(lambda x: f"EV>={min_ev:.2f}" if x >= min_ev else "PASS")
+
         # Write outputs
         # 1. Bets CSV
         bets_csv_path = output_path / f"bets_{mode}_{year}_week{week}.csv"
@@ -1458,18 +1717,32 @@ def run_predict(
                 )
 
     # =========================================================================
-    # LIST B: PHASE1_EDGE_CONFIRM (Edge-based with SP+ confirmation)
+    # LIST B: PHASE1_EDGE (Edge-based, auto-emitted in weeks 1-3)
     # This is SEPARATE from LIST A (EV-based) and does NOT use EV selection
     # =========================================================================
-    if edge_confirm_config and edge_confirm_config.enabled and week in edge_confirm_config.weeks:
+    list_b_selected = []
+    list_b_vetoed = []
+    list_b_candidates = []
+    list_b_sp_spreads = {}
+
+    phase1_edge_config = Phase1EdgeBaselineConfig(
+        weeks=[1, 2, 3],
+        jp_edge_min=phase1_edge_jp_min,
+        line_type="open",
+        veto_config=phase1_edge_veto_config,
+    )
+
+    if emit_phase1_edge_list and week in [1, 2, 3]:
         print(f"\n{'=' * 80}")
-        print("LIST B: PHASE1_EDGE_CONFIRM STRATEGY")
+        print("LIST B: PHASE1_EDGE (auto-emitted in Phase 1)")
         print("=" * 80)
-        print(f"Selection: |edge| >= {edge_confirm_config.jp_edge_min} + SP+ confirm (edge >= {edge_confirm_config.sp_edge_min})")
-        print(f"Missing SP+: {edge_confirm_config.missing_sp_behavior}")
+        veto_label = "ENABLED" if (phase1_edge_veto_config and phase1_edge_veto_config.enabled) else "DISABLED"
+        print(f"Selection: |edge| >= {phase1_edge_jp_min} (OPEN line)")
+        print(f"HYBRID_VETO_2: {veto_label}")
+        print("execution_default=False, is_official_engine=False")
         print("=" * 80)
 
-        # Fetch SP+ spreads for this week (if not already fetched)
+        # Fetch SP+ spreads for monitoring (and veto if enabled)
         try:
             from src.api.cfbd_client import CFBDClient
             client = CFBDClient()
@@ -1479,44 +1752,67 @@ def run_predict(
             logger.warning(f"Failed to fetch SP+ spreads for LIST B: {e}")
             list_b_sp_spreads = {}
 
-        # Prepare slate for edge+confirm evaluation
-        # Need: game_id, season, week, home_team, away_team, jp_spread, vegas_spread
+        # Prepare slate for edge evaluation (use OPEN line)
         list_b_slate = slate_df.copy()
         if "season" not in list_b_slate.columns:
             list_b_slate["season"] = year
 
-        # Run edge+confirm evaluation
-        selected_recs, all_recs = evaluate_slate_edge_confirm(
+        # Run Phase1 Edge Baseline evaluation
+        list_b_selected, list_b_vetoed, list_b_candidates = evaluate_slate_edge_baseline(
             list_b_slate,
             list_b_sp_spreads,
-            edge_confirm_config,
+            phase1_edge_config,
         )
 
-        print(f"\n  Results (PHASE1_EDGE_CONFIRM):")
-        print(f"    Candidates (|edge| >= {edge_confirm_config.jp_edge_min}): {len(all_recs)}")
-        print(f"    Selected (SP+ confirms): {len(selected_recs)}")
+        # Apply distinct lists filter: exclude games already in Primary Engine
+        if distinct_lists and 'bets' in dir() and len(bets) > 0:
+            primary_game_ids = set(bets['game_id'].values)
+            pre_distinct_count = len(list_b_selected)
+            list_b_selected = [rec for rec in list_b_selected if rec.game_id not in primary_game_ids]
+            list_b_vetoed = [rec for rec in list_b_vetoed if rec.game_id not in primary_game_ids]
+            list_b_candidates = [rec for rec in list_b_candidates if rec.game_id not in primary_game_ids]
+            excluded_count = pre_distinct_count - len(list_b_selected)
+            if excluded_count > 0:
+                print(f"  Distinct lists: excluded {excluded_count} games already in Primary Engine")
+
+        print(f"\n  Results (PHASE1_EDGE):")
+        print(f"    Candidates (|edge| >= {phase1_edge_jp_min}): {len(list_b_candidates)}")
+        print(f"    Selected: {len(list_b_selected)}")
+        if phase1_edge_veto_config and phase1_edge_veto_config.enabled:
+            print(f"    Vetoed by HYBRID_VETO_2: {len(list_b_vetoed)}")
 
         # Convert to DataFrame and save
-        if selected_recs:
-            list_b_df = edge_confirm_to_dataframe(selected_recs)
+        if list_b_selected or list_b_vetoed:
+            # Include both selected and vetoed in output (vetoed marked as such)
+            all_recs_for_output = list_b_selected + list_b_vetoed
+            list_b_df = edge_baseline_to_dataframe(all_recs_for_output)
+
+            # Determine list name based on veto config
+            list_name_suffix = "edge_baseline" if not (phase1_edge_veto_config and phase1_edge_veto_config.enabled) else "edge_hybrid_veto_2"
 
             # Write LIST B outputs
-            list_b_csv_path = output_path / f"bets_phase1_edge_confirm_{year}_week{week}.csv"
+            list_b_csv_path = output_path / f"bets_phase1_{list_name_suffix}_{year}_week{week}.csv"
             list_b_df.to_csv(list_b_csv_path, index=False)
             print(f"  Wrote: {list_b_csv_path}")
 
-            list_b_json_path = output_path / f"bets_phase1_edge_confirm_{year}_week{week}.json"
+            list_b_json_path = output_path / f"bets_phase1_{list_name_suffix}_{year}_week{week}.json"
             list_b_json = {
                 "metadata": {
-                    "strategy": "PHASE1_EDGE_CONFIRM",
+                    "list_family": "PHASE1_EDGE",
+                    "list_name": "EDGE_BASELINE" if not (phase1_edge_veto_config and phase1_edge_veto_config.enabled) else "EDGE_HYBRID_VETO_2",
                     "selection_basis": "EDGE",
-                    "jp_edge_min": edge_confirm_config.jp_edge_min,
-                    "sp_edge_min": edge_confirm_config.sp_edge_min,
-                    "missing_sp_behavior": edge_confirm_config.missing_sp_behavior,
+                    "is_official_engine": False,
+                    "execution_default": False,
+                    "line_type": "open",
+                    "jp_edge_min": phase1_edge_jp_min,
+                    "veto_enabled": phase1_edge_veto_config.enabled if phase1_edge_veto_config else False,
+                    "veto_sp_oppose_min": phase1_edge_veto_config.sp_oppose_min if phase1_edge_veto_config else None,
+                    "veto_jp_band_high": phase1_edge_veto_config.jp_band_high if phase1_edge_veto_config else None,
                     "year": year,
                     "week": week,
-                    "n_candidates": len(all_recs),
-                    "n_selected": len(selected_recs),
+                    "n_candidates": len(list_b_candidates),
+                    "n_selected": len(list_b_selected),
+                    "n_vetoed": len(list_b_vetoed),
                     "n_sp_spreads_fetched": len(list_b_sp_spreads),
                     "generated_at": datetime.now().isoformat(),
                 },
@@ -1526,106 +1822,159 @@ def run_predict(
                 json.dump(list_b_json, f, indent=2, default=str)
             print(f"  Wrote: {list_b_json_path}")
 
-            # Print bet summary
-            print(f"\n  TOP BETS (PHASE1_EDGE_CONFIRM):")
-            print(f"  {'-' * 70}")
-            print(f"  {'Game':<40} | {'Side':<6} | {'Edge':>7} | {'SP+ Edge':>8}")
-            print(f"  {'-' * 70}")
-            for rec in selected_recs[:10]:
-                game = f"{rec.away_team} @ {rec.home_team}"
-                if len(game) > 38:
-                    game = game[:35] + "..."
-                sp_edge_str = f"{rec.sp_edge_pts:+.1f}" if rec.sp_edge_pts is not None else "N/A"
-                print(f"  {game:<40} | {rec.bet_side:<6} | {rec.edge_pts:>+6.1f}p | {sp_edge_str:>8}")
+            # Print bet summary (selected only)
+            if list_b_selected:
+                print(f"\n  TOP BETS (PHASE1_EDGE - selected):")
+                print(f"  {'-' * 75}")
+                print(f"  {'Game':<40} | {'Side':<6} | {'Edge':>7} | {'SP+ Edge':>8} | {'Veto':>5}")
+                print(f"  {'-' * 75}")
+                for rec in list_b_selected[:10]:
+                    game = f"{rec.away_team} @ {rec.home_team}"
+                    if len(game) > 38:
+                        game = game[:35] + "..."
+                    sp_edge_str = f"{rec.sp_edge_pts:+.1f}" if rec.sp_edge_pts is not None else "N/A"
+                    veto_str = "YES" if rec.veto_applied else "NO"
+                    print(f"  {game:<40} | {rec.bet_side:<6} | {rec.edge_pts:>+6.1f}p | {sp_edge_str:>8} | {veto_str:>5}")
         else:
-            print(f"\n  No games selected for LIST B (no SP+ confirms)")
+            print(f"\n  No games meet edge threshold for LIST B")
 
-    elif edge_confirm_config and edge_confirm_config.enabled:
-        print(f"\n  LIST B: Week {week} not in Phase 1 weeks {edge_confirm_config.weeks}, skipping")
+    elif emit_phase1_edge_list and week not in [1, 2, 3]:
+        print(f"\n  LIST B: Week {week} not in Phase 1 (weeks 1-3), skipping")
 
     # =========================================================================
-    # OVERLAP/CONFLICT REPORT (when both List A and List B are generated)
+    # WEEK SUMMARY + OVERLAP/CONFLICT REPORT (Phase 1 only)
     # =========================================================================
-    if (edge_confirm_config and edge_confirm_config.enabled and
-        week in edge_confirm_config.weeks and
-        'bets' in dir() and len(bets) > 0 and
-        'selected_recs' in dir() and len(selected_recs) > 0):
+    if week in [1, 2, 3] and 'bets' in dir():
+        # Get counts from primary mode
+        engine_primary_count = len(bets) if 'primary' in emit_modes else 0
+        engine_ultra_count = 0  # Will be updated if ultra was processed
 
-        print(f"\n{'=' * 80}")
-        print("LIST A vs LIST B OVERLAP/CONFLICT REPORT")
-        print("=" * 80)
+        # Check if ultra was also processed (would need separate tracking)
+        # For now, use emit_modes to infer
 
-        # Build overlap DataFrame
-        # List A: bets DataFrame with game_id, jp_favored_side, ev
-        lista_games = set(bets['game_id'].values)
-        lista_sides = {int(row['game_id']): row['jp_favored_side'] for _, row in bets.iterrows()}
-        lista_evs = {int(row['game_id']): row['ev'] for _, row in bets.iterrows()}
+        phase1_edge_count = len(list_b_selected)
+        phase1_vetoed_count = len(list_b_vetoed)
 
-        # List B: selected_recs with game_id, bet_side
-        listb_games = {rec.game_id for rec in selected_recs}
-        listb_sides = {rec.game_id: rec.bet_side for rec in selected_recs}
-        listb_edges = {rec.game_id: rec.edge_abs for rec in selected_recs}
+        # Write week summary JSON
+        week_summary = {
+            "year": year,
+            "week": week,
+            "generated_at": datetime.now().isoformat(),
+            "engine_ev_primary_count": engine_primary_count,
+            "engine_ev_ultra_count": engine_ultra_count,
+            "phase1_edge_baseline_count": phase1_edge_count,
+            "phase1_edge_vetoed_count": phase1_vetoed_count,
+            "config": {
+                "primary_min_ev": primary_min_ev,
+                "ultra_min_ev": ultra_min_ev,
+                "phase1_edge_jp_min": phase1_edge_jp_min,
+                "phase1_edge_veto_enabled": phase1_edge_veto_config.enabled if phase1_edge_veto_config else False,
+                "emit_modes": emit_modes,
+            },
+            "files": {
+                "lista_primary": f"bets_primary_{year}_week{week}.csv" if "primary" in emit_modes else None,
+                "lista_ultra": f"bets_ultra_{year}_week{week}.csv" if "ultra" in emit_modes else None,
+                "listb_phase1_edge": f"bets_phase1_edge_baseline_{year}_week{week}.csv" if list_b_selected or list_b_vetoed else None,
+            },
+        }
 
-        # Build overlap records
-        all_games = lista_games | listb_games
-        overlap_records = []
+        week_summary_path = output_path / f"week_summary_{year}_week{week}.json"
+        with open(week_summary_path, "w") as f:
+            json.dump(week_summary, f, indent=2, default=str)
+        print(f"\n  Wrote: {week_summary_path}")
 
-        for game_id in all_games:
-            in_a = game_id in lista_games
-            in_b = game_id in listb_games
-            side_a = lista_sides.get(game_id)
-            side_b = listb_sides.get(game_id)
-            ev_a = lista_evs.get(game_id)
-            edge_b = listb_edges.get(game_id)
+        # Overlap/conflict report
+        if len(bets) > 0 and len(list_b_selected) > 0:
+            print(f"\n{'=' * 80}")
+            print("LIST A vs LIST B OVERLAP/CONFLICT REPORT")
+            print("=" * 80)
 
-            # Determine agreement/conflict
-            if in_a and in_b:
-                agrees = side_a == side_b
-                conflict = side_a != side_b
-            else:
-                agrees = None
-                conflict = None
+            # Build overlap DataFrame
+            lista_games = set(int(gid) for gid in bets['game_id'].values)
+            lista_sides = {int(row['game_id']): row['jp_favored_side'] for _, row in bets.iterrows()}
+            lista_evs = {int(row['game_id']): row['ev'] for _, row in bets.iterrows()}
+            lista_confidence = {int(row['game_id']): row.get('tier', 'BET') for _, row in bets.iterrows()}
 
-            overlap_records.append({
-                'game_id': game_id,
-                'in_primary': in_a,
-                'primary_side': side_a,
-                'primary_ev': ev_a,
-                'in_phase1_edge_confirm': in_b,
-                'phase1_side': side_b,
-                'phase1_edge_abs': edge_b,
-                'side_agrees': agrees,
-                'conflict': conflict,
-            })
+            listb_games = {rec.game_id for rec in list_b_selected}
+            listb_sides = {rec.game_id: rec.bet_side for rec in list_b_selected}
+            listb_edges = {rec.game_id: rec.edge_abs for rec in list_b_selected}
+            listb_vetoed = {rec.game_id: rec.veto_applied for rec in list_b_selected}
 
-        overlap_df = pd.DataFrame(overlap_records)
+            all_games = lista_games | listb_games
+            overlap_records = []
 
-        # Compute summary stats
-        n_both = len([r for r in overlap_records if r['in_primary'] and r['in_phase1_edge_confirm']])
-        n_agrees = len([r for r in overlap_records if r['side_agrees'] is True])
-        n_conflicts = len([r for r in overlap_records if r['conflict'] is True])
-        n_only_a = len([r for r in overlap_records if r['in_primary'] and not r['in_phase1_edge_confirm']])
-        n_only_b = len([r for r in overlap_records if not r['in_primary'] and r['in_phase1_edge_confirm']])
+            for game_id in all_games:
+                in_a = game_id in lista_games
+                in_b = game_id in listb_games
+                side_a = lista_sides.get(game_id)
+                side_b = listb_sides.get(game_id)
+                ev_a = lista_evs.get(game_id)
+                edge_b = listb_edges.get(game_id)
+                conf_a = lista_confidence.get(game_id)
+                veto_b = listb_vetoed.get(game_id, False)
 
-        print(f"  Games in List A (PRIMARY): {len(lista_games)}")
-        print(f"  Games in List B (PHASE1_EDGE_CONFIRM): {len(listb_games)}")
-        print(f"  Games in BOTH lists: {n_both}")
-        print(f"    - Side agrees: {n_agrees}")
-        print(f"    - Side CONFLICTS: {n_conflicts}")
-        print(f"  Games in List A only: {n_only_a}")
-        print(f"  Games in List B only: {n_only_b}")
+                if in_a and in_b:
+                    agrees = side_a == side_b
+                    conflict = side_a != side_b
+                else:
+                    agrees = None
+                    conflict = None
 
-        if n_conflicts > 0:
-            print(f"\n  *** WARNING: {n_conflicts} CONFLICTS DETECTED ***")
-            print(f"  The betting engine should review these games before placing bets.")
-            conflict_games = [r for r in overlap_records if r['conflict'] is True]
-            for cg in conflict_games[:5]:
-                print(f"    game_id={cg['game_id']}: List A says {cg['primary_side']}, List B says {cg['phase1_side']}")
+                # Recommended resolution (informational only)
+                if conflict:
+                    resolution = "REVIEW: Lists disagree on side"
+                elif in_a and in_b and agrees:
+                    resolution = "CONSENSUS: Both lists agree"
+                elif in_a and not in_b:
+                    resolution = "LIST_A_ONLY: EV-based pick"
+                elif in_b and not in_a:
+                    resolution = "LIST_B_ONLY: Edge-based pick"
+                else:
+                    resolution = "UNKNOWN"
 
-        # Write overlap CSV
-        overlap_csv_path = output_path / f"overlap_primary_vs_phase1_edge_confirm_{year}_week{week}.csv"
-        overlap_df.to_csv(overlap_csv_path, index=False)
-        print(f"\n  Wrote: {overlap_csv_path}")
+                overlap_records.append({
+                    'game_id': game_id,
+                    'in_engine_primary': in_a,
+                    'engine_side': side_a,
+                    'engine_ev': ev_a,
+                    'engine_confidence': conf_a,
+                    'in_phase1_edge': in_b,
+                    'phase1_side': side_b,
+                    'phase1_edge_abs': edge_b,
+                    'veto_applied': veto_b,
+                    'side_agrees': agrees,
+                    'conflict': conflict,
+                    'recommended_resolution': resolution,
+                })
+
+            overlap_df = pd.DataFrame(overlap_records)
+
+            # Compute summary stats
+            n_both = len([r for r in overlap_records if r['in_engine_primary'] and r['in_phase1_edge']])
+            n_agrees = len([r for r in overlap_records if r['side_agrees'] is True])
+            n_conflicts = len([r for r in overlap_records if r['conflict'] is True])
+            n_only_a = len([r for r in overlap_records if r['in_engine_primary'] and not r['in_phase1_edge']])
+            n_only_b = len([r for r in overlap_records if not r['in_engine_primary'] and r['in_phase1_edge']])
+
+            print(f"  Engine bets: {len(lista_games)}")
+            print(f"  Phase1 edge bets: {len(listb_games)}")
+            print(f"  Overlap: {n_both}, Conflicts: {n_conflicts}")
+            print(f"    - Side agrees: {n_agrees}")
+            print(f"    - Side CONFLICTS: {n_conflicts}")
+            print(f"  Engine only: {n_only_a}")
+            print(f"  Phase1 edge only: {n_only_b}")
+
+            if n_conflicts > 0:
+                print(f"\n  *** WARNING: {n_conflicts} CONFLICTS DETECTED ***")
+                print(f"  The betting engine should review these games before placing bets.")
+                conflict_games = [r for r in overlap_records if r['conflict'] is True]
+                for cg in conflict_games[:5]:
+                    print(f"    game_id={cg['game_id']}: Engine says {cg['engine_side']}, Phase1 says {cg['phase1_side']}")
+
+            # Write overlap CSV
+            overlap_csv_path = output_path / f"overlap_engine_primary_vs_phase1_edge_{year}_week{week}.csv"
+            overlap_df.to_csv(overlap_csv_path, index=False)
+            print(f"\n  Wrote: {overlap_csv_path}")
 
     print("\n" + "=" * 80)
     print("PREDICTION COMPLETE")
@@ -2034,23 +2383,37 @@ Examples:
         choices=["ev", "edge"],
         help="Candidate selection basis: 'ev' for EV-based, 'edge' for edge-based (default: ev)"
     )
-    # Phase 1 Edge+Confirm Strategy arguments (LIST B - separate from EV-based LIST A)
+    # Phase 1 Edge Baseline (LIST B) - auto-emitted in weeks 1-3 by default
     predict_parser.add_argument(
-        "--phase1-edge-confirm", action="store_true", default=False,
-        help="Enable Phase 1 Edge+Confirm strategy (LIST B, separate from EV-based LIST A)"
+        "--no-phase1-edge-list", action="store_true", default=False,
+        help="Disable automatic emission of Phase 1 Edge list (LIST B) in weeks 1-3"
     )
     predict_parser.add_argument(
-        "--phase1-edge-confirm-jp-edge-min", type=float, default=5.0,
-        help="JP+ edge threshold for Phase 1 Edge+Confirm (default: 5.0)"
+        "--phase1-edge-jp-min", type=float, default=5.0,
+        help="JP+ edge threshold for Phase 1 Edge baseline (default: 5.0)"
+    )
+    # HYBRID_VETO_2 overlay for LIST B (default OFF)
+    predict_parser.add_argument(
+        "--phase1-edge-veto", action="store_true", default=False,
+        help="Enable HYBRID_VETO_2 overlay for Phase 1 Edge list (default: OFF)"
     )
     predict_parser.add_argument(
-        "--phase1-edge-confirm-sp-edge-min", type=float, default=2.0,
-        help="SP+ edge threshold for CONFIRM status (default: 2.0)"
+        "--phase1-edge-veto-sp-oppose-min", type=float, default=2.0,
+        help="SP+ opposition threshold for HYBRID_VETO_2 (default: 2.0)"
     )
     predict_parser.add_argument(
-        "--phase1-edge-confirm-missing-behavior", type=str, default="reject",
-        choices=["reject", "treat_neutral"],
-        help="How to handle games without SP+ (default: reject)"
+        "--phase1-edge-veto-jp-band-high", type=float, default=8.0,
+        help="Upper bound of JP+ marginal band for veto eligibility (default: 8.0)"
+    )
+    # FBS-only filter (default ON)
+    predict_parser.add_argument(
+        "--no-fbs-only", action="store_true", default=False,
+        help="Disable FBS-only filter (include FCS games in recommendations)"
+    )
+    # Distinct lists (default ON)
+    predict_parser.add_argument(
+        "--no-distinct-lists", action="store_true", default=False,
+        help="Disable distinct lists (Phase 1 Edge may overlap with Primary Engine)"
     )
 
     # Backtest command (V2)
@@ -2142,14 +2505,14 @@ Examples:
                 candidate_basis=args.sp_gate_candidate_basis,
             )
 
-        # Build Phase1EdgeConfirm config (LIST B - separate from EV-based LIST A)
-        edge_confirm_config = None
-        if args.phase1_edge_confirm:
-            edge_confirm_config = Phase1EdgeConfirmConfig(
+        # Build Phase1 Edge Veto config (HYBRID_VETO_2 - default OFF)
+        phase1_edge_veto_config = None
+        if args.phase1_edge_veto:
+            phase1_edge_veto_config = Phase1EdgeVetoConfig(
                 enabled=True,
-                jp_edge_min=args.phase1_edge_confirm_jp_edge_min,
-                sp_edge_min=args.phase1_edge_confirm_sp_edge_min,
-                missing_sp_behavior=args.phase1_edge_confirm_missing_behavior,
+                sp_oppose_min=args.phase1_edge_veto_sp_oppose_min,
+                jp_band_low=args.phase1_edge_jp_min,  # Use same as edge min
+                jp_band_high=args.phase1_edge_veto_jp_band_high,
             )
 
         run_predict(
@@ -2162,7 +2525,11 @@ Examples:
             week=args.week,
             output_dir=args.output_dir,
             sp_gate_config=sp_gate_config,
-            edge_confirm_config=edge_confirm_config,
+            emit_phase1_edge_list=not args.no_phase1_edge_list,
+            phase1_edge_jp_min=args.phase1_edge_jp_min,
+            phase1_edge_veto_config=phase1_edge_veto_config,
+            fbs_only=not args.no_fbs_only,
+            distinct_lists=not args.no_distinct_lists,
         )
     else:
         parser.print_help()
