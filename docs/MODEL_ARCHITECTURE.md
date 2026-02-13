@@ -1180,69 +1180,207 @@ python scripts/run_weekly.py --year 2025 --week 10 --use-delta-cache
 
 ### Edge Execution Engine
 
-The Edge Execution Engine optimizes bet selection based on timing, edge size, and season phase:
+The Edge Execution Engine is the decision layer that transforms raw predictions into actionable bet recommendations. It implements probability-based filtering validated across 3,445 games.
 
-- **Core Season (Weeks 4-15):** Edge-Aware mode automatically selects Fixed or LSA. See [Edge-Aware Production Mode](#edge-aware-production-mode) above.
-- **Phase 1 (Weeks 1-3):** Optional SP+ gate and kill-switch controls (below).
+#### Statistical Foundation
+
+**Breakeven Requirement:** At standard -110 odds, the breakeven win rate is:
+
+```
+breakeven = 110 / (100 + 110) = 52.38%
+```
+
+Every threshold, mode, and filter is evaluated against this bar. A feature that improves MAE but drops ATS below breakeven is rejected.
+
+**Edge Threshold Sweep (Regular Season, 2022-2025):**
+
+| Threshold | N Games | ATS (Close) | ATS (Open) | EV vs Vig |
+|-----------|---------|-------------|------------|-----------|
+| 1+ pts | 3,121 | 50.6% | 51.4% | -1.8% / -1.0% |
+| 3+ pts | 2,009 | 51.5% | 53.5% | -0.9% / +1.1% |
+| **5+ pts** | **1,305** | **53.6%** | **54.9%** | **+1.2% / +2.5%** |
+| 7+ pts | 797 | 53.2% | 54.7% | +0.8% / +2.3% |
+| 10+ pts | 387 | 52.7% | 53.5% | +0.3% / +1.1% |
+
+The 5+ threshold maximizes the product of (edge over vig) × (sample size). Higher thresholds have diminishing returns; lower thresholds fail to clear breakeven reliably.
+
+#### Edge Calculation
+
+Edge follows the VegasComparison sign convention:
+
+```python
+# Internal spread: positive = home favored
+# Vegas spread: negative = home favored
+edge = (-model_spread_internal) - vegas_spread
+
+# Interpretation:
+#   edge < 0 → Model likes HOME more than Vegas → Bet HOME
+#   edge > 0 → Model likes AWAY more than Vegas → Bet AWAY
+```
+
+**Example:**
+- JP+ spread: +7.0 (home favored by 7)
+- Vegas spread: -3.0 (home favored by 3)
+- Edge: (-7.0) - (-3.0) = -4.0 → JP+ likes home 4 pts more → Bet HOME
+
+#### Edge-Aware Mode Selection
+
+The engine selects Fixed or LSA mode based on timing and edge magnitude:
+
+```python
+def get_recommendation(days_until_game: int, edge_lsa: float) -> str:
+    if days_until_game >= 4:  # Opening line
+        return "fixed"        # Fixed: 56.5% at 5+ edge
+    elif abs(edge_lsa) >= 5.0:  # Closing, high conviction
+        return "lsa"          # LSA: 55.1% at 5+ edge
+    else:                     # Closing, moderate conviction
+        return "fixed"        # Fixed: 52.9% at 3+ edge
+```
+
+**Validation (Core Weeks 4-15, N=2,485):**
+
+| Context | Mode | N (5+ Edge) | ATS % | 95% CI |
+|---------|------|-------------|-------|--------|
+| Opening (4+ days) | Fixed | 476 | 56.5% | [52.0%, 61.0%] |
+| Closing, 5+ edge | LSA | 391 | 55.1% | [50.1%, 60.1%] |
+| Closing, 3-5 edge | Fixed | 550 | 52.9% | [48.7%, 57.1%] |
+
+Confidence intervals computed via bootstrap resampling (10,000 iterations).
 
 #### Phase 1 Risk Controls
 
-Optional controls for managing overconfident early-season predictions. Both are **disabled by default**.
+Phase 1 (Weeks 1-3) has distinct characteristics requiring separate handling:
+
+**Phase 1 vs Core Comparison:**
+
+| Metric | Phase 1 | Core | Delta |
+|--------|---------|------|-------|
+| Prior dependence | 92% | 35% | Model is SP+ wrapper early |
+| Error Std | 17.55 | 15.81 | Higher variance |
+| 5+ Edge ATS (Close) | 51.1% | 55.1% | -4.0% |
+| Mean Signed Error | +0.90 | +0.46 | Home bias amplified |
 
 ##### SP+ Agreement Gate
 
-Cross-references JP+ picks against SP+ predictions to filter overconfident bets.
+**Implementation:** `src/predictions/sp_gate.py`
 
-```bash
-# Enable SP+ gating (confirm_only mode)
-python scripts/run_weekly.py --year 2026 --week 2 --sp-gate
+Fetches SP+ pregame predictions from CFBD API and categorizes agreement:
 
-# Custom threshold and mode
-python scripts/run_weekly.py --sp-gate --sp-gate-mode veto_opposes --sp-gate-sp-edge 3.0
+```python
+def categorize_sp_agreement(jp_edge: float, sp_edge: float, threshold: float) -> str:
+    jp_side = sign(jp_edge)  # -1 = home, +1 = away
+    sp_side = sign(sp_edge)
+
+    if jp_side == sp_side:
+        if abs(sp_edge) >= threshold:
+            return "confirms"   # Same side, strong SP+ edge
+        else:
+            return "neutral"    # Same side, weak SP+ edge
+    else:
+        return "opposes"        # Opposite sides
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--sp-gate` | Off | Enable SP+ gating for Phase 1 |
-| `--sp-gate-mode` | `confirm_only` | Gating mode: `confirm_only`, `veto_opposes`, `confirm_or_neutral` |
-| `--sp-gate-sp-edge` | 2.0 | Minimum SP+ edge (pts) for "confirms" category |
-| `--sp-gate-jp-edge` | 5.0 | Minimum JP+ edge (pts) for candidate bet |
+**Threshold Optimization (Phase 1, 2022-2025):**
+
+| SP+ Edge Min | Confirms N | Confirms ATS | Retention |
+|--------------|------------|--------------|-----------|
+| 1.0 pts | 203 | 57.1% | 29.8% |
+| **2.0 pts** | **127** | **60.0%** | **18.7%** |
+| 3.0 pts | 84 | 58.3% | 12.4% |
+| 4.0 pts | 52 | 55.8% | 7.6% |
+
+The 2.0 threshold maximizes ATS while retaining meaningful volume.
 
 **Gating Modes:**
-- `confirm_only` — Only bet when SP+ confirms (same side AND SP+ edge ≥ threshold). Highest precision.
-- `veto_opposes` — Bet confirms + neutral, reject only when SP+ actively opposes.
-- `confirm_or_neutral` — Same as `veto_opposes`.
 
-**Backtest (2022-2025 Phase 1):**
-| Mode | Retention | ATS % |
-|------|-----------|-------|
-| Baseline | 100% | 51.4% |
-| `confirm_only` | 18.7% | **60.0%** |
-| `veto_opposes` | 67.0% | 52.2% |
+| Mode | Logic | Retention | ATS |
+|------|-------|-----------|-----|
+| `confirm_only` | Keep only "confirms" | 18.7% | 60.0% |
+| `veto_opposes` | Reject "opposes", keep rest | 67.0% | 52.2% |
+| `confirm_or_neutral` | Same as veto_opposes | 67.0% | 52.2% |
 
 ##### Kill-Switch Protection
 
-Disables or throttles Phase 1 betting after a poor Week 1.
+**Implementation:** `src/predictions/phase1_killswitch.py`
+
+Evaluates live betting results after Week 1 to detect regime failure:
+
+```python
+def evaluate_killswitch(week1_results: DataFrame, trigger_ats: float = 0.40) -> bool:
+    wins = (week1_results["ats_outcome"] == 1.0).sum()
+    losses = (week1_results["ats_outcome"] == 0.0).sum()
+    total = wins + losses
+
+    if total < 5:  # Minimum sample
+        return False
+
+    ats_pct = wins / total
+    return ats_pct <= trigger_ats  # Trigger if <= 40%
+```
+
+**Historical Trigger Analysis:**
+
+| Year | Week 1 ATS | Triggered | Action | Weeks 2-3 ATS (Baseline) | Weeks 2-3 ATS (With KS) |
+|------|------------|-----------|--------|--------------------------|-------------------------|
+| 2022 | 40.0% | ✓ | disable | 40.0% | N/A (no bets) |
+| 2023 | 81.8% | ✗ | — | 61.1% | 61.1% |
+| 2024 | 100.0% | ✗ | — | 71.4% | 71.4% |
+| 2025 | 52.9% | ✗ | — | 65.2% | 65.2% |
+
+The kill-switch activates only in genuinely problematic years, avoiding false positives that would reduce profitable volume.
+
+#### CLI Reference
 
 ```bash
-# Enable kill-switch (evaluates after Week 1)
-python scripts/run_weekly.py --year 2026 --week 2 --killswitch
+# Edge-Aware Mode (default, no flags needed)
+python scripts/run_weekly.py --year 2026 --week 5
 
-# Custom trigger threshold and action
-python scripts/run_weekly.py --killswitch --killswitch-trigger-ats 0.35 --killswitch-action raise_threshold
+# Disable LSA (Fixed only)
+python scripts/run_weekly.py --no-lsa
+
+# Custom timing threshold
+python scripts/run_weekly.py --lsa-threshold-days 3
+
+# Phase 1 SP+ Gate
+python scripts/run_weekly.py --sp-gate
+python scripts/run_weekly.py --sp-gate --sp-gate-mode veto_opposes
+python scripts/run_weekly.py --sp-gate --sp-gate-sp-edge 3.0 --sp-gate-jp-edge 6.0
+
+# Phase 1 Kill-Switch
+python scripts/run_weekly.py --killswitch
+python scripts/run_weekly.py --killswitch --killswitch-action raise_threshold
+python scripts/run_weekly.py --killswitch --killswitch-trigger-ats 0.35
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--killswitch` | Off | Enable Phase 1 kill-switch |
-| `--killswitch-action` | `disable_phase1_bets` | Action when triggered: `disable_phase1_bets` or `raise_threshold` |
-| `--killswitch-trigger-ats` | 0.40 | Trigger if Week 1 ATS ≤ this value |
+| `--no-lsa` | Off | Disable LSA, use Fixed for all predictions |
+| `--lsa-threshold-days` | 4 | Days before game to switch from Fixed to LSA |
+| `--sp-gate` | Off | Enable SP+ gating (Phase 1 only) |
+| `--sp-gate-mode` | `confirm_only` | Gating mode |
+| `--sp-gate-sp-edge` | 2.0 | Min SP+ edge for "confirms" |
+| `--sp-gate-jp-edge` | 5.0 | Min JP+ edge for candidates |
+| `--killswitch` | Off | Enable kill-switch (Phase 1 only) |
+| `--killswitch-action` | `disable_phase1_bets` | Action when triggered |
+| `--killswitch-trigger-ats` | 0.40 | Trigger threshold |
 
-**Actions:**
-- `disable_phase1_bets` — Stop all Phase 1 value plays for Weeks 2-3. Safest option.
-- `raise_threshold` — Increase JP+ edge requirement to 8+ pts. Filters to highest-conviction only.
+#### Output Schema
 
-**Note:** Kill-switch requires `season_results_df` with prior weeks' betting results to evaluate. In backtest, this is handled automatically. For live use, results must be provided externally.
+The engine produces the following columns in `comparison_df`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `jp_spread_fixed` | float | Spread using Fixed situational |
+| `jp_spread_lsa` | float | Spread using LSA coefficients |
+| `edge_fixed` | float | Edge vs Vegas (Fixed) |
+| `edge_lsa` | float | Edge vs Vegas (LSA) |
+| `bet_timing_rec` | str | "fixed" or "lsa" |
+| `jp_spread_recommended` | float | Spread per recommendation |
+| `edge_recommended` | float | Edge per recommendation |
+| `sp_spread` | float | SP+ spread (Phase 1 only) |
+| `sp_edge` | float | SP+ edge vs Vegas |
+| `sp_gate_category` | str | "confirms", "neutral", "opposes", "missing" |
+| `phase1_sp_gate_passed` | bool | Whether game passes gate |
 
 ---
 
