@@ -55,6 +55,7 @@ class CFBDClient:
         self._rankings_api: Optional[cfbd.RankingsApi] = None
         self._players_api: Optional[cfbd.PlayersApi] = None
         self._venues_api: Optional[cfbd.VenuesApi] = None
+        self._coaches_api: Optional[cfbd.CoachesApi] = None
 
         # Retry settings
         self.max_retries = settings.max_retries
@@ -122,6 +123,12 @@ class CFBDClient:
         if self._venues_api is None:
             self._venues_api = cfbd.VenuesApi(cfbd.ApiClient(self.configuration))
         return self._venues_api
+
+    @property
+    def coaches_api(self) -> cfbd.CoachesApi:
+        if self._coaches_api is None:
+            self._coaches_api = cfbd.CoachesApi(cfbd.ApiClient(self.configuration))
+        return self._coaches_api
 
     def _call_with_retry(self, func: callable, *args, **kwargs) -> Any:
         """Execute API call with exponential backoff retry on rate limits."""
@@ -606,3 +613,35 @@ class CFBDClient:
             - timezone: Timezone string
         """
         return self._call_with_retry(self.venues_api.get_venues)
+
+    def get_coaches(
+        self,
+        year: Optional[int] = None,
+        team: Optional[str] = None,
+        min_year: Optional[int] = None,
+        max_year: Optional[int] = None,
+    ) -> list:
+        """Get head coach information and records.
+
+        Args:
+            year: Filter by specific season
+            team: Filter by team name
+            min_year: Filter by minimum year
+            max_year: Filter by maximum year
+
+        Returns:
+            List of Coach objects with:
+            - first_name, last_name: Coach name
+            - seasons: List of season records with team, year, wins, losses, etc.
+        """
+        kwargs = {}
+        if year is not None:
+            kwargs["year"] = year
+        if team is not None:
+            kwargs["team"] = team
+        if min_year is not None:
+            kwargs["min_year"] = min_year
+        if max_year is not None:
+            kwargs["max_year"] = max_year
+
+        return self._call_with_retry(self.coaches_api.get_coaches, **kwargs)

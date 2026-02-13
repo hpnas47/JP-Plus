@@ -90,17 +90,17 @@ FIRST_TIME_HCS = {
     "Pete Golding",     # First HC job
 }
 
-# Coaching changes by year: {year: {team: coach_name}}
-# Only track NEW head coaches (first year at program) who have PRIOR HC experience.
-# First-time HCs are listed in FIRST_TIME_HCS and excluded from adjustment.
-COACHING_CHANGES = {
+# Manual coaching change overrides: {year: {team: coach_name}}
+# These are used as fallback when API data is unavailable or as explicit overrides.
+# The auto-detection via detect_coaching_changes() is preferred for current data.
+COACHING_CHANGES_MANUAL = {
+    # Historical records (API may not have complete data for older years)
     2022: {
-        "LSU": "Brian Kelly",           # Notre Dame success
-        "USC": "Lincoln Riley",         # Oklahoma success
-        "Miami": "Mario Cristobal",     # Oregon success
-        "Florida": "Billy Napier",      # Louisiana success
-        # P0.3: Dan Lanning removed - first-time HC (in FIRST_TIME_HCS), no prior HC record
-        "Texas Tech": "Joey McGuire",   # First P5 HC but had HC experience
+        "LSU": "Brian Kelly",
+        "USC": "Lincoln Riley",
+        "Miami": "Mario Cristobal",
+        "Florida": "Billy Napier",
+        "Texas Tech": "Joey McGuire",
     },
     2023: {
         "Wisconsin": "Luke Fickell",
@@ -114,15 +114,16 @@ COACHING_CHANGES = {
         "Indiana": "Curt Cignetti",
         "Mississippi State": "Jeff Lebby",
     },
-    # 2025: No major new coach hires to track
-    # Note: Lane Kiffin (LSU), Jon Sumrall (Florida), Ryan Silverfield (Arkansas)
-    # are 2026 hires - do NOT apply to 2025 backtest
+    # Future years (API won't have data yet)
     2026: {
         "LSU": "Lane Kiffin",
         "Florida": "Jon Sumrall",
         "Arkansas": "Ryan Silverfield",
     },
 }
+
+# Cache for auto-detected coaching changes
+_coaching_changes_cache: dict[int, dict[str, str]] = {}
 
 # Manual overrides for talent rank (if API data is inconsistent)
 # Format: {year: {team: talent_rank}}
@@ -185,17 +186,110 @@ def get_coach_pedigree(coach_name: str) -> Optional[float]:
     return None
 
 
-def is_new_coach(team: str, year: int) -> tuple[bool, Optional[str]]:
+def detect_coaching_changes(client, year: int) -> dict[str, str]:
+    """Auto-detect coaching changes for a season using CFBD API.
+
+    Compares head coaches between year and year-1 to identify changes.
+    Results are cached to avoid repeated API calls.
+
+    Args:
+        client: CFBDClient instance
+        year: Season year to detect changes for
+
+    Returns:
+        Dict mapping team -> new coach name for teams with coaching changes
+    """
+    global _coaching_changes_cache
+
+    # Return cached result if available
+    if year in _coaching_changes_cache:
+        return _coaching_changes_cache[year]
+
+    changes: dict[str, str] = {}
+
+    try:
+        # Get coaches for current year and prior year
+        current_coaches = client.get_coaches(year=year)
+        prior_coaches = client.get_coaches(year=year - 1)
+
+        if not current_coaches or not prior_coaches:
+            logger.warning(
+                f"Incomplete coach data for {year}/{year-1}, falling back to manual dict"
+            )
+            return COACHING_CHANGES_MANUAL.get(year, {})
+
+        # Build lookup: team -> coach name for each year
+        def build_coach_map(coaches_list) -> dict[str, str]:
+            coach_map = {}
+            for coach in coaches_list:
+                if coach.seasons:
+                    for season in coach.seasons:
+                        team = season.school
+                        coach_name = f"{coach.first_name} {coach.last_name}"
+                        coach_map[team] = coach_name
+            return coach_map
+
+        current_map = build_coach_map(current_coaches)
+        prior_map = build_coach_map(prior_coaches)
+
+        # Find teams where coach changed
+        for team, current_coach in current_map.items():
+            prior_coach = prior_map.get(team)
+            if prior_coach and prior_coach != current_coach:
+                changes[team] = current_coach
+                logger.debug(
+                    f"Detected coaching change: {team} - {prior_coach} -> {current_coach}"
+                )
+
+        logger.info(f"Auto-detected {len(changes)} coaching changes for {year}")
+
+        # Cache the result
+        _coaching_changes_cache[year] = changes
+        return changes
+
+    except Exception as e:
+        logger.warning(f"Error detecting coaching changes for {year}: {e}")
+        logger.warning("Falling back to manual coaching changes dict")
+        return COACHING_CHANGES_MANUAL.get(year, {})
+
+
+def get_coaching_changes(client, year: int) -> dict[str, str]:
+    """Get coaching changes for a year, using auto-detection with manual fallback.
+
+    Args:
+        client: CFBDClient instance (can be None to use manual dict only)
+        year: Season year
+
+    Returns:
+        Dict mapping team -> new coach name
+    """
+    # Try auto-detection first if client is provided
+    if client is not None:
+        detected = detect_coaching_changes(client, year)
+        if detected:
+            return detected
+
+    # Fall back to manual dict
+    return COACHING_CHANGES_MANUAL.get(year, {})
+
+
+def is_new_coach(
+    team: str, year: int, client=None
+) -> tuple[bool, Optional[str]]:
     """Check if team has a new head coach for the given year.
+
+    Uses auto-detection via CFBD API if client is provided, otherwise
+    falls back to manual COACHING_CHANGES_MANUAL dict.
 
     Args:
         team: Team name
         year: Season year
+        client: Optional CFBDClient for auto-detection
 
     Returns:
         Tuple of (is_new_coach, coach_name or None)
     """
-    year_changes = COACHING_CHANGES.get(year, {})
+    year_changes = get_coaching_changes(client, year)
     if team in year_changes:
         return True, year_changes[team]
     return False, None
@@ -1263,7 +1357,7 @@ class PreseasonPriors:
         Returns:
             Tuple of (prior_weight, talent_weight, forget_factor, coach_name)
         """
-        new_coach, coach_name = is_new_coach(team, year)
+        new_coach, coach_name = is_new_coach(team, year, client=self.client)
 
         if not new_coach:
             # No coaching change - use default weights
@@ -1297,7 +1391,7 @@ class PreseasonPriors:
             if pedigree is None:
                 # Unlisted coach - data entry error, warn and skip adjustment
                 logger.warning(
-                    f"{team}: Coach '{coach_name}' in COACHING_CHANGES but not in "
+                    f"{team}: Coach '{coach_name}' detected as new coach but not in "
                     f"COACH_PEDIGREE or FIRST_TIME_HCS - add to one of these dicts"
                 )
                 return self.prior_year_weight, self.talent_weight, 0.0, coach_name
