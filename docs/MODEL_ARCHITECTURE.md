@@ -832,6 +832,63 @@ The regression factor for prior year ratings is adjusted based on returning prod
 
 This prevents overvaluing teams that lost key players and undervaluing teams returning most of their production.
 
+### Credible Rebuild Adjustment
+
+**Problem:** Low-RP teams get heavy regression, but some have legitimate reasons for optimism: elite recruiting classes or strong portal additions that RP data can't capture.
+
+**Solution:** Credible Rebuild identifies teams with extremely low RP (≤35%) who have strong talent signals, and reduces their regression penalty during Weeks 1-3 before EFM captures their quality.
+
+#### Qualification Criteria
+
+- Returning Production ≤ 35%
+- AND at least one of:
+  - Talent (recruiting) normalized score ≥ 0.65
+  - Portal normalized score ≥ 0.65
+
+#### Relief Calculation
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `rp_cutoff` | 0.35 | Max RP to trigger |
+| `max_relief` | 0.25 | Max regression reduction (25%) |
+| `talent_threshold` | 0.65 | Min talent_norm to qualify |
+| `portal_threshold` | 0.65 | Min portal_norm to qualify |
+| `week_end` | 5 | Week by which relief tapers to 0 |
+
+**Credibility Score:** `0.5 × talent_norm + 0.5 × portal_norm`
+
+**Relief Formula:** `relief = max_relief × credibility` (capped so `reg_new >= reg_cutoff`)
+
+**Week Taper:** Linear from 100% (Week 1) to 0% (Week 5)
+
+#### Trigger Rate by Year
+
+| Year | Triggered | Total | Rate | Mean Relief |
+|------|-----------|-------|------|-------------|
+| 2022 | 14 | 234 | 6.0% | +0.31 pts |
+| 2023 | 14 | 239 | 5.9% | +0.18 pts |
+| 2024 | 13 | 135 | 9.6% | +0.24 pts |
+| 2025 | 17 | 137 | 12.4% | +0.34 pts |
+
+#### Notable Examples
+
+| Team | Year | RP | Relief | Rationale |
+|------|------|-----|--------|-----------|
+| Ole Miss | 2022 | 3% | +0.97 pts | Lane Kiffin's portal army |
+| Florida State | 2024 | 21% | +0.39 pts | Post-CFP exodus |
+| Colorado | 2025 | 7% | +0.35 pts | Strong recruiting despite portal loss |
+
+#### Backtest Impact
+
+| Metric | Without Rebuild | With Rebuild | Delta |
+|--------|-----------------|--------------|-------|
+| Phase 1 5+ Edge | 50.2% | 50.4% | **+0.2%** |
+| Core 5+ Edge | 55.1% | 55.1% | unchanged |
+
+**Design principle:** Conservative by design — triggers on <15% of teams, applies modest relief (+0.2-0.4 pts average), and tapers to zero before Core phase begins.
+
+**CLI:** `--no-credible-rebuild` to disable.
+
 ### Asymmetric Regression
 
 Standard regression pulls all teams toward the mean uniformly—but this compresses the true spread between elite and terrible teams. A very bad team at -25 shouldn't gain 7.5 points just from regression.
