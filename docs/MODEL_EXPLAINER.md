@@ -161,27 +161,7 @@ The prediction engine automatically selects Fixed or LSA based on **timing and e
 | Fixed | **52.9%** | **55.1%** | 54.0% | **56.5%** |
 | LSA | 52.0% | 54.9% | **55.1%** | 55.9% |
 
-**CLI Usage:**
-```bash
-# Default behavior - edge-aware mode (no flags needed)
-python3 scripts/run_weekly.py --year 2026 --week 5
-
-# Disable LSA entirely (use Fixed for all bets)
-python3 scripts/run_weekly.py --year 2026 --week 5 --no-lsa
-
-# Custom timing threshold (e.g., 3 days instead of 4)
-python3 scripts/run_weekly.py --year 2026 --week 5 --lsa-threshold-days 3
-```
-
-**Output columns:**
-- `jp_spread_fixed` — Spread using fixed situational constants
-- `jp_spread_lsa` — Spread using learned coefficients
-- `bet_timing_rec` — "fixed" or "lsa" based on timing and edge
-- `jp_spread_recommended` — The spread matching the recommendation
-
-**LSA Configuration:** `alpha=300.0`, `clamp_max=4.0`, `adjust_for_turnovers=True`
-
-*For detailed adjustment values and formulas, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
+*For detailed configuration and CLI usage, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 
 ---
 
@@ -459,16 +439,13 @@ Wind is king of unders. Uses **effective wind = (wind_speed + wind_gust) / 2**.
 | 15-20 mph | -4.0 pts |
 | >20 mph | -6.0 pts |
 
-**"Passing Team" Multiplier:** Continuous scaling based on combined pass rate:
-```
-multiplier = combined_pass_rate / 0.50 (clamped to [0.5, 1.5])
-```
+Wind impact scales by team passing tendency:
 
-| Team Style | Pass Rate | Multiplier | 20 mph Wind |
-|------------|-----------|------------|-------------|
-| Triple Option (Army) | 35% | 0.70x | -4.2 pts |
-| Balanced | 50% | 1.00x | -6.0 pts |
-| Air Raid (Ole Miss) | 65% | 1.30x | -7.8 pts |
+| Team Style | Example | 20 mph Wind |
+|------------|---------|-------------|
+| Run-heavy | Army | -4.2 pts |
+| Balanced | Average | -6.0 pts |
+| Pass-heavy | Ole Miss | -7.8 pts |
 
 ### Temperature
 
