@@ -139,29 +139,7 @@ Key differences:
 - **LSA is regularized (alpha=300)** — Prevents overfitting by keeping coefficients close to zero unless strong evidence exists
 - **LSA clamps extremes** — Maximum ±4.0 pt adjustment to prevent outlier-driven predictions
 
-### Edge-Aware Production Mode
-
-The prediction engine automatically selects Fixed or LSA based on **timing and edge size**. No flags needed — this is the default behavior.
-
-| Bet Timing | Edge Size | Mode | Historical ATS |
-|------------|-----------|------|----------------|
-| Opening (4+ days) | Any | Fixed | **56.5%** at 5+ |
-| Closing (<4 days) | **5+ pts** | LSA | **55.1%** at 5+ |
-| Closing (<4 days) | 3-5 pts | Fixed | **52.9%** at 3+ |
-
-**Why this works:**
-- **Opening lines** — Fixed dominates because the market hasn't yet priced in all information; our simple constants capture value the books miss early in the week
-- **Closing lines, high conviction (5+)** — By game time, obvious situational factors are priced in. LSA's learned coefficients better identify which adjustments still have residual value
-- **Closing lines, moderate conviction (3-5)** — Smaller edges are noisier; Fixed's simpler approach avoids LSA's occasional overcorrection (52.9% vs 52.0%)
-
-**Full Fixed vs LSA Comparison (Core Weeks 4-15):**
-
-| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
-|------|-----------------|----------------|-----------------|----------------|
-| Fixed | **52.9%** | **55.1%** | 54.0% | **56.5%** |
-| LSA | 52.0% | 54.9% | **55.1%** | 55.9% |
-
-*For detailed configuration and CLI usage, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
+*For detailed LSA configuration and CLI usage, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 
 ---
 
@@ -472,11 +450,30 @@ Historical backtest shows weather provides no ATS improvement (market already pr
 
 ---
 
-## Betting Selection Engine (Phase 1)
+## Production Betting Workflow
 
-Early-season predictions (Weeks 1-3) rely heavily on preseason priors, making JP+ less confident during this "Calibration Phase." The Betting Selection Engine provides two optional risk controls for Phase 1:
+JP+ provides automated bet selection logic that adapts to timing and season phase.
 
-### SP+ Agreement Gate
+### Edge-Aware Mode (Core Season)
+
+The prediction engine automatically selects Fixed or LSA based on **timing and edge size**. No flags needed — this is the default behavior.
+
+| Bet Timing | Edge Size | Mode | Historical ATS |
+|------------|-----------|------|----------------|
+| Opening (4+ days) | Any | Fixed | **56.5%** at 5+ |
+| Closing (<4 days) | **5+ pts** | LSA | **55.1%** at 5+ |
+| Closing (<4 days) | 3-5 pts | Fixed | **52.9%** at 3+ |
+
+**Why this works:**
+- **Opening lines** — Fixed dominates because the market hasn't yet priced in all information
+- **Closing lines, high conviction (5+)** — LSA's learned coefficients better identify residual value
+- **Closing lines, moderate conviction (3-5)** — Fixed's simpler approach avoids LSA's occasional overcorrection
+
+### Phase 1 Risk Controls (Weeks 1-3)
+
+Early-season predictions rely heavily on preseason priors, making JP+ overconfident during this "Calibration Phase." Two optional controls help manage this risk:
+
+#### SP+ Agreement Gate
 
 **The Problem:** JP+ edges in Weeks 1-3 are overconfident — the model disagrees with Vegas by 5+ points, but the market is often right because it has access to camp reports, injury news, and sharp money that priors don't capture.
 
@@ -492,7 +489,7 @@ Early-season predictions (Weeks 1-3) rely heavily on preseason priors, making JP
 - `confirm_only` — Only bet when SP+ confirms (highest precision, lowest volume)
 - `veto_opposes` — Bet confirms + neutral, reject opposes (balanced approach)
 
-### Kill-Switch Protection
+#### Kill-Switch Protection
 
 **The Problem:** Some seasons start catastrophically — 2022 Week 1 had 40% ATS for JP+ Phase 1 picks. Continuing to bet aggressively after a disastrous Week 1 compounds losses.
 
@@ -505,14 +502,13 @@ Early-season predictions (Weeks 1-3) rely heavily on preseason priors, making JP
 
 **Key insight:** The kill-switch only triggered in 2022 — the one year it was needed. In good years (2023-2025), it stays inactive and doesn't reduce profitable betting volume.
 
-### When to Use These Controls
+### Summary: When to Use What
 
-| Scenario | Recommendation |
-|----------|----------------|
-| Week 1 with no live data | SP+ gate (confirm_only) for any bets |
-| Week 2-3 after strong Week 1 | Gate + normal thresholds |
-| Week 2-3 after weak Week 1 (≤40%) | Kill-switch triggers automatically |
-| Core season (Weeks 4+) | Neither — EFM has sufficient data |
+| Season Phase | Timing | Recommended Workflow |
+|--------------|--------|---------------------|
+| **Phase 1** (Weeks 1-3) | Any | SP+ gate (confirm_only) + kill-switch |
+| **Core** (Weeks 4-15) | Opening (4+ days) | Fixed mode, 5+ edge |
+| **Core** (Weeks 4-15) | Closing (<4 days) | Edge-aware (auto LSA for 5+ edge) |
 
 *For CLI usage and configuration, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 

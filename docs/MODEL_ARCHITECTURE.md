@@ -550,7 +550,7 @@ The boost has been **removed from production**. Historical analysis showed favor
 
 **Trade-off:** LSA improves 5+ Edge (Close) by +1.3pp (54.5% → 55.8%) while reducing 3+ Edge by -0.9pp (53.4% → 52.5%). This is acceptable because 5+ Edge bets have ~2% over vig vs ~1.3% for 3+ Edge — use LSA when filtering to high-conviction plays only.
 
-#### Edge-Aware Production Mode (DEFAULT in 2026)
+#### Edge-Aware Production Mode
 
 **Problem:** LSA excels at 5+ edge closing lines but *degrades* 3+ edge. Fixed excels at opening lines. How do we get the best of both?
 
