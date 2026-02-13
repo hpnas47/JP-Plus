@@ -90,6 +90,29 @@ class Settings:
     )
     vegas_provider: str = "consensus"
 
+    # Phase 1 SP+ Gating (for weeks 1-3 only)
+    # When enabled, value plays in Phase 1 are filtered by SP+ confirmation.
+    # This addresses overconfident JP+ edges early in the season.
+    phase1_sp_gate_enabled: bool = False  # Master toggle (default OFF)
+    phase1_sp_gate_sp_edge_min: float = 2.0  # SP+ edge required for confirmation
+    phase1_sp_gate_jp_edge_min: float = 5.0  # JP+ edge required for candidate bet
+    # Gating modes:
+    # - "confirm_only": Keep only bets where SP+ confirms (same side, |edge| >= sp_edge_min)
+    # - "veto_opposes": Keep confirms + neutral, reject opposes
+    # - "confirm_or_neutral": Same as veto_opposes
+    phase1_sp_gate_mode: str = "confirm_only"
+
+    # Phase 1 Kill-Switch Risk Control (default OFF)
+    # Protects against "2022-like" early-season regimes by reducing/disabling
+    # Phase 1 betting if early live results are very poor.
+    phase1_killswitch_enabled: bool = False
+    phase1_killswitch_weeks_observed: int = 1  # Evaluate after Week 1
+    phase1_killswitch_min_bets: int = 5  # Don't trigger on tiny sample
+    phase1_killswitch_trigger_ats: float = 0.40  # If ATS% <= 40%, trigger
+    # Actions: "disable_phase1_bets" or "raise_threshold"
+    phase1_killswitch_action: str = "disable_phase1_bets"
+    phase1_killswitch_raised_jp_edge_min: float = 8.0
+
     # Email Notification Settings
     smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", ""))
     smtp_port: int = field(

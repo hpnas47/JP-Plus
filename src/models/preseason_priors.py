@@ -402,6 +402,8 @@ class PreseasonRating:
     # Credible Rebuild fields (for week-tapered relief in blend_with_inseason)
     rebuild_credibility: float = 0.0  # 0-1 score based on talent + portal signals
     rebuild_relief_delta: float = 0.0  # Point gain from reduced regression (applied with week taper)
+    # Raw SP+ prior for delta-shrink experiment (Phase 1 lambda sweep)
+    sp_prior: float = 0.0  # Raw SP+ from prior year (no RP/portal/talent adjustments)
 
 
 class PreseasonPriors:
@@ -1841,6 +1843,10 @@ class PreseasonPriors:
             if ret_ppa is not None:
                 confidence = min(confidence + 0.1, 1.0)
 
+            # Store raw SP+ from prior year (before any JP+ adjustments)
+            # This is used for the Phase 1 delta-shrink experiment
+            sp_prior_raw = prior_sp.get(team, 0.0)
+
             self.preseason_ratings[team] = PreseasonRating(
                 team=team,
                 prior_rating=regressed_prior,
@@ -1856,6 +1862,7 @@ class PreseasonPriors:
                 talent_discount=1.0,
                 rebuild_credibility=rebuild_cred,
                 rebuild_relief_delta=rebuild_delta,
+                sp_prior=sp_prior_raw,  # Raw SP+ for delta-shrink experiment
             )
 
         logger.info(f"Generated preseason ratings for {len(self.preseason_ratings)} teams")
@@ -2131,6 +2138,61 @@ class PreseasonPriors:
                         f"(cred={pr.rebuild_credibility:.2f}, "
                         f"RP={pr.returning_ppa:.2f})"
                     )
+
+        return blended
+
+    def blend_with_inseason_sp(
+        self,
+        inseason_ratings: dict[str, float],
+        games_played: int,
+        games_for_full_weight: int = 9,
+    ) -> dict[str, float]:
+        """Blend raw SP+ priors with in-season ratings (no JP+ adjustments).
+
+        Used for Phase 1 delta-shrink experiment to isolate priors delta.
+        Uses same blend curve as blend_with_inseason but:
+        - No talent floor component
+        - No credible rebuild relief
+        - Uses raw SP+ (sp_prior) instead of combined_rating
+
+        Args:
+            inseason_ratings: Current in-season ratings
+            games_played: Average games played per team
+            games_for_full_weight: Games needed before in-season dominates
+
+        Returns:
+            Blended ratings using raw SP+ priors
+        """
+        # Same blend curve as JP+ version but no talent floor
+        if games_played <= 0:
+            prior_weight = 1.0
+            inseason_weight = 0.0
+        elif games_played >= games_for_full_weight:
+            prior_weight = 0.05
+            inseason_weight = 0.95
+        else:
+            t = games_played / games_for_full_weight
+            prior_weight = 0.92 * (1.0 - t ** 1.5) ** 1.2
+            prior_weight = max(prior_weight, 0.05)
+            inseason_weight = 1.0 - prior_weight
+
+        logger.debug(
+            f"SP+ blend week {games_played}: prior={prior_weight:.1%}, "
+            f"inseason={inseason_weight:.1%} (no talent floor)"
+        )
+
+        all_teams = sorted(set(inseason_ratings.keys()) | set(self.preseason_ratings.keys()))
+        blended = {}
+
+        for team in all_teams:
+            # Use raw SP+ prior (not JP+ combined_rating)
+            sp_prior = 0.0
+            if team in self.preseason_ratings:
+                sp_prior = self.preseason_ratings[team].sp_prior
+            inseason = inseason_ratings.get(team, 0.0)
+
+            # Simple blend: no talent floor, no rebuild delta
+            blended[team] = sp_prior * prior_weight + inseason * inseason_weight
 
         return blended
 

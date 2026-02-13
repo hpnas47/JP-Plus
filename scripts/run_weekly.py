@@ -57,6 +57,17 @@ from src.adjustments.qb_adjustment import QBInjuryAdjuster
 from src.adjustments.qb_continuous import QBContinuousAdjuster
 from src.predictions.spread_generator import SpreadGenerator
 from src.predictions.vegas_comparison import VegasComparison
+from src.predictions.sp_gate import (
+    SPGateConfig,
+    fetch_sp_predictions,
+    apply_sp_gate,
+    apply_sp_gate_to_comparison_df,
+)
+from src.predictions.phase1_killswitch import (
+    KillswitchConfig,
+    evaluate_killswitch,
+    apply_killswitch_action,
+)
 from src.reports.excel_export import ExcelExporter
 from src.reports.html_report import HTMLReporter
 from src.notifications import Notifier
@@ -160,6 +171,50 @@ def parse_args():
         "--dual-spread",
         action="store_true",
         help="(Legacy) Enable dual-spread mode - now default behavior.",
+    )
+    # Phase 1 SP+ Gating (weeks 1-3 only)
+    parser.add_argument(
+        "--sp-gate",
+        action="store_true",
+        help="Enable SP+ gating for Phase 1 (weeks 1-3). Filters value plays by SP+ agreement.",
+    )
+    parser.add_argument(
+        "--sp-gate-mode",
+        type=str,
+        default="confirm_only",
+        choices=["confirm_only", "veto_opposes", "confirm_or_neutral"],
+        help="SP+ gating mode: confirm_only (default), veto_opposes, confirm_or_neutral.",
+    )
+    parser.add_argument(
+        "--sp-gate-sp-edge",
+        type=float,
+        default=2.0,
+        help="Minimum SP+ edge for confirmation. Default: 2.0",
+    )
+    parser.add_argument(
+        "--sp-gate-jp-edge",
+        type=float,
+        default=5.0,
+        help="Minimum JP+ edge for candidate bet. Default: 5.0",
+    )
+    # Phase 1 Kill-Switch (default OFF)
+    parser.add_argument(
+        "--killswitch",
+        action="store_true",
+        help="Enable Phase 1 kill-switch. Reduces/disables betting if early results are poor.",
+    )
+    parser.add_argument(
+        "--killswitch-action",
+        type=str,
+        default="disable_phase1_bets",
+        choices=["disable_phase1_bets", "raise_threshold"],
+        help="Action when kill-switch triggers. Default: disable_phase1_bets",
+    )
+    parser.add_argument(
+        "--killswitch-trigger-ats",
+        type=float,
+        default=0.40,
+        help="Kill-switch triggers if ATS%% <= this value. Default: 0.40",
     )
     return parser.parse_args()
 
@@ -581,6 +636,14 @@ def run_predictions(
     use_learned_situ: bool = False,
     dual_spread: bool = False,
     lsa_threshold_days: int = 4,
+    sp_gate_enabled: bool = False,
+    sp_gate_mode: str = "confirm_only",
+    sp_gate_sp_edge: float = 2.0,
+    sp_gate_jp_edge: float = 5.0,
+    killswitch_enabled: bool = False,
+    killswitch_action: str = "disable_phase1_bets",
+    killswitch_trigger_ats: float = 0.40,
+    season_results_df: pd.DataFrame = None,
 ) -> dict:
     """Run the full prediction pipeline.
 
@@ -597,6 +660,15 @@ def run_predictions(
         use_learned_situ: Whether to use LSA (Learned Situational Adjustment).
         dual_spread: Output both fixed and LSA spreads with timing recommendation.
         lsa_threshold_days: Days before game to switch from fixed to LSA recommendation.
+        sp_gate_enabled: Whether to enable SP+ gating for Phase 1 (weeks 1-3).
+        sp_gate_mode: SP+ gating mode (confirm_only, veto_opposes, confirm_or_neutral).
+        sp_gate_sp_edge: Minimum SP+ edge for confirmation. Default 2.0.
+        sp_gate_jp_edge: Minimum JP+ edge for candidate bet. Default 5.0.
+        killswitch_enabled: Whether to enable Phase 1 kill-switch.
+        killswitch_action: Action when triggered (disable_phase1_bets, raise_threshold).
+        killswitch_trigger_ats: Trigger threshold (if ATS% <= this). Default 0.40.
+        season_results_df: DataFrame with prior weeks' betting results for kill-switch.
+            Required columns: week, bet_placed, ats_outcome.
 
     Returns:
         Dictionary with results summary
@@ -1039,6 +1111,75 @@ def run_predictions(
         # Log the recomputed value play count
         logger.info(f"Value plays (edge-aware): {len(value_plays_df)} games with {min_edge}+ pts edge")
 
+    # === PHASE 1 SP+ GATING (weeks 1-3 only) ===
+    # When enabled, filters value plays by SP+ agreement to reduce overconfident bets.
+    sp_gate_config = SPGateConfig(
+        enabled=sp_gate_enabled and week <= 3,
+        sp_edge_min=sp_gate_sp_edge,
+        jp_edge_min=sp_gate_jp_edge,
+        mode=sp_gate_mode,
+    )
+
+    if sp_gate_config.enabled:
+        logger.info(f"Phase 1 SP+ Gate enabled (mode={sp_gate_mode}, sp_edge>={sp_gate_sp_edge})")
+
+        # Fetch SP+ predictions for this week
+        sp_spreads = fetch_sp_predictions(client, year, [week])
+
+        # Build vegas_opens dict from comparison_df
+        vegas_col = 'vegas_open' if 'vegas_open' in comparison_df.columns else 'vegas_spread'
+        vegas_opens = dict(zip(comparison_df['game_id'], comparison_df[vegas_col]))
+
+        # Apply gate to value_plays_df
+        pre_gate_count = len(value_plays_df)
+        value_plays_df = apply_sp_gate(
+            value_plays_df,
+            sp_spreads,
+            vegas_opens,
+            sp_gate_config,
+        )
+        logger.info(f"SP+ Gate: {pre_gate_count} → {len(value_plays_df)} value plays after filtering")
+
+        # Also annotate comparison_df for reporting
+        comparison_df = apply_sp_gate_to_comparison_df(
+            comparison_df,
+            sp_spreads,
+            sp_gate_config,
+        )
+
+    # === PHASE 1 KILL-SWITCH (weeks 2-3 only, requires prior results) ===
+    # Protects against 2022-like regimes by reducing/disabling betting
+    # if early results are poor.
+    killswitch_config = KillswitchConfig(
+        enabled=killswitch_enabled and week in [2, 3],
+        weeks_observed=1,  # Always evaluate based on Week 1
+        min_bets=5,
+        trigger_ats=killswitch_trigger_ats,
+        action=killswitch_action,
+    )
+
+    if killswitch_config.enabled and season_results_df is not None:
+        logger.info("Evaluating Phase 1 kill-switch...")
+        killswitch_result = evaluate_killswitch(
+            killswitch_config,
+            current_week=week,
+            season_results_df=season_results_df,
+        )
+
+        if killswitch_result.triggered:
+            value_plays_df = apply_killswitch_action(
+                killswitch_result,
+                value_plays_df,
+                killswitch_config,
+            )
+        else:
+            logger.info(f"Kill-switch not triggered: {killswitch_result.reason}")
+    elif killswitch_config.enabled:
+        logger.warning(
+            "Kill-switch enabled but no season_results_df provided. "
+            "Kill-switch requires prior weeks' betting results."
+        )
+
     # Compute value play count for downstream consumers
     value_plays_count = len(value_plays_df)
 
@@ -1155,6 +1296,15 @@ def main():
         use_learned_situ=use_learned_situ,
         dual_spread=dual_spread,
         lsa_threshold_days=args.lsa_threshold_days,
+        sp_gate_enabled=args.sp_gate,
+        sp_gate_mode=args.sp_gate_mode,
+        sp_gate_sp_edge=args.sp_gate_sp_edge,
+        sp_gate_jp_edge=args.sp_gate_jp_edge,
+        killswitch_enabled=args.killswitch,
+        killswitch_action=args.killswitch_action,
+        killswitch_trigger_ats=args.killswitch_trigger_ats,
+        # Note: season_results_df must be provided externally for kill-switch to work
+        season_results_df=None,
     )
 
     if results["success"]:
