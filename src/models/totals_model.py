@@ -438,6 +438,18 @@ class TotalsModel:
             logger.warning(f"Team not found: {away_team}")
             return None
 
+        # P2.1 FIX: Validate ratings are finite (catch NaN propagation)
+        if not np.isfinite(home.off_adjustment) or not np.isfinite(home.def_adjustment):
+            logger.warning(
+                f"Non-finite rating for {home_team}: off={home.off_adjustment}, def={home.def_adjustment}"
+            )
+            return None
+        if not np.isfinite(away.off_adjustment) or not np.isfinite(away.def_adjustment):
+            logger.warning(
+                f"Non-finite rating for {away_team}: off={away.off_adjustment}, def={away.def_adjustment}"
+            )
+            return None
+
         # Get year-specific baseline (handles scoring environment shift)
         if year is not None and year in self.year_baselines:
             baseline = self.year_baselines[year]

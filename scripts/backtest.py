@@ -790,6 +790,15 @@ def walk_forward_predict(
             ignore_index=True
         ) if any(w in games_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
 
+        # P1.1 FIX: Explicit walk-forward chronology assertion
+        # Validates no future data leaked into training set
+        if len(train_plays_pd) > 0:
+            max_train_week = train_plays_pd["week"].max()
+            assert max_train_week < pred_week, (
+                f"WALK-FORWARD VIOLATION: Training data contains week {max_train_week} "
+                f"but predicting week {pred_week}"
+            )
+
         # Check if we have enough training data
         use_pure_priors = False
         train_play_count = sum(len(plays_by_week_pd[w]) for w in range(1, pred_week) if w in plays_by_week_pd)
