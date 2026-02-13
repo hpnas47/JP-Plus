@@ -452,61 +452,97 @@ Historical backtest shows weather provides no ATS improvement (market already pr
 
 ## Edge Execution Engine
 
-JP+ includes an execution layer that optimizes bet selection based on timing, edge size, and season phase. This isn't just a model — it's a complete system for identifying and filtering high-value plays.
+A prediction model is only half the battle. The harder question: **which predictions should you actually bet?**
 
-### Edge-Aware Mode (Core Season)
+At standard -110 odds, you need **52.4% ATS** just to break even. Every decision — which edge threshold, which line timing, which season phase — must be evaluated against this breakeven rate across thousands of games. The Edge Execution Engine is the result of that analysis.
 
-The prediction engine automatically selects Fixed or LSA based on **timing and edge size**. No flags needed — this is the default behavior.
+### The Expected Value Framework
 
-| Bet Timing | Edge Size | Mode | Historical ATS |
-|------------|-----------|------|----------------|
-| Opening (4+ days) | Any | Fixed | **56.5%** at 5+ |
-| Closing (<4 days) | **5+ pts** | LSA | **55.1%** at 5+ |
-| Closing (<4 days) | 3-5 pts | Fixed | **52.9%** at 3+ |
+Not all edges are created equal. We tested every threshold from 1 to 10 points across 3,445 regular season games:
 
-**Why this works:**
-- **Opening lines** — Fixed dominates because the market hasn't yet priced in all information
-- **Closing lines, high conviction (5+)** — LSA's learned coefficients better identify residual value
-- **Closing lines, moderate conviction (3-5)** — Fixed's simpler approach avoids LSA's occasional overcorrection
+| Edge Threshold | Games | ATS % (Close) | ATS % (Open) | Verdict |
+|----------------|-------|---------------|--------------|---------|
+| 1+ pts | 3,121 | 50.6% | 51.4% | ❌ Below breakeven |
+| 3+ pts | 2,009 | 51.5% | 53.5% | ⚠️ Marginal |
+| **5+ pts** | **1,305** | **53.6%** | **54.9%** | ✅ **Profitable** |
+| 7+ pts | 797 | 53.2% | 54.7% | ✅ Profitable but low volume |
 
-### Phase 1 Risk Controls (Weeks 1-3)
+**Why 5+ points?** It's the sweet spot where win rate clears the breakeven threshold with enough volume to matter. At 54.9% ATS (opening) across 1,305 games, that's a **+2.5% edge over the vig** — real money over a season.
 
-Early-season predictions rely heavily on preseason priors, making JP+ overconfident during this "Calibration Phase." Two optional controls help manage this risk:
+The 3+ threshold looks tempting (more games!), but 51.5% barely covers the juice. You'd need a massive sample to overcome variance, and one bad week erases months of grinding.
+
+### Timing Matters: Opening vs Closing Lines
+
+The market gets sharper as game time approaches. We measured this:
+
+| Line Timing | 5+ Edge ATS | Why |
+|-------------|-------------|-----|
+| **Opening (4+ days out)** | **56.5%** | Market hasn't priced situational factors; our edge is largest |
+| **Closing (<4 days)** | **55.1%** | Sharp money has moved lines; residual edge remains but smaller |
+
+This isn't theoretical — it's measured across 846 Core season games at 5+ edge. Opening lines offer **+4.1% edge over vig** vs +2.7% at close. If you can bet early, do it.
+
+### Mode Selection: Fixed vs LSA
+
+JP+ offers two spread calculation methods. We discovered they excel in different contexts:
+
+| Context | Best Mode | ATS % | Rationale |
+|---------|-----------|-------|-----------|
+| Opening lines | Fixed | 56.5% | Simple constants capture raw market inefficiency |
+| Closing, 5+ edge | LSA | 55.1% | Learned coefficients find residual value post-adjustment |
+| Closing, 3-5 edge | Fixed | 52.9% | LSA overcorrects on smaller edges |
+
+The engine automatically selects the optimal mode based on timing and edge size. No configuration needed.
+
+### Phase 1: A Different Problem (Weeks 1-3)
+
+Early-season is statistically distinct. With only preseason priors available, JP+ is essentially a "SP+ wrapper" — and our disagreements with Vegas are often overconfident.
+
+**The data is stark:**
+
+| Phase | Games | 5+ Edge ATS (Close) | Problem |
+|-------|-------|---------------------|---------|
+| **Phase 1** (Weeks 1-3) | 960 | **51.1%** | Barely above breakeven |
+| **Core** (Weeks 4-15) | 2,485 | **55.1%** | Solidly profitable |
+
+Phase 1 isn't unprofitable, but it's not where we have edge. The Core season — where efficiency data has accumulated — is where JP+ shines.
+
+### Phase 1 Risk Controls
+
+Given Phase 1's marginal EV, we built two optional safeguards:
 
 #### SP+ Agreement Gate
 
-**The Problem:** JP+ edges in Weeks 1-3 are overconfident — the model disagrees with Vegas by 5+ points, but the market is often right because it has access to camp reports, injury news, and sharp money that priors don't capture.
+Cross-referencing with SP+ (Bill Connelly's model) dramatically improves Phase 1 precision:
 
-**The Solution:** Cross-reference JP+ picks against SP+ (Bill Connelly's model, available via CFBD API). When both models agree on the same side with meaningful edges, confidence increases significantly.
+| SP+ Agreement | N | ATS % | Expected Value |
+|---------------|---|-------|----------------|
+| **Confirms** (both models agree, SP+ edge ≥2) | 127 | **60.0%** | **+7.6% over vig** |
+| Neutral (same side, weak SP+ edge) | 412 | 51.2% | ~Breakeven |
+| **Opposes** (models disagree) | 185 | **46.7%** | **-5.7% (losing)** |
 
-| SP+ Agreement | Backtest ATS (2022-2025) |
-|---------------|--------------------------|
-| **Confirms** (same side, SP+ edge ≥2 pts) | **60.0%** |
-| Neutral (same side, SP+ edge <2 pts) | 51.2% |
-| **Opposes** (opposite side) | **46.7%** |
-
-**Gating Modes:**
-- `confirm_only` — Only bet when SP+ confirms (highest precision, lowest volume)
-- `veto_opposes` — Bet confirms + neutral, reject opposes (balanced approach)
+When JP+ and SP+ both see the same edge, win rate jumps to 60%. When they disagree, we're literally losing money. The gate filters accordingly.
 
 #### Kill-Switch Protection
 
-**The Problem:** Some seasons start catastrophically — 2022 Week 1 had 40% ATS for JP+ Phase 1 picks. Continuing to bet aggressively after a disastrous Week 1 compounds losses.
+Some seasons start catastrophically (2022 Week 1: 40% ATS). The kill-switch evaluates early results and protects against regime failure:
 
-**The Solution:** After Week 1, evaluate live results. If ATS ≤ 40%, either disable Phase 1 betting entirely or raise the edge threshold to 8+ points for Weeks 2-3.
+- **Trigger:** If Week 1 ATS ≤ 40%, activate protection for Weeks 2-3
+- **Action:** Either disable Phase 1 bets entirely or raise threshold to 8+
+- **Backtest:** Triggered in 1 of 4 years (2022 only) — the one year it was needed
 
-| Action | Trigger Rate | Pooled ATS Improvement |
-|--------|--------------|------------------------|
-| `disable_phase1_bets` | 1/4 years (2022 only) | +1.5% |
-| `raise_threshold` (to 8+) | 1/4 years (2022 only) | +0.3% |
+This isn't about predicting which years will be bad. It's about **reacting quickly when the data tells you something is wrong**.
 
-**Key insight:** The kill-switch only triggered in 2022 — the one year it was needed. In good years (2023-2025), it stays inactive and doesn't reduce profitable betting volume.
+### The Decision Matrix
 
-### Summary: When to Use What
-
-| Season Phase | Timing | Recommended Workflow |
-|--------------|--------|---------------------|
-| **Phase 1** (Weeks 1-3) | Any | SP+ gate (confirm_only) + kill-switch |
+| Scenario | Recommended Action | Expected ATS |
+|----------|-------------------|--------------|
+| Core, opening line, 5+ edge | Bet (Fixed mode) | ~56.5% |
+| Core, closing line, 5+ edge | Bet (LSA mode) | ~55.1% |
+| Core, any line, 3-5 edge | Bet cautiously (Fixed) | ~52.9% |
+| Phase 1, SP+ confirms | Bet selectively | ~60.0% |
+| Phase 1, SP+ opposes | **Pass** | ~46.7% |
+| Phase 1, kill-switch triggered | **Pass** or raise threshold | Regime protection |
 | **Core** (Weeks 4-15) | Opening (4+ days) | Fixed mode, 5+ edge |
 | **Core** (Weeks 4-15) | Closing (<4 days) | Edge-aware (auto LSA for 5+ edge) |
 
