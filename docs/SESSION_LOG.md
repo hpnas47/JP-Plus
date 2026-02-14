@@ -5845,3 +5845,106 @@ python3 scripts/smoke_test_weather_ev.py --year 2024 --week 10 --require-weather
 ---
 
 *End of session*
+
+
+---
+
+## Session: February 14, 2026 (Continued)
+
+### Theme: Bug Fixes Across Totals and Spreads Pipelines
+
+---
+
+#### Totals Calibration: 5 Bug Fixes — COMMITTED
+**Status**: Committed (`14e581c`)
+**Files**: `src/spread_selection/totals_calibration.py`
+
+1. **OVER bet selection bug (CRITICAL)**: `pick_over = mu > line` was always False due to logic error. Fixed: now correctly picks OVER when model total exceeds line.
+
+2. **Kelly formula denominator**: Changed from `f_star = numerator / b` to `f_star = numerator / (b * (p_win + p_loss))` for proper three-outcome Kelly.
+
+3. **max_games 8→10**: CFB teams play 12-13 games; 8 was too conservative for reliability scaling.
+
+4. **Week bucket rename**: "1-2" → "0-2" to reflect CFB week 0 games.
+
+5. **Self-test enhancement**: Added numerical Kelly verification in module self-test.
+
+---
+
+#### Totals EV Engine: 6 Bug Fixes — COMMITTED
+**Status**: Committed (`14e581c`)
+**Files**: `src/spread_selection/totals_ev_engine.py`
+
+1. **Kelly formula fix**: Same three-outcome denominator fix as calibration module.
+
+2. **Week bucket fix**: "1-2" → "0-2" for week 0 compatibility.
+
+3. **reliability_max_games**: 8→10 for CFB's 12-13 game season.
+
+4. **Diagnostic mode fix (P1)**: Guardrail-triggered bets (stake=0) now stay in List A instead of being dropped. These are valuable diagnostics showing model conviction even when sizing is capped.
+
+5. **sigma default**: 20.0→13.0→17.0 (final value after strategist analysis).
+
+6. **Sanity test Kelly verification**: Added numerical verification in module self-test.
+
+---
+
+#### Sigma Selection: Model Strategist Analysis
+**Status**: Analyzed, sigma=17 selected
+**Commits**: `314c143`
+
+Ran 3-year sigma sweep (2023-2025, weeks 3-14) with external critique:
+- Sigma=13: 54.2% overall but only 52.7% in 2025 (near break-even)
+- Sigma=17-25: More consistent 53.3-53.7% floor in weak years
+
+**Strategist verdict**: 2025 single-year dip is statistical noise (N≈500, CI overlaps). However, sigma=17 chosen as "golden mean":
+- 94% volume of sigma=13
+- Best 2023 performance (54.7%)
+- Realistic for CFB variance
+- Protects against Kelly over-sizing in edge cases
+
+---
+
+#### Obsolete Script Cleanup — COMMITTED
+**Status**: Committed (`c8571cf`)
+**Deleted**: 5 scripts, ~1,542 lines
+
+- `scripts/debug_totals_ev.py` (139 lines)
+- `scripts/analyze_totals_backtest.py` (421 lines)
+- `scripts/sigma_sweep_analysis.py` (217 lines)
+- `scripts/analyze_sigma_sweep.py` (311 lines)
+- `scripts/test_kelly_integration.py` (454 lines)
+
+All functionality superseded by `totals_calibration.py` and `smoke_test_weather_ev.py`.
+
+---
+
+#### run_weekly.py: 4 CFB Week 0 Fixes — COMMITTED
+**Status**: Committed (`0c62e80`)
+**Files**: `scripts/run_weekly.py`
+
+1. **Week 0 crash**: Changed `if week == 1` to `if week <= 1` for priors-only mode.
+
+2. **Week 0 data excluded**: Changed `range(1, through_week + 1)` to `range(0, through_week + 1)` in 3 data-fetching functions.
+
+3. **export-slate fallback**: Added fallback for `--no-lsa` mode which doesn't produce `lsa_spread`.
+
+4. **QB Continuous week 0**: Changed `if week <= 3` to `if 1 <= week <= 3` (week 0 has no prior PPA data).
+
+---
+
+#### run_weekly_totals.py: 4 Bug Fixes — COMMITTED
+**Status**: Committed (`d73c591`)
+**Files**: `scripts/run_weekly_totals.py`
+
+1. **Record mismatch**: Record calculation now applies same `min_edge` filter as display, so reported W-L matches displayed bets.
+
+2. **--show-all display count**: Captured return value as `displayed_all` and added to summary output.
+
+3. **Week 0 informative exit**: Added early check with clear message: "Totals model requires at least 1 week of game data for training."
+
+4. **Training log fix**: Changed "weeks 1-{N}" to "weeks 0-{N}" to reflect actual data range.
+
+---
+
+*End of session*
