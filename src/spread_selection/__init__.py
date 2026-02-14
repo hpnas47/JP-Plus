@@ -23,11 +23,6 @@ V4 Additions:
 - Phase1EdgeBaseline: Edge-based selection for Phase 1 (|edge| >= 5.0 vs OPEN)
 - Produces LIST B separate from EV-based LIST A (no merging)
 
-V5 Additions (2026 Production):
-- FBS-only filter: Exclude FCS games from bet recommendations (default ON)
-- Distinct lists: Phase 1 Edge excludes games already in Primary Engine (default ON)
-- Display formatters: format_primary_engine_table, format_phase1_edge_table, format_week_summary
-
 V6 Additions (Totals EV Engine):
 - TotalsEVConfig: Configuration for totals betting EV evaluation
 - TotalsBetRecommendation: Full recommendation for totals bets
@@ -120,14 +115,6 @@ from .strategies import (
     evaluate_slate_edge_baseline,
     recommendations_to_dataframe as edge_baseline_to_dataframe,
     summarize_recommendations as summarize_edge_baseline,
-)
-
-# V5: Display formatters
-from .run_selection import (
-    format_primary_engine_table,
-    format_phase1_edge_table,
-    format_week_summary,
-    TEAM_ABBREVS,
 )
 
 # V6: Totals EV Engine
@@ -279,11 +266,6 @@ __all__ = [
     "evaluate_slate_edge_baseline",
     "edge_baseline_to_dataframe",
     "summarize_edge_baseline",
-    # V5: Display formatters
-    "format_primary_engine_table",
-    "format_phase1_edge_table",
-    "format_week_summary",
-    "TEAM_ABBREVS",
     # V6: Totals EV Engine
     "TotalMarket",
     "TotalsEvent",
