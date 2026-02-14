@@ -164,6 +164,12 @@ def show_spread_bets(year: int, week: int):
     print("*Primary EV Engine: Bets with EV >= 3% based on calibrated cover probability model.*")
     print("*5+ Edge: Games with 5+ point edge that didn't meet EV threshold.*")
 
+    # Phase 1 warning (weeks 1-3)
+    if week <= 3:
+        print("")
+        print("**⚠️ Phase 1 Warning:** EV calibration is less reliable in weeks 1-3 (44% ATS vs 55% in Core).")
+        print("*Prior-driven predictions have higher variance. Consider half-stakes or 5+ Edge filter.*")
+
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:
