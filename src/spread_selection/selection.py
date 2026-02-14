@@ -28,6 +28,10 @@ from .calibration import (
 
 logger = logging.getLogger(__name__)
 
+# Minimum edge threshold - edges below this are treated as zero (no meaningful edge).
+# CFB spreads move in half-point increments; 0.05 pts is floating point noise.
+MINIMUM_EDGE_PTS = 0.05
+
 
 @dataclass
 class BetRecommendation:
@@ -133,7 +137,7 @@ def calculate_ev_with_push(
         p_push = p_push (stake returned, 0 profit)
 
         EV = p_win * payout - p_lose * stake + p_push * 0
-           = p_win * (100/risk) - p_lose * 1
+           = p_win * payout - p_lose * 1
 
     Example (from spec):
         p_cover_no_push = 0.55
@@ -151,16 +155,24 @@ def calculate_ev_with_push(
     Args:
         p_cover_no_push: P(cover | no push) from calibration
         p_push: P(push) from push rate lookup
-        juice: American odds (negative, e.g., -110)
+        juice: American odds (e.g., -110 or +150). Zero is invalid.
 
     Returns:
         EV as fraction of stake
-    """
-    if juice >= 0:
-        raise ValueError(f"Expected negative juice, got {juice}")
 
-    risk = abs(juice)
-    payout = 100 / risk
+    Raises:
+        ValueError: If juice is zero (invalid American odds)
+    """
+    if juice == 0:
+        raise ValueError("American odds cannot be zero")
+
+    # American to payout conversion (profit per unit risked):
+    # Negative odds (e.g., -110): risk 110 to win 100 -> payout = 100/110 = 0.909
+    # Positive odds (e.g., +150): risk 100 to win 150 -> payout = 150/100 = 1.5
+    if juice < 0:
+        payout = 100 / abs(juice)
+    else:
+        payout = juice / 100
 
     p_win = p_cover_no_push * (1 - p_push)
     p_lose = (1 - p_cover_no_push) * (1 - p_push)
@@ -175,8 +187,22 @@ def evaluate_game(
     push_rates: Optional[PushRates] = None,
     min_ev_threshold: float = 0.03,
     juice: int = -110,
+    high_ev_offset: float = 0.05,
+    med_ev_offset: float = 0.02,
 ) -> BetRecommendation:
     """Evaluate a single game for betting recommendation.
+
+    CRITICAL CALIBRATION ASSUMPTION:
+        The calibration module trains on ABSOLUTE EDGE (edge_abs) with the convention
+        that the bet is ALWAYS on the JP-favored side. The returned p_cover_no_push
+        represents P(JP-favored side covers | edge_abs). This is intentional because:
+        1. Edge direction is already encoded in jp_favored_side
+        2. The logistic model only needs edge magnitude to estimate cover probability
+        3. By always betting the JP-favored side, we convert a directional problem
+           to a magnitude problem
+
+        If calibration.p_cover_at_zero deviates significantly from 0.5, it may indicate
+        training data issues or a miscalibrated model.
 
     Args:
         game: Series with jp_spread, vegas_spread, home_team, away_team, game_id
@@ -184,20 +210,31 @@ def evaluate_game(
         push_rates: Optional PushRates for push modeling (V2)
         min_ev_threshold: Minimum EV for BET tier
         juice: American odds (default: -110)
+        high_ev_offset: EV above min_ev_threshold for HIGH tier (default: 0.05)
+        med_ev_offset: EV above min_ev_threshold for MED tier (default: 0.02)
 
     Returns:
         BetRecommendation with all fields populated
 
     Logic:
         1. Compute edge_pts, edge_abs, jp_favored_side
-        2. If edge_abs == 0: NO_BET (all prob/EV fields None)
+        2. If edge_abs < MINIMUM_EDGE_PTS: NO_BET (all prob/EV fields None)
         3. Determine recommended side from edge sign
-        4. Compute p_cover_no_push from calibration
+        4. Compute p_cover_no_push from calibration (using edge_abs, not signed edge)
         5. Compute p_push from push_rates (0 if None)
         6. Compute p_cover = p_cover_no_push * (1 - p_push)
         7. Compute EV using push-aware formula
-        8. Assign confidence tier
+        8. Assign confidence tier using configurable offsets
     """
+    # Validate calibration assumption: p_cover_at_zero should be ~0.5
+    # A significant deviation suggests the calibration may have been trained incorrectly
+    if hasattr(calibration, 'p_cover_at_zero'):
+        if abs(calibration.p_cover_at_zero - 0.5) > 0.05:
+            logger.warning(
+                f"Calibration p_cover_at_zero={calibration.p_cover_at_zero:.4f} deviates from 0.5. "
+                "This may indicate training data issues. Expected ~0.5 for absolute edge calibration."
+            )
+
     # Extract required fields
     game_id = str(game.get("game_id", ""))
     home_team = str(game.get("home_team", ""))
@@ -221,11 +258,16 @@ def evaluate_game(
     edge_abs = abs(edge_pts)
     jp_favored_side = "HOME" if edge_pts < 0 else "AWAY"
 
-    # Breakeven probability
-    p_breakeven = breakeven_prob(juice)
+    # Breakeven probability (handles positive juice for alternate spreads)
+    if juice < 0:
+        p_breakeven = breakeven_prob(juice)
+    else:
+        # For positive odds: breakeven = 100 / (100 + odds)
+        # e.g., +150: need to win 100/(100+150) = 40% to break even
+        p_breakeven = 100 / (100 + juice)
 
-    # Handle NO_BET (zero edge)
-    if edge_abs == 0:
+    # Handle NO_BET (effectively zero edge) - use threshold to avoid floating point issues
+    if edge_abs < MINIMUM_EDGE_PTS:
         return BetRecommendation(
             game_id=game_id,
             home_team=home_team,
@@ -267,10 +309,10 @@ def evaluate_game(
     # Compute EV
     ev = calculate_ev_with_push(p_cover_no_push, p_push, juice)
 
-    # Assign confidence tier
-    if ev >= min_ev_threshold + 0.05:
+    # Assign confidence tier using configurable offsets
+    if ev >= min_ev_threshold + high_ev_offset:
         confidence = "HIGH"
-    elif ev >= min_ev_threshold + 0.02:
+    elif ev >= min_ev_threshold + med_ev_offset:
         confidence = "MED"
     elif ev >= min_ev_threshold:
         confidence = "BET"
@@ -305,6 +347,8 @@ def evaluate_slate(
     push_rates: Optional[PushRates] = None,
     min_ev_threshold: float = 0.03,
     juice: int = -110,
+    high_ev_offset: float = 0.05,
+    med_ev_offset: float = 0.02,
 ) -> list[BetRecommendation]:
     """Evaluate all games in a slate.
 
@@ -314,6 +358,8 @@ def evaluate_slate(
         push_rates: Optional PushRates for push modeling
         min_ev_threshold: Minimum EV for BET tier
         juice: American odds (default: -110)
+        high_ev_offset: EV above min_ev_threshold for HIGH tier (default: 0.05)
+        med_ev_offset: EV above min_ev_threshold for MED tier (default: 0.02)
 
     Returns:
         List sorted by EV descending, PASS/NO_BET at bottom
@@ -328,6 +374,8 @@ def evaluate_slate(
                 push_rates,
                 min_ev_threshold,
                 juice,
+                high_ev_offset,
+                med_ev_offset,
             )
             recommendations.append(rec)
         except Exception as e:
@@ -352,7 +400,7 @@ def summarize_slate(recommendations: list[BetRecommendation]) -> dict:
         recommendations: List of BetRecommendation objects
 
     Returns:
-        Dictionary with summary statistics
+        Dictionary with summary statistics (native Python types for JSON compatibility)
     """
     bets = [r for r in recommendations if r.confidence not in ("PASS", "NO_BET")]
     passes = [r for r in recommendations if r.confidence == "PASS"]
@@ -366,9 +414,14 @@ def summarize_slate(recommendations: list[BetRecommendation]) -> dict:
         "NO_BET": len(no_bets),
     }
 
-    avg_ev = np.mean([r.ev for r in bets]) if bets else 0.0
-    avg_p_cover = np.mean([r.p_cover for r in bets]) if bets else 0.0
-    avg_edge_abs = np.mean([r.edge_abs for r in bets]) if bets else 0.0
+    # Guard against None values and cast to native float for JSON compatibility
+    ev_values = [r.ev for r in bets if r.ev is not None]
+    p_cover_values = [r.p_cover for r in bets if r.p_cover is not None]
+    edge_abs_values = [r.edge_abs for r in bets if r.edge_abs is not None]
+
+    avg_ev = float(np.mean(ev_values)) if ev_values else 0.0
+    avg_p_cover = float(np.mean(p_cover_values)) if p_cover_values else 0.0
+    avg_edge_abs = float(np.mean(edge_abs_values)) if edge_abs_values else 0.0
 
     return {
         "total_games": len(recommendations),
