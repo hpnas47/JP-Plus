@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Fast spread bet display script - no API calls, pre-computed data."""
+
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+# Team abbreviations
+ABBREV = {
+    'Alabama': 'ALA', 'Georgia': 'UGA', 'Ohio State': 'OSU', 'Texas': 'TEX',
+    'Clemson': 'CLEM', 'Notre Dame': 'ND', 'Michigan': 'MICH', 'USC': 'USC',
+    'Oregon': 'ORE', 'Penn State': 'PSU', 'Florida': 'FLA', 'LSU': 'LSU',
+    'Oklahoma': 'OKLA', 'Tennessee': 'TENN', 'Auburn': 'AUB', 'Miami': 'MIA',
+    'Florida State': 'FSU', 'Wisconsin': 'WIS', 'Iowa': 'IOWA', 'Utah': 'UTAH',
+    'UCLA': 'UCLA', 'Washington': 'WASH', 'Texas A&M': 'TAMU', 'Ole Miss': 'MISS',
+    'Arkansas': 'ARK', 'Kentucky': 'UK', 'South Carolina': 'SCAR', 'Missouri': 'MIZ',
+    'NC State': 'NCST', 'Pittsburgh': 'PITT', 'Louisville': 'LOU', 'Virginia Tech': 'VT',
+    'Duke': 'DUKE', 'Wake Forest': 'WAKE', 'Virginia': 'UVA', 'Boston College': 'BC',
+    'Syracuse': 'SYR', 'Georgia Tech': 'GT', 'North Carolina': 'UNC', 'Stanford': 'STAN',
+    'California': 'CAL', 'Arizona': 'ARIZ', 'Arizona State': 'ASU', 'Colorado': 'COLO',
+    'Baylor': 'BAY', 'TCU': 'TCU', 'Kansas': 'KU', 'Kansas State': 'KSU',
+    'Iowa State': 'ISU', 'Oklahoma State': 'OKST', 'West Virginia': 'WVU', 'Texas Tech': 'TTU',
+    'Cincinnati': 'CIN', 'UCF': 'UCF', 'Houston': 'HOU', 'BYU': 'BYU',
+    'Memphis': 'MEM', 'SMU': 'SMU', 'Tulane': 'TUL', 'Tulsa': 'TLSA',
+    'San Diego State': 'SDSU', 'Fresno State': 'FRES', 'Boise State': 'BSU', 'Air Force': 'AFA',
+    'Army': 'ARMY', 'Navy': 'NAVY', 'Marshall': 'MRSH', 'Appalachian State': 'APP', 'App State': 'APP',
+    'Oregon State': 'ORST',
+    'Coastal Carolina': 'CCU', 'James Madison': 'JMU', 'Liberty': 'LIB', 'Sam Houston': 'SHSU',
+    'Minnesota': 'MINN', 'Illinois': 'ILL', 'Northwestern': 'NW', 'Purdue': 'PUR',
+    'Indiana': 'IND', 'Nebraska': 'NEB', 'Michigan State': 'MSU', 'Rutgers': 'RUT', 'Maryland': 'UMD',
+    'Mississippi State': 'MSST', 'Vanderbilt': 'VAN', 'Louisiana': 'ULL', 'Troy': 'TROY',
+    'South Alabama': 'USA', 'Georgia Southern': 'GASO', 'Georgia State': 'GAST', 'UTSA': 'UTSA',
+    'North Texas': 'UNT', 'Rice': 'RICE', 'Florida Atlantic': 'FAU', 'Charlotte': 'CLT',
+    'East Carolina': 'ECU', 'Temple': 'TEM', 'Buffalo': 'BUFF', 'Ohio': 'OHIO',
+    'Miami (OH)': 'M-OH', 'Bowling Green': 'BGSU', 'Kent State': 'KENT', 'Akron': 'AKR',
+    'Ball State': 'BALL', 'Toledo': 'TOL', 'Central Michigan': 'CMU', 'Eastern Michigan': 'EMU',
+    'Western Michigan': 'WMU', 'Northern Illinois': 'NIU', 'Nevada': 'NEV', 'UNLV': 'UNLV',
+    'Wyoming': 'WYO', 'New Mexico': 'UNM', 'Utah State': 'USU', 'Colorado State': 'CSU',
+    "Hawai'i": 'HAW', 'San José State': 'SJSU', 'Louisiana Tech': 'LT', 'UAB': 'UAB',
+    'Middle Tennessee': 'MTSU', 'Western Kentucky': 'WKU', 'Old Dominion': 'ODU',
+    'Southern Miss': 'USM', 'FIU': 'FIU', 'New Mexico State': 'NMSU', 'South Florida': 'USF',
+    'Kennesaw State': 'KENST', 'Jacksonville State': 'JVST', 'Connecticut': 'CONN', 'UMass': 'MASS',
+    'Arkansas State': 'ARST', 'Louisiana-Monroe': 'ULM', 'Texas State': 'TXST', 'UL Monroe': 'ULM',
+}
+
+
+def get_abbrev(team: str) -> str:
+    return ABBREV.get(team, team[:4].upper())
+
+
+def get_result(row) -> str:
+    if row['push'] == True:
+        return 'Push'
+    elif row['jp_side_covered'] == True:
+        return 'Win ✓'
+    else:
+        return 'Loss'
+
+
+def format_score(row) -> str:
+    if pd.isna(row['home_points']) or pd.isna(row['away_points']):
+        return '—'
+    away_abbr = get_abbrev(row['away_team'])
+    home_abbr = get_abbrev(row['home_team'])
+    return f"{away_abbr} {int(row['away_points'])}, {home_abbr} {int(row['home_points'])}"
+
+
+def format_jp_line(row) -> str:
+    side = row['jp_favored_side']
+    edge = row['edge_abs']
+    spread = row['spread_open']
+    if side == 'HOME':
+        jp_spread = spread - edge
+        return f"{row['home_team']} {jp_spread:+.1f}"
+    else:
+        jp_spread = -spread - edge
+        return f"{row['away_team']} {jp_spread:+.1f}"
+
+
+def format_bet_line(row) -> str:
+    side = row['jp_favored_side']
+    spread = row['spread_open']
+    if side == 'HOME':
+        return f"{row['home_team']} {spread:+.1f}"
+    else:
+        return f"{row['away_team']} {-spread:+.1f}"
+
+
+def show_spread_bets(year: int, week: int):
+    # Load pre-computed data
+    data_path = Path(__file__).parent.parent / 'data/spread_selection/outputs/backtest_primary_2022-2025_with_scores.csv'
+    if not data_path.exists():
+        print(f"Error: {data_path} not found")
+        return
+
+    df = pd.read_csv(data_path)
+    week_data = df[(df['year'] == year) & (df['week'] == week)]
+
+    if len(week_data) == 0:
+        print(f"No data found for {year} Week {week}")
+        return
+
+    # Primary Engine: EV >= 3%
+    primary = week_data[week_data['ev'] >= 0.03].sort_values('ev', ascending=False)
+
+    # 5+ Edge Non-Primary
+    edge5 = week_data[(week_data['edge_abs'] >= 5.0) & (week_data['ev'] < 0.03)].sort_values('edge_abs', ascending=False)
+
+    # Print Primary EV Engine
+    print(f"\n## {year} Week {week} — Primary EV Engine\n")
+    print("| # | Matchup | JP+ Line | Bet (Open) | Edge | ~EV | Score | Result |")
+    print("|---|---------|----------|------------|------|-----|-------|--------|")
+
+    for i, (_, row) in enumerate(primary.iterrows(), 1):
+        away_abbr = get_abbrev(row['away_team'])
+        home_abbr = get_abbrev(row['home_team'])
+        matchup = f"{away_abbr} @ {home_abbr}"
+        jp_line = format_jp_line(row)
+        bet_line = format_bet_line(row)
+        score = format_score(row)
+        result = get_result(row)
+        print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | +{row['ev']*100:.1f}% | {score} | {result} |")
+
+    # Calculate record
+    p_wins = len(primary[primary['jp_side_covered'] == True])
+    p_losses = len(primary[(primary['jp_side_covered'] == False) & (primary['push'] == False)])
+    p_pushes = len(primary[primary['push'] == True])
+
+    if p_pushes > 0:
+        print(f"\n**Record: {p_wins}-{p_losses}-{p_pushes} ({p_wins/(p_wins+p_losses)*100:.1f}%)**")
+    else:
+        pct = p_wins/(p_wins+p_losses)*100 if (p_wins+p_losses) > 0 else 0
+        print(f"\n**Record: {p_wins}-{p_losses} ({pct:.1f}%)**")
+
+    # Print 5+ Edge
+    print(f"\n## 5+ Point Edge\n")
+    print("| # | Matchup | JP+ Line | Bet (Open) | Edge | Score | Result |")
+    print("|---|---------|----------|------------|------|-------|--------|")
+
+    for i, (_, row) in enumerate(edge5.iterrows(), 1):
+        away_abbr = get_abbrev(row['away_team'])
+        home_abbr = get_abbrev(row['home_team'])
+        matchup = f"{away_abbr} @ {home_abbr}"
+        jp_line = format_jp_line(row)
+        bet_line = format_bet_line(row)
+        score = format_score(row)
+        result = get_result(row)
+        print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | {score} | {result} |")
+
+    # Calculate record
+    e_wins = len(edge5[edge5['jp_side_covered'] == True])
+    e_losses = len(edge5[(edge5['jp_side_covered'] == False) & (edge5['push'] == False)])
+    e_pushes = len(edge5[edge5['push'] == True])
+
+    if e_pushes > 0:
+        print(f"\n**Record: {e_wins}-{e_losses}-{e_pushes} ({e_wins/(e_wins+e_losses)*100:.1f}%)**")
+    else:
+        pct = e_wins/(e_wins+e_losses)*100 if (e_wins+e_losses) > 0 else 0
+        print(f"\n**Record: {e_wins}-{e_losses} ({pct:.1f}%)**")
+
+    # Footnotes
+    print("\n---")
+    print("*Primary EV Engine: Bets with EV >= 3% based on calibrated cover probability model.*")
+    print("*5+ Edge: Games with 5+ point edge that didn't meet EV threshold.*")
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        print("Usage: python show_spread_bets.py <year> <week>")
+        sys.exit(1)
+
+    year = int(sys.argv[1])
+    week = int(sys.argv[2])
+    show_spread_bets(year, week)
