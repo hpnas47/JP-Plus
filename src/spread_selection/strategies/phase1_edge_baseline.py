@@ -100,8 +100,8 @@ class Phase1EdgeBaselineConfig:
 
     Defaults are set for automatic emission in Phase 1.
     """
-    # Weeks to apply (Phase 1 only)
-    weeks: list[int] = field(default_factory=lambda: [1, 2, 3])
+    # Weeks to apply (Phase 1 only, includes CFB week 0)
+    weeks: list[int] = field(default_factory=lambda: [0, 1, 2, 3])
 
     # JP+ edge threshold for candidacy
     jp_edge_min: float = 5.0

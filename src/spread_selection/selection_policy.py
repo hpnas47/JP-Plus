@@ -6,7 +6,7 @@ bets to recommend from the pool of EV-positive candidates.
 V1 Scope (2026-02-14):
 - Three selection policies: EV_THRESHOLD, TOP_N_PER_WEEK, HYBRID
 - Deterministic tie-breaking for reproducibility
-- Phase-aware routing (weeks 1-3 skip, weeks 4-15 phase2_only)
+- Phase-aware routing (weeks 0-3 skip, weeks 4-15 phase2_only)
 - Configurable caps and floors
 
 Policy Behavior:
@@ -48,7 +48,7 @@ class SelectionPolicyConfig:
         ev_floor: Minimum EV for TOP_N_PER_WEEK and HYBRID (default 0.0)
         top_n_per_week: Number of top bets per week (default 10)
         max_bets_per_week: Hard cap on bets per week (default 10)
-        phase1_policy: How to handle weeks 1-3 ("skip", "apply", default "skip")
+        phase1_policy: How to handle weeks 0-3 ("skip", "apply", default "skip")
         phase2_weeks: Tuple of (start, end) for Phase 2 (default (4, 15))
 
     Tie-breaking order (deterministic):
@@ -62,7 +62,7 @@ class SelectionPolicyConfig:
     ev_floor: float = 0.0  # Floor for TOP_N and HYBRID (0 = no floor beyond 0%)
     top_n_per_week: int = 10  # Top N per week for TOP_N and HYBRID
     max_bets_per_week: int = 10  # Hard cap for all policies
-    phase1_policy: str = "skip"  # "skip" or "apply" for weeks 1-3
+    phase1_policy: str = "skip"  # "skip" or "apply" for weeks 0-3
     phase2_weeks: tuple[int, int] = (4, 15)
 
     def __post_init__(self):
@@ -183,12 +183,12 @@ def apply_selection_policy(
     df = candidates.copy()
     n_candidates = len(df)
 
-    # Phase 1 handling: optionally filter out weeks 1-3
+    # Phase 1 handling: optionally filter out weeks 0-3
     if config.phase1_policy == "skip":
         phase1_mask = df[week_col] <= 3
         n_phase1 = phase1_mask.sum()
         if n_phase1 > 0:
-            logger.debug(f"Skipping {n_phase1} Phase 1 candidates (weeks 1-3)")
+            logger.debug(f"Skipping {n_phase1} Phase 1 candidates (weeks 0-3)")
             df = df[~phase1_mask].copy()
 
     # Apply policy-specific selection
@@ -767,7 +767,7 @@ def get_selection_policy_preset(name: str) -> SelectionPolicyConfig:
             - Best for: Higher volume, still disciplined
 
     All presets use phase1_policy="skip" to avoid low-confidence
-    early-season bets (weeks 1-3).
+    early-season bets (weeks 0-3).
 
     Args:
         name: Preset name ("conservative", "balanced", or "aggressive")

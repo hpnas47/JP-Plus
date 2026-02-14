@@ -1022,7 +1022,7 @@ def stratified_diagnostics(
     Returns diagnostics stratified by:
         1. vegas_total terciles (low/med/high) - if vegas_total provided
         2. abs(vegas_spread) buckets: [0,3), [3,7), [7,10), [10,14), [14,+)
-        3. week buckets: weeks 1-3, 4-8, 9-15, 16+
+        3. week buckets: weeks 0-3, 4-8, 9-15, 16+
 
     Per stratum:
         - N games
@@ -1085,7 +1085,7 @@ def stratified_diagnostics(
 
     # ----- Week buckets -----
     week_buckets = [
-        ("weeks 1-3", 1, 3),
+        ("weeks 0-3", 0, 3),  # Phase 1 (includes CFB week 0)
         ("weeks 4-8", 4, 8),
         ("weeks 9-15", 9, 15),
         ("weeks 16+", 16, 100),  # Postseason
@@ -1325,7 +1325,7 @@ def get_spread_calibration_for_week(
             - "auto": Use policy args to determine calibration
             - "force_phase2": Always use Phase 2 calibration
             - "force_weighted": Always use weighted calibration
-        phase1_policy: How to handle weeks 1-3:
+        phase1_policy: How to handle weeks 0-3:
             - "skip": Return None (engine should not generate EV bets)
             - "weighted": Use weighted calibration
             - "phase1_only": Use Phase 1-only calibration (not recommended)

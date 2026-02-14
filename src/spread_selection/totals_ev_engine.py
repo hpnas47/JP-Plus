@@ -197,7 +197,7 @@ class TotalsEVConfig:
     reliability_max_games: int = 10  # Games for full reliability (CFB: 10 of 12-13 regular season)
 
     # EV threshold override for Phase 1
-    ev_min_phase1: float = 0.05  # Higher threshold for weeks 1-3
+    ev_min_phase1: float = 0.05  # Higher threshold for weeks 0-3
 
 
 # Guardrail reason codes

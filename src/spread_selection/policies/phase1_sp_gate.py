@@ -1,7 +1,7 @@
 """Phase 1 SP+ Gate Policy Layer.
 
 This module implements a gating mechanism that uses SP+ pregame predictions
-to filter EV-based betting recommendations in weeks 1-3 (Phase 1).
+to filter EV-based betting recommendations in weeks 0-3 (Phase 1).
 
 This is a POST-SELECTION policy filter:
 - Applied AFTER BetRecommendation objects are produced with EV/confidence
@@ -76,8 +76,8 @@ class Phase1SPGateConfig:
     sp_edge_min: float = 2.0  # Min |SP+ edge| for CONFIRM
     jp_edge_min: float = 5.0  # Min |JP+ edge| for candidate (when basis="edge")
 
-    # Weeks to apply gate
-    weeks: list[int] = field(default_factory=lambda: [1, 2, 3])
+    # Weeks to apply gate (includes CFB week 0)
+    weeks: list[int] = field(default_factory=lambda: [0, 1, 2, 3])
 
     # Missing SP+ behavior: "treat_neutral" or "reject"
     missing_sp_behavior: str = "treat_neutral"

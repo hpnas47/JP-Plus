@@ -4,7 +4,7 @@ Strategies are distinct selection methods that produce separate bet lists.
 They do NOT interfere with or modify the primary EV-based selection engine.
 
 Available Strategies:
-- Phase1EdgeBaseline: Edge-based selection for Phase 1 (LIST B, default in weeks 1-3)
+- Phase1EdgeBaseline: Edge-based selection for Phase 1 (LIST B, default in weeks 0-3)
   Includes optional HYBRID_VETO_2 overlay (OFF by default)
 """
 

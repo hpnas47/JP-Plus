@@ -476,7 +476,7 @@ def generate_recommendation(
         CalibrationRecommendation with decision and rationale
     """
     constraints = [
-        "Phase 1 (weeks 1-3): Skip EV bets (phase1_policy='skip')",
+        "Phase 1 (weeks 0-3): Skip EV bets (phase1_policy='skip')",
         "Max 10 bets per week to reduce variance",
         "Require min 3% EV for selection",
     ]
