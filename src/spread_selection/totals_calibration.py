@@ -87,7 +87,7 @@ class TotalsCalibrationConfig:
 
     # Sigma settings
     sigma_mode: str = "fixed"  # "fixed", "week_bucket", "reliability_scaled"
-    sigma_base: float = 13.0
+    sigma_base: float = 17.0  # Balances volume vs drawdown protection (see sigma sweep analysis)
 
     # Week bucket multipliers (sigma = sigma_base * multiplier)
     # Keys: "0-2", "3-5", "6-9", "10-14", "15+"

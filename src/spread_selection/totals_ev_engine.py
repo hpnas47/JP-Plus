@@ -134,7 +134,7 @@ class TotalsEVConfig:
         Sign convention: negative weather_adj means "lower scoring expected" (reduce total).
     """
     # Model parameters (CFB defaults - see docstring for rationale)
-    sigma_total: float = 13.0  # Prediction error std dev (matches totals_calibration.py)
+    sigma_total: float = 17.0  # Balances volume vs drawdown protection (see sigma sweep analysis)
     use_adjusted_total: bool = True  # DEPRECATED: kept for backwards compatibility
 
     # Weather adjustment (2026 production)

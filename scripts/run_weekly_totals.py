@@ -100,8 +100,8 @@ Examples:
         help="Minimum EV for Primary Engine qualification. Default: 0.02 (2%%)"
     )
     parser.add_argument(
-        "--sigma", type=float, default=20.0,
-        help="Standard deviation for probability model. Default: 20.0 (CFB)"
+        "--sigma", type=float, default=17.0,
+        help="Standard deviation for probability model. Default: 17.0 (balances volume vs drawdown)"
     )
     parser.add_argument(
         "--bankroll", type=float, default=1000.0,
