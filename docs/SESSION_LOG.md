@@ -5713,3 +5713,69 @@ The QB Continuous system is now fully hardened:
 ---
 
 *End of session*
+
+---
+
+## Session: February 13, 2026
+
+### Theme: Totals Calibration & EV Engine Bug Fixes + ATS Export Enhancement
+
+---
+
+#### ATS Export: Add Open Line Columns — COMMITTED
+**Status**: Committed (`9ea61b1`)
+**Files**: `scripts/backtest.py`
+
+Added `ats_win_open` and `ats_push_open` columns to `ats_export.csv` for direct betting analysis against opening lines:
+
+- `ats_win` / `ats_push`: Result vs CLOSE line (existing)
+- `ats_win_open` / `ats_push_open`: Result vs OPEN line (new)
+
+**Why needed**: The existing `ats_win` column calculates ATS result against the closing line, but betting analysis uses opening lines. Previously required manual recalculation; now can use column directly.
+
+**Example**: Kent State @ Texas Tech (Week 2, 2025)
+- Final: Texas Tech won by 48
+- Open spread: -48.5 (Kent State +48.5)
+- Close spread: -47.5 (Kent State +47.5)
+- `ats_win` = False (vs close: 48 + (-47.5) = +0.5, Kent State loses)
+- `ats_win_open` = True (vs open: 48 + (-48.5) = -0.5, Kent State **wins**)
+
+---
+
+#### Totals Calibration: 6 Bug Fixes — COMMITTED
+**Status**: Committed (`62089d7`)
+**Files**: `src/spread_selection/totals_calibration.py`
+
+1. **Mu column mismatch fix (P0)**: `run_full_calibration` called `collect_walk_forward_residuals` which resolves the mu column to `mu_used`, but then passed original `preds_df` to `backtest_ev_roi` which independently picked its own column. Fixed by passing `mu_column='mu_used'` explicitly to `tune_sigma_for_roi`.
+
+2. **Vectorize backtest_ev_roi (Performance)**: Replaced iterrows loop (~55,000 Python iterations with 17 sigma candidates × 3,200 games) with vectorized numpy/scipy operations. Uses `scipy.stats.norm.cdf` for arrays.
+
+3. **Silent ROI rejection warning (Minor)**: When all sigma candidates fail constraints (cap_hit_rate > 0.30 or n_bets_per_season < 50), now logs warning with constraint details and sets `no_valid_candidate: True` flag.
+
+4. **Week bucket multiplier clamping (Minor)**: `compute_week_bucket_multipliers` now clamps to [0.8, 1.5] with warning. Prevents extreme values from noisy buckets (especially "15+" with few bowl games).
+
+5. **from_dict forward compatibility (Minor)**: `TotalsCalibrationConfig.from_dict` now filters to valid dataclass fields with warning for unknown keys, preventing crashes when loading configs from newer code versions.
+
+6. **Sigma validation (Trivial)**: Added guards in `tune_sigma_for_coverage`, `tune_sigma_for_roi`, and `calculate_totals_probabilities` to raise `ValueError` if sigma candidates are not positive.
+
+---
+
+#### Totals EV Engine: 6 Bug Fixes — COMMITTED
+**Status**: Committed (`62089d7`)
+**Files**: `src/spread_selection/totals_ev_engine.py`
+
+1. **one_bet_per_event drops List B fix (P1)**: Filter was running on `all_recommendations` before the List A/B split, dropping high-edge bets that should appear in 5+ Edge list. Fixed by applying filter only to List A after the split.
+
+2. **one_bet_per_market drops List B fix (P1)**: `evaluate_single_market` filtered to best EV side before caller could check List B eligibility. Fixed by returning both sides always; filtering applied in `evaluate_totals_markets` to List A only.
+
+3. **Deterministic tie-breaking (Minor)**: Changed from simple dict overwrite to tuple comparison key `(-ev, -stake, book, line, side)` for consistent ordering when EV ties.
+
+4. **Deprecation warning for use_adjusted_total (Minor)**: Added explicit comment that `pred.adjusted_total` is never used and `use_adjusted_total` flag is deprecated. Prevents double weather adjustment if someone misreads the config.
+
+5. **MuOverrideFn type alias fix (Trivial)**: Changed from `Optional[callable]` (builtin function) to `Optional[Callable[[float, float, "TotalsEvent", "TotalMarket"], float]]` (proper type hint).
+
+6. **sigma_used default fix (Trivial)**: Changed default from `0.0` to `None`. The value is always set via `evaluate_single_market`'s fallback logic; `None` makes it clear when uninitialized.
+
+---
+
+*End of session*
