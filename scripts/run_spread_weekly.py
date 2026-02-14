@@ -75,6 +75,39 @@ from src.spread_selection import (
     config_to_label,
     ALLOWED_PRESETS,
 )
+from src.api.cfbd_client import CFBDClient
+
+# Cache FBS teams to avoid repeated API calls
+_fbs_teams_cache: dict[int, set[str]] = {}
+
+
+def get_fbs_teams(year: int) -> set[str]:
+    """Get set of FBS team names for a given year.
+
+    Uses cached values to avoid repeated API calls.
+
+    Args:
+        year: Season year
+
+    Returns:
+        Set of FBS team names
+    """
+    if year not in _fbs_teams_cache:
+        try:
+            client = CFBDClient()
+            teams = client.get_fbs_teams(year=int(year))  # Ensure Python int
+            # Handle both object and dict responses
+            if teams and hasattr(teams[0], "school"):
+                _fbs_teams_cache[year] = {t.school for t in teams}
+            else:
+                _fbs_teams_cache[year] = {t["school"] for t in teams}
+            logger.debug(f"Loaded {len(_fbs_teams_cache[year])} FBS teams for {year}")
+        except Exception as e:
+            logger.warning(f"Could not load FBS teams for {year}: {e}")
+            # Fallback: return empty set (no filtering)
+            return set()
+    return _fbs_teams_cache[year]
+
 
 # Configure logging
 logging.basicConfig(
@@ -345,6 +378,7 @@ def load_backtest_data(year: int, week: int) -> Optional[pd.DataFrame]:
     """Load backtest data for a specific year/week from ATS export.
 
     This is used for historical validation / dry-run mode.
+    Filters to FBS-only games (excludes any game involving FCS teams).
 
     Args:
         year: Season year
@@ -368,6 +402,19 @@ def load_backtest_data(year: int, week: int) -> Optional[pd.DataFrame]:
     if len(week_data) == 0:
         logger.warning(f"No data found for {year} week {week}")
         return None
+
+    # Filter to FBS-only games (exclude any game involving FCS teams)
+    fbs_teams = get_fbs_teams(year)
+    if fbs_teams:
+        pre_filter = len(week_data)
+        fbs_mask = (
+            week_data["home_team"].isin(fbs_teams) &
+            week_data["away_team"].isin(fbs_teams)
+        )
+        week_data = week_data[fbs_mask].copy()
+        filtered = pre_filter - len(week_data)
+        if filtered > 0:
+            logger.debug(f"Filtered {filtered} FCS games from {year} week {week}")
 
     return week_data
 
