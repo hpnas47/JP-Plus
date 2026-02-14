@@ -1,10 +1,52 @@
 #!/usr/bin/env python3
 """Fast totals bet display script - no API calls, pre-computed data."""
 
+import math
 import sys
 from pathlib import Path
 
 import pandas as pd
+
+
+# Normal CDF for EV calculation (matches totals_ev_engine.py)
+def normal_cdf(x: float) -> float:
+    """Standard normal CDF using error function."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def calculate_totals_ev(edge: float, sigma: float = 13.0, odds: int = -110) -> tuple[float, float, float]:
+    """Calculate EV for a totals bet using Normal CDF model.
+
+    Args:
+        edge: Signed edge (positive = OVER, negative = UNDER)
+        sigma: Standard deviation of prediction errors (default 13.0)
+        odds: American odds (default -110)
+
+    Returns:
+        (ev, p_win, p_push) tuple
+    """
+    # For OVER bet with positive edge, or UNDER bet with negative edge
+    # z-score is |edge| / sigma
+    z = abs(edge) / sigma
+
+    # Push probability (half-point band around the line)
+    # For whole number lines, push zone is [line-0.5, line+0.5]
+    p_push = normal_cdf(0.5 / sigma) - normal_cdf(-0.5 / sigma)
+
+    # Win probability (Normal CDF of z-score, minus half the push zone)
+    p_win = normal_cdf(z) - p_push / 2
+    p_lose = 1.0 - p_win - p_push
+
+    # Convert American odds to decimal payout
+    if odds > 0:
+        payout = odds / 100.0
+    else:
+        payout = 100.0 / abs(odds)
+
+    # EV = p_win * payout - p_lose * 1.0 (push returns stake)
+    ev = p_win * payout - p_lose
+
+    return ev, p_win, p_push
 
 # Team abbreviations (shared with show_spread_bets.py)
 ABBREV = {
@@ -84,23 +126,26 @@ def show_totals_bets(year: int, week: int):
     # Filter to games with lines
     week_data = week_data[week_data['vegas_total_open'].notna()].copy()
 
-    # Calculate EV estimate based on edge
-    # At sigma=13, 5pt edge ≈ 65% win prob ≈ 24% EV
-    # Roughly 4.8% EV per point of edge
-    week_data['ev_est'] = week_data['edge_open'].abs() * 0.048
+    # Calculate EV using Normal CDF model (matches totals_ev_engine.py)
+    SIGMA = 17.0  # Matches TotalsEVConfig default (balances volume vs drawdown)
+    ev_data = week_data['edge_open'].apply(lambda e: calculate_totals_ev(e, SIGMA))
+    week_data['ev'] = ev_data.apply(lambda x: x[0])
+    week_data['p_win'] = ev_data.apply(lambda x: x[1])
 
-    # Primary: 5+ point edge (55.3% ATS historically)
-    primary = week_data[week_data['edge_open'].abs() >= 5.0].sort_values('edge_open', key=abs, ascending=False)
+    # Primary EV Engine: EV >= 10% (focused high-conviction list)
+    # At sigma=17, this is roughly 3+ point edge
+    EV_MIN = 0.10
+    primary = week_data[week_data['ev'] >= EV_MIN].sort_values('ev', ascending=False)
 
-    # Secondary: 3-5 point edge (54.5% ATS historically)
-    edge3to5 = week_data[
-        (week_data['edge_open'].abs() >= 3.0) &
-        (week_data['edge_open'].abs() < 5.0)
+    # 5+ Edge that didn't make EV cut (diagnostic - should be rare)
+    edge5_non_ev = week_data[
+        (week_data['edge_open'].abs() >= 5.0) &
+        (week_data['ev'] < EV_MIN)
     ].sort_values('edge_open', key=abs, ascending=False)
 
-    # Print 5+ Edge (Primary)
-    print(f"\n## {year} Week {week} — Totals 5+ Edge\n")
-    print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | ~EV | Final | Result |")
+    # Print Primary EV Engine
+    print(f"\n## {year} Week {week} — Totals Primary EV Engine (EV >= {EV_MIN*100:.0f}%)\n")
+    print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | EV | Final | Result |")
     print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
 
     for i, (_, row) in enumerate(primary.iterrows(), 1):
@@ -109,7 +154,7 @@ def show_totals_bets(year: int, week: int):
         vegas_total = f"{row['vegas_total_open']:.1f}"
         side = row['play']
         edge = f"+{abs(row['edge_open']):.1f}"
-        ev = f"+{row['ev_est']*100:.1f}%"
+        ev = f"+{row['ev']*100:.1f}%"
         final = format_score(row)
         result = get_result(row)
         print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
@@ -127,26 +172,27 @@ def show_totals_bets(year: int, week: int):
     else:
         print("\n**Record: No qualifying bets**")
 
-    # Print 3-5 Edge (secondary list)
-    if len(edge3to5) > 0:
-        print(f"\n## 3-5 Point Edge (Secondary)\n")
-        print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | Final | Result |")
-        print("|---|---------|-----------|--------------|------|------|-------|--------|")
+    # Print 5+ Edge that didn't make EV cut (diagnostic - usually empty)
+    if len(edge5_non_ev) > 0:
+        print(f"\n## 5+ Edge (Below EV Cut)\n")
+        print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | EV | Final | Result |")
+        print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
 
-        for i, (_, row) in enumerate(edge3to5.iterrows(), 1):
+        for i, (_, row) in enumerate(edge5_non_ev.iterrows(), 1):
             matchup = f"{row['away_team']} @ {row['home_team']}"
             jp_total = f"{row['adjusted_total']:.1f}"
             vegas_total = f"{row['vegas_total_open']:.1f}"
             side = row['play']
             edge = f"+{abs(row['edge_open']):.1f}"
+            ev = f"+{row['ev']*100:.1f}%"
             final = format_score(row)
             result = get_result(row)
-            print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {final} | {result} |")
+            print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
 
         # Calculate record
-        e_wins = len(edge3to5[edge3to5['result'] == 'WIN'])
-        e_losses = len(edge3to5[edge3to5['result'] == 'LOSS'])
-        e_pushes = len(edge3to5[edge3to5['result'] == 'PUSH'])
+        e_wins = len(edge5_non_ev[edge5_non_ev['result'] == 'WIN'])
+        e_losses = len(edge5_non_ev[edge5_non_ev['result'] == 'LOSS'])
+        e_pushes = len(edge5_non_ev[edge5_non_ev['result'] == 'PUSH'])
 
         if e_wins + e_losses > 0:
             if e_pushes > 0:
@@ -156,8 +202,8 @@ def show_totals_bets(year: int, week: int):
 
     # Footnotes
     print("\n---")
-    print("*5+ Edge: High conviction bets (55.3% ATS historical).*")
-    print("*3-5 Edge: Secondary opportunities (54.5% ATS historical).*")
+    print(f"*Primary EV: Normal CDF model (sigma={SIGMA}), EV >= {EV_MIN*100:.0f}%.*")
+    print("*5+ Edge: Games with 5+ point edge that didn't meet EV threshold.*")
 
 
 if __name__ == '__main__':
