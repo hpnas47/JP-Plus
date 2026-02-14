@@ -273,25 +273,26 @@ def print_recommendations(
     # Column widths
     w_num = 3
     w_matchup = max(max_matchup, 25)
-    w_total = 9
+    w_jp_total = 9
+    w_vegas = 12
     w_edge = 6
     w_ev = 7
     w_bet = 12
     w_result = 8
 
     filtered_note = f" (showing {len(df)} of {total_count} with {min_edge}+ edge)" if min_edge > 0 and len(df) < total_count else ""
-    print(f"\n{'=' * 100}")
+    print(f"\n{'=' * 115}")
     print(f"{title} ({len(df)} bets{filtered_note})")
-    print('=' * 100)
+    print('=' * 115)
 
     # Header
     if show_ev:
         if show_results:
-            header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_total}} | {'Edge':^{w_edge}} | {'~EV':^{w_ev}} | {'Bet (Open)':^{w_bet}} | {'Result':^{w_result}}"
+            header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_jp_total}} | {'Vegas (Open)':^{w_vegas}} | {'Edge':^{w_edge}} | {'~EV':^{w_ev}} | {'Bet (Open)':^{w_bet}} | {'Result':^{w_result}}"
         else:
-            header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_total}} | {'Edge':^{w_edge}} | {'~EV':^{w_ev}} | {'Bet (Open)':^{w_bet}}"
+            header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_jp_total}} | {'Vegas (Open)':^{w_vegas}} | {'Edge':^{w_edge}} | {'~EV':^{w_ev}} | {'Bet (Open)':^{w_bet}}"
     else:
-        header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_total}} | {'Edge':^{w_edge}} | {'Bet (Open)':^{w_bet}}"
+        header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_jp_total}} | {'Vegas (Open)':^{w_vegas}} | {'Edge':^{w_edge}} | {'Bet (Open)':^{w_bet}}"
 
     print(header)
     print('-' * len(header))
@@ -300,6 +301,7 @@ def print_recommendations(
     for i, (_, r) in enumerate(df.iterrows()):
         matchup = format_matchup(r['away_team'], r['home_team'])
         jp_total = f"{r['mu_used']:.1f}"
+        vegas_total = f"{r['line']:.1f}"
         edge = f"+{abs(r['edge_pts']):.1f}"
         ev = f"+{r['ev']*100:.1f}%" if r['ev'] > 0 else f"{r['ev']*100:.1f}%"
         bet = f"{r['side']} {r['line']}"
@@ -322,11 +324,11 @@ def print_recommendations(
 
         if show_ev:
             if show_results:
-                row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_total}} | {edge:^{w_edge}} | {ev:^{w_ev}} | {bet:^{w_bet}} | {result:^{w_result}}"
+                row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_jp_total}} | {vegas_total:^{w_vegas}} | {edge:^{w_edge}} | {ev:^{w_ev}} | {bet:^{w_bet}} | {result:^{w_result}}"
             else:
-                row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_total}} | {edge:^{w_edge}} | {ev:^{w_ev}} | {bet:^{w_bet}}"
+                row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_jp_total}} | {vegas_total:^{w_vegas}} | {edge:^{w_edge}} | {ev:^{w_ev}} | {bet:^{w_bet}}"
         else:
-            row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_total}} | {edge:^{w_edge}} | {bet:^{w_bet}}"
+            row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_jp_total}} | {vegas_total:^{w_vegas}} | {edge:^{w_edge}} | {bet:^{w_bet}}"
 
         print(row_str)
 
