@@ -28,6 +28,13 @@ V5 Additions (2026 Production):
 - Distinct lists: Phase 1 Edge excludes games already in Primary Engine (default ON)
 - Display formatters: format_primary_engine_table, format_phase1_edge_table, format_week_summary
 
+V6 Additions (Totals EV Engine):
+- TotalsEVConfig: Configuration for totals betting EV evaluation
+- TotalsBetRecommendation: Full recommendation for totals bets
+- evaluate_totals_markets: Main interface for evaluating totals bets
+- Normal CDF probability model with push-awareness
+- Kelly staking with three-outcome formula
+
 Calibration Modes:
 - PRIMARY (ROLLING_2): training_window_seasons=2, realistic volume
 - ULTRA (INCLUDE_ALL): training_window_seasons=None, high conviction
@@ -108,6 +115,75 @@ from .run_selection import (
     TEAM_ABBREVS,
 )
 
+# V6: Totals EV Engine
+from .totals_ev_engine import (
+    # Data structures
+    TotalMarket,
+    TotalsEvent,
+    TotalsEVConfig,
+    TotalsBetRecommendation,
+    MuOverrideFn,
+    # Guardrail constants
+    GUARDRAIL_OK,
+    GUARDRAIL_LOW_TRAIN_GAMES,
+    GUARDRAIL_BASELINE_OUT_OF_RANGE,
+    GUARDRAIL_DIAGNOSTIC_ONLY_FORCED,
+    # Math utilities
+    american_to_decimal,
+    decimal_to_implied_prob,
+    normal_cdf,
+    estimate_sigma_from_backtest,
+    # Phase 1 baseline blending
+    compute_baseline_blend_weight,
+    compute_baseline_shift,
+    check_guardrails,
+    # Phase 2 sigma calibration
+    compute_game_reliability,
+    compute_calibrated_sigma,
+    get_sigma_for_week_bucket,
+    get_effective_ev_min,
+    # Probability model
+    calculate_totals_probabilities,
+    # EV + Kelly
+    calculate_ev_totals,
+    calculate_kelly_stake,
+    # Main interface
+    evaluate_totals_markets,
+    recommendations_to_dataframe as totals_recommendations_to_dataframe,
+    summarize_totals_ev,
+)
+
+# V7: Totals Calibration Module
+from .totals_calibration import (
+    # Config
+    TotalsCalibrationConfig,
+    SigmaEstimate,
+    IntervalCoverageResult,
+    CalibrationReport,
+    # Residual collection
+    collect_walk_forward_residuals,
+    # Sigma estimators
+    estimate_sigma_global,
+    estimate_sigma_robust,
+    estimate_sigma_by_week_bucket,
+    compute_all_sigma_estimates,
+    # Coverage
+    evaluate_interval_coverage,
+    compute_coverage_score,
+    # Tuning
+    tune_sigma_for_coverage,
+    tune_sigma_for_roi,
+    compute_week_bucket_multipliers,
+    run_full_calibration,
+    # Load/Save
+    get_calibration_artifact_path,
+    save_calibration,
+    load_calibration,
+    select_calibration_for_runtime,
+    # Runtime helpers
+    get_sigma_for_game,
+)
+
 __all__ = [
     # Core classes
     "CalibrationResult",
@@ -166,4 +242,57 @@ __all__ = [
     "format_phase1_edge_table",
     "format_week_summary",
     "TEAM_ABBREVS",
+    # V6: Totals EV Engine
+    "TotalMarket",
+    "TotalsEvent",
+    "TotalsEVConfig",
+    "TotalsBetRecommendation",
+    "MuOverrideFn",
+    # Guardrail constants
+    "GUARDRAIL_OK",
+    "GUARDRAIL_LOW_TRAIN_GAMES",
+    "GUARDRAIL_BASELINE_OUT_OF_RANGE",
+    "GUARDRAIL_DIAGNOSTIC_ONLY_FORCED",
+    # Math utilities
+    "american_to_decimal",
+    "decimal_to_implied_prob",
+    "normal_cdf",
+    "estimate_sigma_from_backtest",
+    # Phase 1 baseline blending
+    "compute_baseline_blend_weight",
+    "compute_baseline_shift",
+    "check_guardrails",
+    # Phase 2 sigma calibration
+    "compute_game_reliability",
+    "compute_calibrated_sigma",
+    "get_sigma_for_week_bucket",
+    "get_effective_ev_min",
+    # Probability/EV
+    "calculate_totals_probabilities",
+    "calculate_ev_totals",
+    "calculate_kelly_stake",
+    "evaluate_totals_markets",
+    "totals_recommendations_to_dataframe",
+    "summarize_totals_ev",
+    # V7: Totals Calibration Module
+    "TotalsCalibrationConfig",
+    "SigmaEstimate",
+    "IntervalCoverageResult",
+    "CalibrationReport",
+    "collect_walk_forward_residuals",
+    "estimate_sigma_global",
+    "estimate_sigma_robust",
+    "estimate_sigma_by_week_bucket",
+    "compute_all_sigma_estimates",
+    "evaluate_interval_coverage",
+    "compute_coverage_score",
+    "tune_sigma_for_coverage",
+    "tune_sigma_for_roi",
+    "compute_week_bucket_multipliers",
+    "run_full_calibration",
+    "get_calibration_artifact_path",
+    "save_calibration",
+    "load_calibration",
+    "select_calibration_for_runtime",
+    "get_sigma_for_game",
 ]
