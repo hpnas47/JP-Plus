@@ -64,3 +64,13 @@ env/
 logs/
 output/
 data/spread_selection/*.csv
+
+# Generated artifacts (smoke tests, model caching)
+artifacts/
+*.joblib
+
+# Weather data (captured, not source-controlled)
+data/weather/
+
+# Calibration artifacts
+calibration_artifacts/

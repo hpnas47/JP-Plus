@@ -23,7 +23,11 @@ Examples:
 
     # Real-data test with pre-trained model (fastest)
     python3 scripts/smoke_test_weather_ev.py --real --year 2024 --week 10 \\
-        --load-model-path artifacts/models/totals_2024_w9.joblib
+        --load-model-path artifacts/models/totals_2024_pred_w10_trained_thru_w9.joblib
+
+    # Or use directory auto-discovery
+    python3 scripts/smoke_test_weather_ev.py --real --year 2024 --week 10 \\
+        --load-model-path artifacts/models/
 
     # Train and save model for future use
     python3 scripts/smoke_test_weather_ev.py --real --year 2024 --week 10 \\
@@ -685,6 +689,51 @@ class TrainingTimeoutError(Exception):
     pass
 
 
+def _generate_model_filename(year: int, pred_week: int) -> str:
+    """Generate standardized model filename.
+
+    Format: totals_{year}_pred_w{pred_week}_trained_thru_w{train_week}.joblib
+
+    This makes it unambiguous:
+    - pred_week: the week we are predicting/evaluating
+    - train_week: the last week used for training (pred_week - 1)
+    """
+    train_thru_week = pred_week - 1
+    return f"totals_{year}_pred_w{pred_week}_trained_thru_w{train_thru_week}.joblib"
+
+
+def _find_model_in_directory(directory: Path, year: int, pred_week: int) -> Optional[Path]:
+    """Auto-discover model file in directory matching year/week.
+
+    Searches for files matching the naming convention and returns the newest.
+    """
+    train_thru_week = pred_week - 1
+
+    # Patterns to search (new convention first, then legacy)
+    patterns = [
+        f"totals_{year}_pred_w{pred_week}_trained_thru_w{train_thru_week}.joblib",  # New format
+        f"totals_{year}_w{train_thru_week}.joblib",  # Legacy format
+        f"totals_{year}_pred_w{pred_week}*.joblib",  # Partial match new
+    ]
+
+    candidates = []
+    for pattern in patterns:
+        matches = list(directory.glob(pattern))
+        candidates.extend(matches)
+
+    if not candidates:
+        return None
+
+    # Remove duplicates, sort by mtime (newest first)
+    unique = list(set(candidates))
+    unique.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if len(unique) > 1:
+        print(f"      Found {len(unique)} model files, using newest: {unique[0].name}")
+
+    return unique[0]
+
+
 def _train_model_worker(
     games: pd.DataFrame,
     fbs_set: set,
@@ -710,29 +759,70 @@ def _train_model_worker(
 
 def run_phase2_model_prep(
     preflight: PreflightResult,
+    year: int,
     week: int,
     max_train_seconds: int,
     load_model_path: Optional[str],
     save_model_path: Optional[str],
+    overwrite_model: bool = False,
     ridge_alpha: float = 10.0,
 ) -> tuple[bool, Optional[Any], Optional[str]]:
     """Phase 2: Model preparation (time-bounded).
 
+    Args:
+        preflight: Result from Phase 1 preflight checks
+        year: Season year
+        week: Prediction week (the week we are evaluating)
+        max_train_seconds: Timeout for training
+        load_model_path: Path to pre-trained model (file or directory)
+        save_model_path: Path to save trained model (file or directory)
+        overwrite_model: If True, overwrite existing model file
+        ridge_alpha: Ridge regression alpha
+
     Returns (success, model, skip_reason)
+
+    Model Naming Convention:
+        totals_{year}_pred_w{pred_week}_trained_thru_w{train_week}.joblib
+        - pred_week: the week being predicted/evaluated (from CLI --week)
+        - train_week: last week used for training (pred_week - 1)
     """
     log_phase("PHASE_2_MODEL_PREP")
+
+    # Compute week values for clarity
+    pred_week = week
+    train_thru_week = week - 1
+    print(f"\n      Week context: pred_week={pred_week}, train_thru_week={train_thru_week}")
 
     # -------------------------------------------------------------------------
     # Option A: Load pre-trained model
     # -------------------------------------------------------------------------
     if load_model_path:
-        print(f"\n[2.1] Loading pre-trained model from: {load_model_path}")
+        load_path = Path(load_model_path)
+
+        # Auto-discovery if path is a directory
+        if load_path.is_dir():
+            print(f"\n[2.1] Auto-discovering model in directory: {load_path}")
+            discovered = _find_model_in_directory(load_path, year, pred_week)
+
+            if discovered is None:
+                expected_name = _generate_model_filename(year, pred_week)
+                return (
+                    False, None,
+                    f"REAL-DATA TEST SKIPPED: no matching model found in {load_path}\n"
+                    f"  Expected filename pattern: {expected_name}\n"
+                    f"  To create: run with --save-model-path {load_path}"
+                )
+
+            load_path = discovered
+            print(f"      Discovered: {load_path.name}")
+
+        print(f"\n[2.1] Loading pre-trained model from: {load_path}")
 
         if not HAS_JOBLIB:
             return (False, None, "REAL-DATA TEST SKIPPED: joblib not installed (required for --load-model-path)")
 
         try:
-            model = joblib.load(load_model_path)
+            model = joblib.load(load_path)
 
             # Validate loaded model
             if not hasattr(model, '_trained') or not model._trained:
@@ -750,7 +840,9 @@ def run_phase2_model_prep(
     # Option B: Train model with time limit
     # -------------------------------------------------------------------------
     print(f"\n[2.1] Training TotalsModel (timeout={max_train_seconds}s)...")
-    print(f"      Training on {preflight.n_train_games} games, max_week={week-1}")
+    print(f"      Training model for prediction week {pred_week}:")
+    print(f"        - Using games from weeks 1-{train_thru_week} ({preflight.n_train_games} games)")
+    print(f"        - max_week={train_thru_week} (train_thru_week)")
 
     start_time = time.time()
 
@@ -758,7 +850,7 @@ def run_phase2_model_prep(
     result_queue = multiprocessing.Queue()
     process = multiprocessing.Process(
         target=_train_model_worker,
-        args=(preflight.games_df, preflight.fbs_set, week - 1, ridge_alpha, result_queue),
+        args=(preflight.games_df, preflight.fbs_set, train_thru_week, ridge_alpha, result_queue),
     )
     process.start()
     process.join(timeout=max_train_seconds)
@@ -795,13 +887,22 @@ def run_phase2_model_prep(
             else:
                 save_path = Path(save_model_path)
                 if save_path.is_dir():
-                    # Generate filename with year/week
-                    save_path = save_path / f"totals_{preflight.games_df['year'].iloc[0]}_w{week-1}.joblib"
+                    # Generate filename with standardized naming convention
+                    filename = _generate_model_filename(year, pred_week)
+                    save_path = save_path / filename
+                    print(f"      Generated filename: {filename}")
 
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                joblib.dump(model, save_path)
-                print(f"      Model saved to: {save_path}")
-                print(f"\n      Tip: Future smoke tests can use --load-model-path {save_path}")
+                # Check if file exists
+                if save_path.exists() and not overwrite_model:
+                    print(f"      WARNING: Model file already exists: {save_path}")
+                    print(f"      Skipping save. Use --overwrite-model to replace existing file.")
+                else:
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    joblib.dump(model, save_path)
+                    print(f"      Model saved to: {save_path}")
+                    print(f"\n      Tip: Future smoke tests can use:")
+                    print(f"        --load-model-path {save_path}")
+                    print(f"        --load-model-path {save_path.parent}  (auto-discovery)")
 
         return (True, model, None)
     elif status == 'failed':
@@ -989,6 +1090,7 @@ def run_real_data_test(
     max_games: Optional[int],
     load_model_path: Optional[str],
     save_model_path: Optional[str],
+    overwrite_model: bool = False,
 ) -> bool:
     """Run three-phase real-data test. Returns True on success/skip."""
     print("\n" + "=" * 70)
@@ -997,6 +1099,7 @@ def run_real_data_test(
     print(f"\nConfiguration:")
     print(f"  require_weather: {require_weather}")
     print(f"  max_train_seconds: {max_train_seconds}")
+    print(f"  overwrite_model: {overwrite_model}")
     print(f"  max_games: {max_games}")
     print(f"  load_model_path: {load_model_path}")
     print(f"  save_model_path: {save_model_path}")
@@ -1017,10 +1120,12 @@ def run_real_data_test(
     # -------------------------------------------------------------------------
     success, model, skip_reason = run_phase2_model_prep(
         preflight=preflight,
+        year=year,
         week=week,
         max_train_seconds=max_train_seconds,
         load_model_path=load_model_path,
         save_model_path=save_model_path,
+        overwrite_model=overwrite_model,
     )
 
     if not success:
@@ -1062,7 +1167,11 @@ Examples:
 
   # Real-data test with pre-trained model (fastest)
   python3 scripts/smoke_test_weather_ev.py --real --year 2024 --week 10 \\
-      --load-model-path artifacts/models/totals_2024_w9.joblib
+      --load-model-path artifacts/models/totals_2024_pred_w10_trained_thru_w9.joblib
+
+  # Or use directory auto-discovery
+  python3 scripts/smoke_test_weather_ev.py --real --year 2024 --week 10 \\
+      --load-model-path artifacts/models/
 
   # Train and save model for future use
   python3 scripts/smoke_test_weather_ev.py --real --year 2024 --week 10 \\
@@ -1113,11 +1222,15 @@ Examples:
     # Model serialization (D)
     parser.add_argument(
         "--load-model-path", type=str, default=None,
-        help="Path to pre-trained model (skip training)"
+        help="Path to pre-trained model file OR directory (auto-discovery)"
     )
     parser.add_argument(
         "--save-model-path", type=str, default=None,
         help="Path to save trained model for reuse (can be directory)"
+    )
+    parser.add_argument(
+        "--overwrite-model", action="store_true",
+        help="Overwrite existing model file if it exists"
     )
 
     args = parser.parse_args()
@@ -1141,6 +1254,7 @@ Examples:
             max_games=args.max_games,
             load_model_path=args.load_model_path,
             save_model_path=args.save_model_path,
+            overwrite_model=args.overwrite_model,
         ):
             success = False
 
