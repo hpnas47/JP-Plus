@@ -375,7 +375,14 @@ def main():
     train_games['actual_total'] = train_games['home_points'] + train_games['away_points']
     train_games = train_games.dropna(subset=['actual_total'])
 
-    print(f"      Training on {len(train_games)} FBS games from weeks 1-{week - 1}")
+    # Week 0 check: totals model needs prior game data to train
+    if week == 0:
+        print("\n      Week 0: no prior game data available.")
+        print("      Totals model requires at least 1 week of game data for training.")
+        print("      For week 0 games, consider using preseason totals or manual estimates.")
+        sys.exit(0)
+
+    print(f"      Training on {len(train_games)} FBS games from weeks 0-{week - 1}")
 
     model = TotalsModel(ridge_alpha=10.0)
     model.set_team_universe(fbs_set)
@@ -417,12 +424,13 @@ def main():
     # Print results
     displayed_primary = 0
     displayed_edge5 = 0
+    displayed_all = 0
 
     if args.show_all:
         # Combine and show all
         all_df = pd.concat([primary_df, edge5_df], ignore_index=True)
         all_df = all_df.drop_duplicates(subset=['event_id', 'side'])
-        print_recommendations(
+        displayed_all = print_recommendations(
             all_df, "All Evaluated Games", show_ev=True, min_edge=0,
             results_df=week_results if has_results else None
         )
@@ -452,48 +460,57 @@ def main():
     print("-" * 100)
     print(f"  Games evaluated: {len(events)}")
     print(f"  Total qualifying bets: {len(primary_df)} Primary, {len(edge5_df)} 5+ Edge")
-    if args.min_edge > 0:
+    if args.show_all:
+        print(f"  Displayed (--show-all): {displayed_all} games")
+    elif args.min_edge > 0:
         print(f"  Displayed ({args.min_edge}+ edge): {displayed_primary} Primary, {displayed_edge5} 5+ Edge")
     print(f"  Config: sigma={args.sigma}, ev_min={args.ev_min * 100:.0f}%, bankroll=${args.bankroll:.0f}")
 
     # Record summary for historical data
     if has_results and len(primary_df) > 0:
-        # Build results lookup from week_results
-        results_lookup = {}
-        for _, row in week_results.iterrows():
-            game_id = str(row['id'])
-            home_pts = row.get('home_points')
-            away_pts = row.get('away_points')
-            if pd.notna(home_pts) and pd.notna(away_pts):
-                results_lookup[game_id] = int(home_pts) + int(away_pts)
+        # Apply same min_edge filter used for display so record matches displayed bets
+        record_df = primary_df[primary_df['edge_pts'].abs() >= args.min_edge].copy()
 
-        wins = 0
-        losses = 0
-        pushes = 0
-        for _, r in primary_df.iterrows():
-            event_id = str(r['event_id'])
-            if event_id in results_lookup:
-                actual_total = results_lookup[event_id]
-                line = r['line']
-                side = r['side']
-                if actual_total > line:
-                    if side == "OVER":
-                        wins += 1
-                    else:
-                        losses += 1
-                elif actual_total < line:
-                    if side == "UNDER":
-                        wins += 1
-                    else:
-                        losses += 1
-                else:
-                    pushes += 1
+        if len(record_df) == 0:
+            # No bets met threshold, skip record
+            pass
+        else:
+            # Build results lookup from week_results
+            results_lookup = {}
+            for _, row in week_results.iterrows():
+                game_id = str(row['id'])
+                home_pts = row.get('home_points')
+                away_pts = row.get('away_points')
+                if pd.notna(home_pts) and pd.notna(away_pts):
+                    results_lookup[game_id] = int(home_pts) + int(away_pts)
 
-        total = wins + losses
-        if total > 0:
-            pct = wins / total * 100
-            push_str = f", {pushes} Push" if pushes > 0 else ""
-            print(f"\n  RECORD: {wins}-{losses}{push_str} ({pct:.1f}%)")
+            wins = 0
+            losses = 0
+            pushes = 0
+            for _, r in record_df.iterrows():
+                event_id = str(r['event_id'])
+                if event_id in results_lookup:
+                    actual_total = results_lookup[event_id]
+                    line = r['line']
+                    side = r['side']
+                    if actual_total > line:
+                        if side == "OVER":
+                            wins += 1
+                        else:
+                            losses += 1
+                    elif actual_total < line:
+                        if side == "UNDER":
+                            wins += 1
+                        else:
+                            losses += 1
+                    else:
+                        pushes += 1
+
+            total = wins + losses
+            if total > 0:
+                pct = wins / total * 100
+                push_str = f", {pushes} Push" if pushes > 0 else ""
+                print(f"\n  RECORD: {wins}-{losses}{push_str} ({pct:.1f}%)")
 
     # Export if requested
     if args.export:
