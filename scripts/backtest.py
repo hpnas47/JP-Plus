@@ -35,7 +35,6 @@ from src.models.efficiency_foundation_model import (
     get_ridge_cache_stats,
 )
 from src.models.preseason_priors import PreseasonPriors
-from src.models.blended_priors import create_blended_generator, BlendSchedule
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import SituationalAdjuster, HistoricalRankings, precalculate_schedule_metadata
 from src.adjustments.travel import TravelAdjuster
@@ -2598,8 +2597,6 @@ def fetch_all_season_data(
     portal_scale: float = 0.15,
     use_cache: bool = True,
     force_refresh: bool = False,
-    use_blended_priors: bool = False,
-    blend_schedule: Optional[BlendSchedule] = None,
     credible_rebuild_enabled: bool = True,
 ) -> dict[int, SeasonData]:
     """Fetch and cache all season data for backtest.
@@ -2611,8 +2608,6 @@ def fetch_all_season_data(
         portal_scale: How much to weight portal impact (default 0.15)
         use_cache: Whether to use cached data if available (default True)
         force_refresh: If True, bypass cache and force fresh API calls (default False)
-        use_blended_priors: Whether to use blended SP+/own-prior system
-        blend_schedule: Custom BlendSchedule for blended priors (uses default if None)
         credible_rebuild_enabled: Whether to apply credible rebuild relief (default True)
 
     Returns:
@@ -2781,56 +2776,18 @@ def fetch_all_season_data(
         priors = None
         if use_priors:
             try:
-                if use_blended_priors:
-                    # Load historical JP+ ratings for blended priors
-                    import json
-                    hist_ratings_path = Path("data/historical_jp_ratings.json")
-                    if hist_ratings_path.exists():
-                        with open(hist_ratings_path) as f:
-                            historical_jp_ratings = json.load(f)
-                        # Use provided schedule or default
-                        if blend_schedule is None:
-                            schedule = BlendSchedule(
-                                week_weights={
-                                    1: (0.0, 1.0),   # Week 1: 100% own-prior
-                                    2: (0.4, 0.6),   # Week 2: 60% own, 40% SP+
-                                    3: (0.0, 1.0),   # Week 3: 100% own-prior
-                                },
-                                default_sp_weight=0.8,  # Week 4+: 80% SP+
-                            )
-                        else:
-                            schedule = blend_schedule
-                        priors = create_blended_generator(
-                            client, historical_jp_ratings, schedule
-                        )
-                        priors.calculate_blended_ratings(year, week=1)
-                        logger.info(
-                            f"Loaded BLENDED priors for {len(priors.blended_ratings)} teams"
-                        )
-                    else:
-                        logger.warning(
-                            "Historical ratings not found, falling back to SP+-only"
-                        )
-                        priors = PreseasonPriors(
-                            client,
-                            credible_rebuild_enabled=credible_rebuild_enabled,
-                        )
-                        priors.calculate_preseason_ratings(
-                            year, use_portal=use_portal, portal_scale=portal_scale
-                        )
-                else:
-                    priors = PreseasonPriors(
-                        client,
-                        credible_rebuild_enabled=credible_rebuild_enabled,
-                    )
-                    priors.calculate_preseason_ratings(
-                        year,
-                        use_portal=use_portal,
-                        portal_scale=portal_scale,
-                    )
-                    logger.debug(
-                        f"Loaded preseason priors for {len(priors.preseason_ratings)} teams"
-                    )
+                priors = PreseasonPriors(
+                    client,
+                    credible_rebuild_enabled=credible_rebuild_enabled,
+                )
+                priors.calculate_preseason_ratings(
+                    year,
+                    use_portal=use_portal,
+                    portal_scale=portal_scale,
+                )
+                logger.debug(
+                    f"Loaded preseason priors for {len(priors.preseason_ratings)} teams"
+                )
             except Exception as e:
                 logger.warning(f"Could not load preseason priors for {year}: {e}")
                 priors = None
@@ -3050,7 +3007,6 @@ def run_backtest(
     end_week: Optional[int] = None,
     ridge_alpha: float = 50.0,
     use_priors: bool = True,
-    use_blended_priors: bool = False,
     hfa_value: float = 2.5,
     prior_weight: int = 8,
     season_data: Optional[dict] = None,
@@ -3108,8 +3064,6 @@ def run_backtest(
     qb_use_prior_season: bool = True,
     qb_phase1_only: bool = False,
     qb_fix_misattribution: bool = False,
-    # Blended prior schedule
-    blend_schedule: Optional[BlendSchedule] = None,
     # Credible Rebuild adjustment
     credible_rebuild_enabled: bool = True,
     # Phase 1 Purity Test
@@ -3186,8 +3140,6 @@ def run_backtest(
             portal_scale=portal_scale,
             use_cache=use_season_cache,
             force_refresh=force_refresh,
-            use_blended_priors=use_blended_priors,
-            blend_schedule=blend_schedule,
             credible_rebuild_enabled=credible_rebuild_enabled,
         )
     else:
@@ -3725,11 +3677,6 @@ def main():
         help="Disable preseason priors",
     )
     parser.add_argument(
-        "--blended-priors",
-        action="store_true",
-        help="Use blended SP+/own-prior system instead of SP+-only",
-    )
-    parser.add_argument(
         "--sweep",
         action="store_true",
         help="Run parameter sweep (grid search over alpha, hfa, efficiency weight)",
@@ -4167,7 +4114,6 @@ def main():
             portal_scale=args.portal_scale,
             use_cache=not args.no_cache,
             force_refresh=args.force_refresh,
-            use_blended_priors=args.blended_priors,
             credible_rebuild_enabled=not args.no_credible_rebuild,
         )
 
@@ -4246,7 +4192,6 @@ def main():
         portal_scale=args.portal_scale,
         use_cache=not args.no_cache,
         force_refresh=args.force_refresh,
-        use_blended_priors=args.blended_priors,
         credible_rebuild_enabled=not args.no_credible_rebuild,
     )
 
@@ -4262,7 +4207,7 @@ def main():
     print(f"  Week range:         {args.start_week} - {args.end_week if args.end_week else 'end'}")
     print(f"  ATS line type:      {'opening' if args.opening_line else 'closing'}")
     print(f"  Ridge alpha:        {args.alpha}")
-    prior_status = 'disabled' if args.no_priors else ('blended SP+/own' if args.blended_priors else 'SP+-only')
+    prior_status = 'disabled' if args.no_priors else 'SP+-only'
     print(f"  Preseason priors:   {prior_status}")
     print(f"  Transfer portal:    {'disabled' if args.no_portal else f'enabled (scale={args.portal_scale})'}")
     print(f"  HFA:                team-specific (fallback={args.hfa}, global_offset={args.hfa_offset})")
@@ -4289,7 +4234,6 @@ def main():
         end_week=args.end_week,
         ridge_alpha=args.alpha,
         use_priors=not args.no_priors,
-        use_blended_priors=args.blended_priors,
         hfa_value=args.hfa,
         prior_weight=args.prior_weight,
         efficiency_weight=args.efficiency_weight,
