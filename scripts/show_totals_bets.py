@@ -126,15 +126,17 @@ def show_totals_bets(year: int, week: int):
     # Filter to games with lines
     week_data = week_data[week_data['vegas_total_open'].notna()].copy()
 
-    # Calculate EV using Normal CDF model (matches totals_ev_engine.py)
-    SIGMA = 17.0  # Matches TotalsEVConfig default (balances volume vs drawdown)
+    # Calculate calibrated sigma from actual prediction errors
+    # This makes EV estimates comparable to the spread engine's calibrated model
+    SIGMA = df['jp_error'].std()  # ~16.4 from 2023-2025 backtest
+
+    # Calculate EV using Normal CDF model with calibrated sigma
     ev_data = week_data['edge_open'].apply(lambda e: calculate_totals_ev(e, SIGMA))
     week_data['ev'] = ev_data.apply(lambda x: x[0])
     week_data['p_win'] = ev_data.apply(lambda x: x[1])
 
-    # Primary EV Engine: EV >= 10% (focused high-conviction list)
-    # At sigma=17, this is roughly 3+ point edge
-    EV_MIN = 0.10
+    # Primary EV Engine: EV >= 3% (matches spread engine threshold)
+    EV_MIN = 0.03
     primary = week_data[week_data['ev'] >= EV_MIN].sort_values('ev', ascending=False)
 
     # 5+ Edge that didn't make EV cut (diagnostic - should be rare)
@@ -202,7 +204,7 @@ def show_totals_bets(year: int, week: int):
 
     # Footnotes
     print("\n---")
-    print(f"*Primary EV: Normal CDF model (sigma={SIGMA}), EV >= {EV_MIN*100:.0f}%.*")
+    print(f"*Primary EV: Normal CDF model (sigma={SIGMA:.1f}, calibrated from residuals), EV >= {EV_MIN*100:.0f}%.*")
     print("*5+ Edge: Games with 5+ point edge that didn't meet EV threshold.*")
 
 
