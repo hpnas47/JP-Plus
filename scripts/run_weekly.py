@@ -57,12 +57,7 @@ from src.adjustments.qb_adjustment import QBInjuryAdjuster
 from src.adjustments.qb_continuous import QBContinuousAdjuster
 from src.predictions.spread_generator import SpreadGenerator
 from src.predictions.vegas_comparison import VegasComparison
-# SP+ gate removed (2026-02-14) - research showed unstable year-to-year results
-from src.predictions.phase1_killswitch import (
-    KillswitchConfig,
-    evaluate_killswitch,
-    apply_killswitch_action,
-)
+# SP+ gate and kill-switch removed (2026-02-14) - not production-ready
 from src.reports.excel_export import ExcelExporter
 from src.reports.html_report import HTMLReporter
 from src.notifications import Notifier
@@ -166,25 +161,6 @@ def parse_args():
         "--dual-spread",
         action="store_true",
         help="(Legacy) Enable dual-spread mode - now default behavior.",
-    )
-    # Phase 1 Kill-Switch (default OFF)
-    parser.add_argument(
-        "--killswitch",
-        action="store_true",
-        help="Enable Phase 1 kill-switch. Reduces/disables betting if early results are poor.",
-    )
-    parser.add_argument(
-        "--killswitch-action",
-        type=str,
-        default="disable_phase1_bets",
-        choices=["disable_phase1_bets", "raise_threshold"],
-        help="Action when kill-switch triggers. Default: disable_phase1_bets",
-    )
-    parser.add_argument(
-        "--killswitch-trigger-ats",
-        type=float,
-        default=0.40,
-        help="Kill-switch triggers if ATS%% <= this value. Default: 0.40",
     )
     # Slate export for selection engine integration
     parser.add_argument(
@@ -614,10 +590,6 @@ def run_predictions(
     use_learned_situ: bool = False,
     dual_spread: bool = False,
     lsa_threshold_days: int = 4,
-    killswitch_enabled: bool = False,
-    killswitch_action: str = "disable_phase1_bets",
-    killswitch_trigger_ats: float = 0.40,
-    season_results_df: pd.DataFrame = None,
     export_slate: str = None,
 ) -> dict:
     """Run the full prediction pipeline.
@@ -635,11 +607,6 @@ def run_predictions(
         use_learned_situ: Whether to use LSA (Learned Situational Adjustment).
         dual_spread: Output both fixed and LSA spreads with timing recommendation.
         lsa_threshold_days: Days before game to switch from fixed to LSA recommendation.
-        killswitch_enabled: Whether to enable Phase 1 kill-switch.
-        killswitch_action: Action when triggered (disable_phase1_bets, raise_threshold).
-        killswitch_trigger_ats: Trigger threshold (if ATS% <= this). Default 0.40.
-        season_results_df: DataFrame with prior weeks' betting results for kill-switch.
-            Required columns: week, bet_placed, ats_outcome.
         export_slate: Path to export slate CSV for selection engine integration.
             If provided, exports slate with LSA-recommended spreads.
 
@@ -1087,39 +1054,6 @@ def run_predictions(
         # Log the recomputed value play count
         logger.info(f"Value plays (edge-aware): {len(value_plays_df)} games with {min_edge}+ pts edge")
 
-    # === PHASE 1 KILL-SWITCH (weeks 2-3 only, requires prior results) ===
-    # Protects against 2022-like regimes by reducing/disabling betting
-    # if early results are poor.
-    killswitch_config = KillswitchConfig(
-        enabled=killswitch_enabled and week in [2, 3],
-        weeks_observed=1,  # Always evaluate based on Week 1
-        min_bets=5,
-        trigger_ats=killswitch_trigger_ats,
-        action=killswitch_action,
-    )
-
-    if killswitch_config.enabled and season_results_df is not None:
-        logger.info("Evaluating Phase 1 kill-switch...")
-        killswitch_result = evaluate_killswitch(
-            killswitch_config,
-            current_week=week,
-            season_results_df=season_results_df,
-        )
-
-        if killswitch_result.triggered:
-            value_plays_df = apply_killswitch_action(
-                killswitch_result,
-                value_plays_df,
-                killswitch_config,
-            )
-        else:
-            logger.info(f"Kill-switch not triggered: {killswitch_result.reason}")
-    elif killswitch_config.enabled:
-        logger.warning(
-            "Kill-switch enabled but no season_results_df provided. "
-            "Kill-switch requires prior weeks' betting results."
-        )
-
     # Compute value play count for downstream consumers
     value_plays_count = len(value_plays_df)
 
@@ -1300,11 +1234,6 @@ def main():
         use_learned_situ=use_learned_situ,
         dual_spread=dual_spread,
         lsa_threshold_days=args.lsa_threshold_days,
-        killswitch_enabled=args.killswitch,
-        killswitch_action=args.killswitch_action,
-        killswitch_trigger_ats=args.killswitch_trigger_ats,
-        # Note: season_results_df must be provided externally for kill-switch to work
-        season_results_df=None,
         export_slate=args.export_slate,
     )
 
