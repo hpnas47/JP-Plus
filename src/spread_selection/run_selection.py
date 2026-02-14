@@ -76,14 +76,17 @@ logger = logging.getLogger(__name__)
 
 def _to_native(obj):
     """Convert numpy types to native Python types for JSON serialization."""
-    if isinstance(obj, (np.integer,)):
+    # IMPORTANT: Check np.bool_ BEFORE np.integer because np.bool_ can be
+    # a subclass of integer types in some numpy versions. If we check integer
+    # first, booleans serialize as 0/1 instead of true/false.
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, (np.integer,)):
         return int(obj)
     elif isinstance(obj, (np.floating,)):
         return float(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
     elif pd.isna(obj):
         return None
     return obj
@@ -1749,13 +1752,13 @@ def run_predict(
     list_b_sp_spreads = {}
 
     phase1_edge_config = Phase1EdgeBaselineConfig(
-        weeks=[1, 2, 3],
+        weeks=[0, 1, 2, 3],
         jp_edge_min=phase1_edge_jp_min,
         line_type="open",
         veto_config=phase1_edge_veto_config,
     )
 
-    if emit_phase1_edge_list and week in [1, 2, 3]:
+    if emit_phase1_edge_list and week in [0, 1, 2, 3]:
         print(f"\n{'=' * 80}")
         print("LIST B: PHASE1_EDGE (auto-emitted in Phase 1)")
         print("=" * 80)
@@ -1859,15 +1862,15 @@ def run_predict(
         else:
             print(f"\n  No games meet edge threshold for LIST B")
 
-    elif emit_phase1_edge_list and week not in [1, 2, 3]:
-        print(f"\n  LIST B: Week {week} not in Phase 1 (weeks 1-3), skipping")
+    elif emit_phase1_edge_list and week not in [0, 1, 2, 3]:
+        print(f"\n  LIST B: Week {week} not in Phase 1 (weeks 0-3), skipping")
 
     # =========================================================================
     # WEEK SUMMARY + OVERLAP/CONFLICT REPORT (Phase 1 only)
     # =========================================================================
-    if week in [1, 2, 3] and 'bets' in dir():
+    if week in [0, 1, 2, 3] and primary_bets is not None and len(primary_bets) > 0:
         # Get counts from primary mode
-        engine_primary_count = len(bets) if 'primary' in emit_modes else 0
+        engine_primary_count = len(primary_bets)
         engine_ultra_count = 0  # Will be updated if ultra was processed
 
         # Check if ultra was also processed (would need separate tracking)
@@ -1905,16 +1908,16 @@ def run_predict(
         print(f"\n  Wrote: {week_summary_path}")
 
         # Overlap/conflict report
-        if len(bets) > 0 and len(list_b_selected) > 0:
+        if len(primary_bets) > 0 and len(list_b_selected) > 0:
             print(f"\n{'=' * 80}")
             print("LIST A vs LIST B OVERLAP/CONFLICT REPORT")
             print("=" * 80)
 
-            # Build overlap DataFrame
-            lista_games = set(int(gid) for gid in bets['game_id'].values)
-            lista_sides = {int(row['game_id']): row['jp_favored_side'] for _, row in bets.iterrows()}
-            lista_evs = {int(row['game_id']): row['ev'] for _, row in bets.iterrows()}
-            lista_confidence = {int(row['game_id']): row.get('tier', 'BET') for _, row in bets.iterrows()}
+            # Build overlap DataFrame (using primary_bets, not last-mode bets)
+            lista_games = set(int(gid) for gid in primary_bets['game_id'].values)
+            lista_sides = {int(row['game_id']): row['jp_favored_side'] for _, row in primary_bets.iterrows()}
+            lista_evs = {int(row['game_id']): row['ev'] for _, row in primary_bets.iterrows()}
+            lista_confidence = {int(row['game_id']): row.get('tier', 'BET') for _, row in primary_bets.iterrows()}
 
             listb_games = {rec.game_id for rec in list_b_selected}
             listb_sides = {rec.game_id: rec.bet_side for rec in list_b_selected}
@@ -2860,9 +2863,12 @@ Examples:
     )
     backtest_parser.add_argument(
         "--compare-modes", action="store_true",
-        help="Compare PRIMARY and ULTRA modes (default: True)"
+        help="Compare PRIMARY and ULTRA modes (default: primary only)"
     )
-    backtest_parser.set_defaults(compare_modes=True)
+    backtest_parser.add_argument(
+        "--no-compare-modes", dest="compare_modes", action="store_false",
+        help="Run primary mode only (explicit single-mode)"
+    )
     backtest_parser.add_argument(
         "--save-artifacts", action="store_true", default=False,
         help="Save calibration artifacts for reproducibility"
