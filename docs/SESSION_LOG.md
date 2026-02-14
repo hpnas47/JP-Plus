@@ -4,6 +4,70 @@
 
 ---
 
+## Session: February 14, 2026
+
+### Theme: Totals EV Engine Weather Integration
+
+---
+
+#### Weather Support for run_weekly_totals.py — COMMITTED
+**Status**: Complete
+
+Wired up weather adjustment pipeline for 2026+ production totals betting:
+
+**New CLI Flags:**
+- `--weather` — Enable weather adjustments (requires prior forecast capture)
+- `--no-high-variance-overs` — Block OVER bets on uncertain weather games
+
+**Implementation Details:**
+- `load_weather_adjustments()` — Fetches forecasts from `data/weather_forecasts.db` using `TomorrowIOClient.get_betting_forecast()` (earliest capture for lookahead safety)
+- Weather adjustments applied to `TotalsEvent.weather_adjustment` field
+- High-variance detection: confidence < 0.75 AND raw adj > 3.0
+- OVER bets filtered on high-variance games when flag set
+- Summary shows weather status: `Weather: Enabled (X adj)` or `Weather: Disabled`
+
+**Usage:**
+```bash
+# 2026 production with weather
+python scripts/run_weekly_totals.py --year 2026 --week 6 --weather
+
+# With high-variance OVER protection
+python scripts/run_weekly_totals.py --year 2026 --week 6 --weather --no-high-variance-overs
+
+# Historical (2025 and earlier) — NO weather flag
+python scripts/run_weekly_totals.py --year 2025 --week 6
+```
+
+**Prerequisite:** Run `python scripts/weather_thursday_capture.py` before game day to populate forecasts.
+
+---
+
+#### EV Engine Consistency Review — CONFIRMED
+**Status**: Analysis complete, no changes needed
+
+Reviewed spread EV engine (`selection.py`) vs totals EV engine (`totals_ev_engine.py`):
+
+| Aspect | Spread EV | Totals EV | Notes |
+|--------|-----------|-----------|-------|
+| EV Formula | `p_win * payout - p_lose` | `p_win * payout - p_lose` | **Identical** |
+| P(win) Source | Logistic calibration on `edge_abs` | Normal CDF with sigma | Different by design |
+| Push Handling | Empirical push rates | Analytical (Normal CDF band) | Both valid |
+| Kelly Staking | None | Full three-outcome Kelly | Totals-only |
+
+**Conclusion:** Design differences are intentional and appropriate for each domain.
+
+---
+
+#### Import Fix: SP+ Gate Cleanup — COMMITTED
+**Status**: Complete
+
+Fixed import error in `src/spread_selection/__init__.py`:
+- Removed stale SP+ gate exports (`Phase1SPGateConfig`, `Phase1SPGateResult`, etc.)
+- `policies/__init__.py` was emptied in prior session but parent still imported from it
+- Added comment: "SP+ gate removed (2026-02-14)"
+
+---
+
 ## Session: February 13, 2026 (PM)
 
 ### Theme: Phase 1 SP+ Policy Finalization
