@@ -9,7 +9,6 @@ from typing import Optional
 import pandas as pd
 
 from src.models.special_teams import SpecialTeamsModel
-from src.models.finishing_drives import FinishingDrivesModel
 from src.models.fcs_strength import FCSStrengthEstimator
 from src.adjustments.home_field import HomeFieldAdvantage
 from src.adjustments.situational import (
@@ -222,7 +221,6 @@ class SpreadGenerator:
         self,
         ratings: Optional[dict[str, float]] = None,
         special_teams: Optional[SpecialTeamsModel] = None,
-        finishing_drives: Optional[FinishingDrivesModel] = None,
         home_field: Optional[HomeFieldAdvantage] = None,
         situational: Optional[SituationalAdjuster] = None,
         travel: Optional[TravelAdjuster] = None,
@@ -246,7 +244,6 @@ class SpreadGenerator:
         Args:
             ratings: Dict mapping team names to EFM overall ratings
             special_teams: Special teams model for FG/punt/kickoff differential
-            finishing_drives: Finishing drives model for red zone efficiency
             home_field: Home field advantage calculator
             situational: Situational adjuster (bye weeks, letdown, lookahead, rivalry)
             travel: Travel adjuster (timezone, distance)
@@ -291,7 +288,6 @@ class SpreadGenerator:
             self._mean_fbs_rating = self._mean_rating
 
         self.special_teams = special_teams or SpecialTeamsModel()
-        self.finishing_drives = finishing_drives or FinishingDrivesModel()
         self.home_field = home_field or HomeFieldAdvantage()
         self.situational = situational or SituationalAdjuster()
         self.travel = travel or TravelAdjuster()
