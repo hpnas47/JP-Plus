@@ -344,7 +344,7 @@ def fetch_games_data(
     """
     all_games = []
 
-    for week in range(1, through_week + 1):
+    for week in range(0, through_week + 1):  # Start at week 0 for CFB
         try:
             games = client.get_games(year, week)
             for game in games:
@@ -472,8 +472,8 @@ def build_schedule_df(
     """
     all_games = []
 
-    # Fetch all regular season weeks (always iterate all 15, skip empty weeks)
-    for week in range(1, 16):
+    # Fetch all regular season weeks (always iterate all 16 including week 0, skip empty weeks)
+    for week in range(0, 16):  # Start at week 0 for CFB
         try:
             games = client.get_games(year, week)
             if not games:
@@ -564,7 +564,7 @@ def _fetch_plays(
     When use_delta_cache=False:
         - Fetches all weeks [1, week-1] from API (original behavior)
     """
-    training_weeks = list(range(1, week))  # weeks 1 through week-1
+    training_weeks = list(range(0, week))  # weeks 0 through week-1 (includes CFB week 0)
 
     if not use_delta_cache:
         # Original behavior: fetch every week from API
@@ -736,8 +736,8 @@ def run_predictions(
                     raise DataNotAvailableError(
                         f"Data not available after waiting for {year} week {week-1}"
                     )
-        elif week == 1:
-            logger.info("Week 1: skipping data availability check (no prior week data)")
+        elif week <= 1:
+            logger.info("Week 0/1: skipping data availability check (no prior week data)")
 
         # Fetch FBS teams for FCS detection (needed before EFM)
         logger.info("Fetching FBS teams...")
@@ -752,10 +752,10 @@ def run_predictions(
         logger.info("Fetching current season game data...")
         current_games_df = fetch_games_data(client, year, week - 1)
 
-        # Week 1 special case: no prior games exist, use priors-only mode
+        # Week 0/1 special case: no prior games exist, use priors-only mode
         if current_games_df.empty:
-            if week == 1:
-                logger.info("Week 1: no prior game data, model will use preseason priors only")
+            if week <= 1:
+                logger.info(f"Week {week}: no prior game data, model will use preseason priors only")
                 # Create empty DataFrame with expected schema for downstream compatibility
                 current_games_df = pd.DataFrame(columns=[
                     'season', 'week', 'game_id', 'home_team', 'away_team',
@@ -851,8 +851,11 @@ def run_predictions(
 
         # Initialize QB Continuous adjuster (Phase1-only mode by default)
         # Only applies for weeks 1-3 to avoid double-counting with EFM
+        # Week 0 excluded: no current-season data exists yet
         qb_continuous = None
-        if week <= 3:
+        if week == 0:
+            logger.info("Week 0: QB Continuous adjuster skipped (no current-season data)")
+        elif 1 <= week <= 3:
             logger.info(f"Initializing QB Continuous adjuster for week {week} (Phase 1)")
             qb_continuous = QBContinuousAdjuster(
                 year=year,
@@ -1226,6 +1229,36 @@ def run_predictions(
         logger.info(f"Slate exported for selection engine: {slate_path}")
         logger.info(f"  {len(slate_df)} games with LSA-recommended spreads")
         logger.info(f"  Timing recommendations: {dict(slate_df['bet_timing_rec'].value_counts())}")
+
+    elif export_slate:
+        # Fallback: export slate with fixed spreads when dual-spread mode is disabled (--no-lsa)
+        from pathlib import Path
+        slate_path = Path(export_slate)
+        slate_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build slate from fixed-spread prediction (model_spread column)
+        slate_df = comparison_df[[
+            'game_id', 'home_team', 'away_team', 'model_spread', 'vegas_spread',
+        ]].copy()
+
+        # Add year/week columns
+        slate_df['year'] = year
+        slate_df['week'] = week
+
+        # Use model_spread as jp_spread (fixed mode only)
+        slate_df['jp_spread'] = slate_df['model_spread']
+        slate_df['jp_spread_fixed'] = slate_df['model_spread']
+
+        # Add spread_open if available
+        if 'vegas_open' in comparison_df.columns:
+            slate_df['spread_open'] = comparison_df['vegas_open']
+        else:
+            slate_df['spread_open'] = comparison_df['vegas_spread']
+
+        # Export
+        slate_df.to_csv(slate_path, index=False)
+        logger.info(f"Slate exported for selection engine: {slate_path}")
+        logger.info(f"  {len(slate_df)} games with fixed spreads (dual-spread mode disabled)")
 
     # P3.7: Generate reports (skip with --no-reports for faster testing)
     excel_path = None
