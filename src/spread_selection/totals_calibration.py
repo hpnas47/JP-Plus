@@ -9,14 +9,28 @@ Key Components:
 3. Probability calibration via interval coverage
 4. EV/Kelly backtest with historical lines (when available)
 5. Parameter tuning framework
+6. Artifact-based persistence for reproducibility
 
 Usage:
+    # Run calibration and save with artifact tracking (recommended)
+    from src.spread_selection.totals_calibration import run_calibration_and_save
+    report, artifact = run_calibration_and_save(
+        preds_df,
+        calibration_mode="model_only",
+        backtest_data_path="data/totals_backtest.csv",
+        description="Production calibration",
+        freeze=True,
+    )
+
+    # Load calibration from artifact
+    from src.spread_selection.totals_calibration import load_calibration_from_artifact
+    config, artifact = load_calibration_from_artifact(mode="model_only")
+
+    # Or use lower-level functions
     from src.spread_selection.totals_calibration import (
-        collect_walk_forward_residuals,
-        calibrate_sigma,
-        evaluate_interval_coverage,
+        run_full_calibration,
+        save_calibration_with_artifact,
         TotalsCalibrationConfig,
-        load_calibration,
     )
 """
 
@@ -36,6 +50,16 @@ try:
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
+
+from .totals_artifacts import (
+    TotalsCalibrationArtifact,
+    TotalsArtifactStore,
+    TotalsRunLog,
+    TotalsRunMetadata,
+    create_artifact_from_calibration_report,
+    get_git_commit_hash,
+    compute_file_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1080,8 +1104,20 @@ def save_calibration(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    def _numpy_encoder(obj):
+        """Handle numpy types for JSON serialization."""
+        if isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        if isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
     with open(path, 'w') as f:
-        json.dump(config.to_dict(), f, indent=2)
+        json.dump(config.to_dict(), f, indent=2, default=_numpy_encoder)
 
     logger.info(f"Saved calibration to {path} (mode={config.calibration_mode})")
     return path
@@ -1095,6 +1131,187 @@ def load_calibration(path: str | Path) -> TotalsCalibrationConfig:
         data = json.load(f)
 
     return TotalsCalibrationConfig.from_dict(data)
+
+
+# =============================================================================
+# Artifact-Based Save/Load (Reproducibility System)
+# =============================================================================
+
+def save_calibration_with_artifact(
+    report: "CalibrationReport",
+    years_range: tuple[int, int],
+    backtest_data_path: Optional[str] = None,
+    description: str = "",
+    freeze: bool = False,
+    log_run: bool = True,
+) -> tuple[Path, TotalsCalibrationArtifact]:
+    """Save calibration report as both config JSON and versioned artifact.
+
+    This is the recommended way to save calibration results. It:
+    1. Saves the TotalsCalibrationConfig to the standard path
+    2. Creates a versioned TotalsCalibrationArtifact with git commit + data hash
+    3. Optionally logs the run to run_log.jsonl
+    4. Optionally freezes the artifact for production use
+
+    Args:
+        report: CalibrationReport from run_full_calibration()
+        years_range: (start_year, end_year) used for calibration
+        backtest_data_path: Path to backtest CSV (for data hashing)
+        description: Description for the artifact
+        freeze: If True, mark artifact as frozen for production
+        log_run: If True, append to run_log.jsonl
+
+    Returns:
+        (config_path, artifact) tuple
+    """
+    from datetime import datetime
+
+    config = report.recommended_config
+    mode = config.calibration_mode
+
+    # 1. Save config to standard path
+    config_path = save_calibration(config)
+
+    # 2. Create and save artifact
+    artifact = create_artifact_from_calibration_report(
+        report=report,
+        mode=mode,
+        years_range=years_range,
+        backtest_data_path=backtest_data_path,
+        description=description,
+    )
+
+    store = TotalsArtifactStore()
+    artifact_path = store.save(artifact)
+
+    if freeze:
+        store.freeze(artifact.artifact_id)
+        logger.info(f"Froze artifact for production: {artifact.artifact_id}")
+
+    # 3. Log the run
+    if log_run:
+        data_hash = None
+        if backtest_data_path and Path(backtest_data_path).exists():
+            data_hash = compute_file_hash(backtest_data_path)
+
+        run_metadata = TotalsRunMetadata(
+            timestamp=datetime.now().isoformat(),
+            command=f"calibrate --mode {mode} --years {years_range[0]}-{years_range[1]}",
+            calibration_mode=mode,
+            artifact_id=artifact.artifact_id,
+            years_range=years_range,
+            backtest_data_hash=data_hash,
+            git_commit=get_git_commit_hash(),
+            frozen_mode=freeze,
+            output_files=[str(config_path), str(artifact_path)],
+            notes=description,
+        )
+
+        run_log = TotalsRunLog()
+        run_log.append(run_metadata)
+
+    logger.info(
+        f"Saved calibration with artifact:\n"
+        f"  Config: {config_path}\n"
+        f"  Artifact: {artifact_path}\n"
+        f"  Artifact ID: {artifact.artifact_id}"
+    )
+
+    return config_path, artifact
+
+
+def load_calibration_from_artifact(
+    mode: str = "model_only",
+    artifact_id: Optional[str] = None,
+) -> tuple[TotalsCalibrationConfig, TotalsCalibrationArtifact]:
+    """Load calibration from artifact store.
+
+    Args:
+        mode: Calibration mode ("model_only" or "weather_adjusted")
+        artifact_id: Specific artifact ID, or None for latest
+
+    Returns:
+        (config, artifact) tuple
+    """
+    store = TotalsArtifactStore()
+
+    if artifact_id:
+        artifact = store.load(artifact_id)
+    else:
+        artifact = store.load_latest(mode)
+        if artifact is None:
+            raise FileNotFoundError(
+                f"No artifact found for mode '{mode}'. Run calibration first."
+            )
+
+    # Reconstruct config from artifact
+    config = TotalsCalibrationConfig(
+        calibration_mode=artifact.calibration_mode,
+        sigma_mode=artifact.sigma_mode,
+        sigma_base=artifact.sigma_base,
+        week_bucket_multipliers=artifact.week_bucket_multipliers,
+        reliability_k=artifact.reliability_k,
+        reliability_sigma_min=artifact.reliability_sigma_min,
+        reliability_sigma_max=artifact.reliability_sigma_max,
+        reliability_max_games=artifact.reliability_max_games,
+        ev_min=artifact.ev_min,
+        ev_min_phase1=artifact.ev_min_phase1,
+        kelly_fraction=artifact.kelly_fraction,
+        max_bet_fraction=artifact.max_bet_fraction,
+        years_used=list(range(artifact.years_range[0], artifact.years_range[1] + 1)),
+        n_games_calibrated=artifact.n_games_calibrated,
+        calibration_date=artifact.created_at[:10],
+        has_weather_data=artifact.has_weather_data,
+    )
+
+    return config, artifact
+
+
+def run_calibration_and_save(
+    preds_df: pd.DataFrame,
+    calibration_mode: str = "model_only",
+    sigma_candidates: list[float] = None,
+    backtest_data_path: Optional[str] = None,
+    description: str = "",
+    freeze: bool = False,
+) -> tuple["CalibrationReport", TotalsCalibrationArtifact]:
+    """Run full calibration and save results with artifact tracking.
+
+    Convenience function that combines run_full_calibration() with
+    save_calibration_with_artifact().
+
+    Args:
+        preds_df: DataFrame with predictions (see run_full_calibration)
+        calibration_mode: "model_only" or "weather_adjusted"
+        sigma_candidates: List of sigma values to try
+        backtest_data_path: Path to backtest CSV for hashing
+        description: Description for artifact
+        freeze: If True, freeze artifact for production
+
+    Returns:
+        (report, artifact) tuple
+    """
+    # Run calibration
+    report = run_full_calibration(
+        preds_df,
+        sigma_candidates=sigma_candidates,
+        calibration_mode=calibration_mode,
+    )
+
+    # Determine years range
+    years = sorted(preds_df['year'].unique())
+    years_range = (min(years), max(years))
+
+    # Save with artifact
+    config_path, artifact = save_calibration_with_artifact(
+        report=report,
+        years_range=years_range,
+        backtest_data_path=backtest_data_path,
+        description=description,
+        freeze=freeze,
+    )
+
+    return report, artifact
 
 
 def select_calibration_for_runtime(
