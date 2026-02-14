@@ -66,9 +66,9 @@ class TotalsCalibrationConfig:
     sigma_base: float = 13.0
 
     # Week bucket multipliers (sigma = sigma_base * multiplier)
-    # Keys: "1-2", "3-5", "6-9", "10-14", "15+"
+    # Keys: "0-2", "3-5", "6-9", "10-14", "15+"
     week_bucket_multipliers: dict = field(default_factory=lambda: {
-        "1-2": 1.3,
+        "0-2": 1.3,  # Includes CFB week 0 (pre-Labor Day games)
         "3-5": 1.1,
         "6-9": 1.0,
         "10-14": 1.0,
@@ -79,6 +79,7 @@ class TotalsCalibrationConfig:
     reliability_k: float = 0.5  # Up to 50% inflation when reliability=0
     reliability_sigma_min: float = 10.0
     reliability_sigma_max: float = 25.0
+    reliability_max_games: int = 10  # Games for full reliability (CFB: 10 of 12-13)
 
     # EV thresholds
     ev_min: float = 0.02
@@ -244,7 +245,7 @@ def collect_walk_forward_residuals(
     # Assign week buckets
     def get_week_bucket(week: int) -> str:
         if week <= 2:
-            return "1-2"
+            return "0-2"  # Includes CFB week 0
         elif week <= 5:
             return "3-5"
         elif week <= 9:
@@ -455,14 +456,19 @@ def compute_coverage_score(coverage_results: list[IntervalCoverageResult]) -> fl
 def compute_game_reliability(
     home_games_played: int,
     away_games_played: int,
-    max_games: int = 8,
+    max_games: int = 10,
 ) -> float:
     """Compute reliability score for a game based on team games played.
 
     Args:
-        home_games_played: Number of games home team has played
-        away_games_played: Number of games away team has played
-        max_games: Number of games for full reliability (default: 8)
+        home_games_played: Number of games home team has COMPLETED before the
+            game being predicted. Week 1 games should have 0 games played,
+            giving reliability 0.0.
+        away_games_played: Number of games away team has COMPLETED before the
+            game being predicted.
+        max_games: Number of games for full reliability. Default 10 is tuned
+            for CFB's 12-13 game regular season, allowing reliability scaling
+            to affect predictions through week 11.
 
     Returns:
         Reliability score in [0, 1]
@@ -515,7 +521,7 @@ def get_sigma_for_week_bucket(
         sigma_base * multiplier for the appropriate bucket
     """
     if week <= 2:
-        bucket = "1-2"
+        bucket = "0-2"  # Includes CFB week 0
     elif week <= 5:
         bucket = "3-5"
     elif week <= 9:
@@ -646,11 +652,11 @@ def backtest_ev_roi(
     weeks = valid['week'].values if 'week' in valid.columns else np.zeros(len(valid))
 
     # Determine best side (vectorized)
-    edge_over = mu - line
-    edge_under = line - mu
-    pick_over = np.abs(edge_over) > np.abs(edge_under)
+    # OVER when model predicts higher scoring than Vegas line
+    # UNDER when model predicts lower scoring than Vegas line
+    pick_over = mu > line
     side = np.where(pick_over, "OVER", "UNDER")
-    edge = np.where(pick_over, edge_over, edge_under)
+    edge = np.abs(mu - line)  # Edge is always non-negative
 
     # Filter: skip tiny edges
     edge_mask = np.abs(edge) >= 0.5
@@ -691,11 +697,11 @@ def backtest_ev_roi(
     ev_mask = ev >= ev_min
 
     # Kelly stake (vectorized)
+    # Standard Kelly: f* = (p*b - q) / b where b is profit multiple
     numerator = p_win * b - p_loss
-    denominator = b * p_win + p_loss
-    kelly_mask = (denominator > 0) & (numerator > 0)
+    kelly_mask = numerator > 0  # Only bet when edge is positive
 
-    f_star = np.where(kelly_mask, numerator / denominator, 0.0)
+    f_star = np.where(kelly_mask, numerator / b, 0.0)
     f = np.minimum(kelly_fraction * f_star, max_bet_fraction)
 
     # Actual results (vectorized)
@@ -720,7 +726,7 @@ def backtest_ev_roi(
 
     at_cap = f >= max_bet_fraction - 0.0001
 
-    # Combined filter mask
+    # Combined filter mask (kelly_mask = numerator > 0, which implies positive edge)
     final_mask = edge_mask & ev_mask & kelly_mask
 
     if not final_mask.any():
@@ -1190,7 +1196,9 @@ def get_sigma_for_game(
         )
 
     elif config.sigma_mode == "reliability_scaled":
-        reliability = compute_game_reliability(home_games_played, away_games_played)
+        reliability = compute_game_reliability(
+            home_games_played, away_games_played, config.reliability_max_games
+        )
         return compute_scaled_sigma(
             config.sigma_base,
             reliability,
@@ -1223,7 +1231,7 @@ if __name__ == "__main__":
     test_df = pd.DataFrame({
         'year': np.random.choice([2022, 2023, 2024, 2025], n),
         'week': np.random.randint(1, 16, n),
-        'adjusted_total': 50 + errors,
+        'predicted_total': 50 + errors,  # Use canonical column name
         'actual_total': 50.0,
         'vegas_total_close': 50.0,
     })

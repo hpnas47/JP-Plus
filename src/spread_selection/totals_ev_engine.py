@@ -64,10 +64,11 @@ class TotalsEVConfig:
     """Configuration for totals EV evaluation.
 
     CFB-SPECIFIC DEFAULTS:
-        These defaults are calibrated for college football, which differs from NFL:
-        - sigma_total=20.0: CFB has ~20pt score standard deviation vs NFL's ~13.
-          CFB games are more volatile due to talent gaps, tempo variance, and
-          scheme diversity across 134 FBS teams.
+        These defaults are calibrated for college football:
+        - sigma_total=13.0: Standard deviation of PREDICTION ERRORS (model predicted
+          total minus actual total), not raw game total variance. Typical CFB backtest
+          residuals show ~11-14pt std dev. This uncalibrated default matches
+          totals_calibration.py. Replace with calibrated sigma when available.
         - baseline_prior_per_team=30.0: CFB average is ~30 PPG per team (~60 total).
         - baseline_sanity_min/max=7.0/55.0: CFB per-team totals routinely range from
           low-scoring defensive games (~35 total) to Big 12 shootouts (80+ total).
@@ -78,8 +79,9 @@ class TotalsEVConfig:
           High value ensures minimal prior influence given CFB's team heterogeneity.
 
     Attributes:
-        sigma_total: Standard deviation of prediction errors (from backtest residuals).
-            Default 20.0 for CFB (vs ~13 for NFL) due to higher game variance.
+        sigma_total: Standard deviation of PREDICTION ERRORS (model - actual), NOT
+            raw game total variance. Default 13.0 matches totals_calibration.py.
+            Should be replaced by calibrated sigma from totals_calibration when available.
         use_adjusted_total: DEPRECATED - use use_weather_adjustment instead.
 
         ev_min: Minimum EV for Primary Edge Execution Engine qualification.
@@ -132,7 +134,7 @@ class TotalsEVConfig:
         Sign convention: negative weather_adj means "lower scoring expected" (reduce total).
     """
     # Model parameters (CFB defaults - see docstring for rationale)
-    sigma_total: float = 20.0  # CFB ~20pt std dev vs NFL ~13
+    sigma_total: float = 13.0  # Prediction error std dev (matches totals_calibration.py)
     use_adjusted_total: bool = True  # DEPRECATED: kept for backwards compatibility
 
     # Weather adjustment (2026 production)
@@ -179,8 +181,9 @@ class TotalsEVConfig:
     sigma_mode: str = "fixed"  # "fixed", "week_bucket", "reliability_scaled"
 
     # Week bucket multipliers (sigma = sigma_total * multiplier)
+    # Keys must match totals_calibration.py: "0-2", "3-5", "6-9", "10-14", "15+"
     week_bucket_multipliers: dict = field(default_factory=lambda: {
-        "1-2": 1.3,
+        "0-2": 1.3,  # Includes CFB week 0 (pre-Labor Day games)
         "3-5": 1.1,
         "6-9": 1.0,
         "10-14": 1.0,
@@ -191,7 +194,7 @@ class TotalsEVConfig:
     reliability_k: float = 0.5  # Up to 50% inflation when reliability=0
     reliability_sigma_min: float = 10.0
     reliability_sigma_max: float = 25.0
-    reliability_max_games: int = 8  # Games for full reliability
+    reliability_max_games: int = 10  # Games for full reliability (CFB: 10 of 12-13 regular season)
 
     # EV threshold override for Phase 1
     ev_min_phase1: float = 0.05  # Higher threshold for weeks 1-3
@@ -562,20 +565,25 @@ def check_guardrails(
 def compute_game_reliability(
     home_games_played: int,
     away_games_played: int,
-    max_games: int = 8,
+    max_games: int = 10,
 ) -> float:
     """Compute reliability score for a game based on team games played.
 
     Args:
-        home_games_played: Number of games home team has played
-        away_games_played: Number of games away team has played
-        max_games: Number of games for full reliability (default: 8)
+        home_games_played: Number of games home team has COMPLETED before the
+            game being predicted. Week 1 games should have 0 games played,
+            giving reliability 0.0.
+        away_games_played: Number of games away team has COMPLETED before the
+            game being predicted.
+        max_games: Number of games for full reliability. Default 10 is tuned
+            for CFB's 12-13 game regular season, allowing reliability scaling
+            to affect predictions through week 11.
 
     Returns:
         Reliability score in [0, 1]
     """
     if max_games <= 1:
-        max_games = 8
+        max_games = 10
 
     rel_home = min(1.0, max(0.0, (home_games_played - 1) / (max_games - 1)))
     rel_away = min(1.0, max(0.0, (away_games_played - 1) / (max_games - 1)))
@@ -592,15 +600,16 @@ def get_sigma_for_week_bucket(
     """Get sigma for a specific week using bucket multipliers.
 
     Args:
-        week: Week number
+        week: Week number (0-15+ for CFB)
         sigma_base: Base sigma
-        multipliers: Dict mapping bucket name to multiplier
+        multipliers: Dict mapping bucket name to multiplier.
+            Keys must match totals_calibration.py: "0-2", "3-5", "6-9", "10-14", "15+"
 
     Returns:
         sigma_base * multiplier for the appropriate bucket
     """
     if week <= 2:
-        bucket = "1-2"
+        bucket = "0-2"  # Includes CFB week 0
     elif week <= 5:
         bucket = "3-5"
     elif week <= 9:
@@ -783,12 +792,16 @@ def calculate_kelly_stake(
 ) -> tuple[float, float]:
     """Calculate Kelly stake for a three-outcome bet.
 
-    Push-aware Kelly derivation (maximizes E[log(wealth)]):
-        f_star = (p_win * b - p_loss) / (b * p_win + p_loss)
+    Three-outcome Kelly derivation (maximizes E[log(wealth)]):
+        E[log(W)] = p_win * log(1 + b*f) + p_loss * log(1 - f) + p_push * log(1)
 
-    Where b = decimal_odds - 1 (profit per unit)
+        Taking derivative and setting to zero:
+        f_star = (p_win * b - p_loss) / (b * (p_win + p_loss))
 
-    Note: This is equivalent to standard Kelly when p_push = 0.
+    Where b = decimal_odds - 1 (profit per unit).
+
+    When p_push = 0 and p_loss = 1 - p_win, this reduces to the standard
+    two-outcome Kelly formula: f_star = (p*b - q) / b.
 
     Args:
         p_win: Probability of winning
@@ -802,10 +815,9 @@ def calculate_kelly_stake(
     """
     b = odds_decimal - 1.0
 
-    # Kelly formula for three outcomes
-    # Denominator: normalization to ensure stake is bounded
+    # Three-outcome Kelly formula
     numerator = p_win * b - p_loss
-    denominator = b * p_win + p_loss
+    denominator = b * (p_win + p_loss)
 
     if denominator <= 0 or numerator <= 0:
         # No edge or degenerate case
@@ -1161,9 +1173,10 @@ def evaluate_totals_markets(
     edge5: list[TotalsBetRecommendation] = []
 
     for rec in all_recommendations:
-        # Primary Edge Execution Engine: EV >= effective ev_min AND stake > 0
+        # Primary Edge Execution Engine: EV >= effective ev_min AND (stake > 0 OR diagnostic mode)
         # Note: rec.ev_min is already the effective ev_min for this game's week
-        if rec.ev >= rec.ev_min and rec.stake > 0:
+        # Diagnostic mode bets (stake=0 due to guardrails) stay in List A with guardrail_reason explaining why
+        if rec.ev >= rec.ev_min and (rec.stake > 0 or rec.guardrail_reason != GUARDRAIL_OK):
             primary.append(rec)
         # 5+ Edge: edge_pts >= edge_pts_min AND fails EV cut
         # Note: edge_pts is directional (positive = bet side favored), so we check >= not abs()
@@ -1328,17 +1341,30 @@ def _run_sanity_test() -> None:
     assert abs(ev - expected_ev) < 0.001, f"EV should be ~{expected_ev:.4f}"
     print("   PASS: EV calculation correct")
 
-    # Test 6: Kelly staking
+    # Test 6: Kelly staking with numerical verification
     print("\n6. Kelly staking test:")
     config = TotalsEVConfig(kelly_fraction=0.25, bankroll=1000.0, round_to=1.0)
+    p_win, p_loss, p_push = 0.55, 0.45, 0.0
+    b = 0.909  # decimal 1.909 - 1
     kelly_f, stake = calculate_kelly_stake(
-        p_win=0.55, p_loss=0.45, p_push=0.0, odds_decimal=1.909, config=config
+        p_win=p_win, p_loss=p_loss, p_push=p_push, odds_decimal=1.909, config=config
     )
     print(f"   p_win=0.55, odds=-110, quarter Kelly: f={kelly_f:.4f}, stake=${stake:.0f}")
+
+    # Verify against correct Kelly formula: f* = (p*b - q) / (b * (p + q))
+    # For two outcomes (p_push=0): denominator = b * (0.55 + 0.45) = b * 1.0 = b
+    # Full Kelly: (0.55 * 0.909 - 0.45) / 0.909 = 0.04995 / 0.909 ≈ 0.05495
+    # Quarter Kelly: 0.25 * 0.05495 ≈ 0.01374
+    expected_full_kelly = (p_win * b - p_loss) / (b * (p_win + p_loss))
+    expected_quarter_kelly = 0.25 * expected_full_kelly
+    print(f"   Expected full Kelly: {expected_full_kelly:.5f}, quarter: {expected_quarter_kelly:.5f}")
+    assert abs(kelly_f - expected_quarter_kelly) < 0.001, \
+        f"Kelly fraction should be ~{expected_quarter_kelly:.5f}, got {kelly_f:.5f}"
+
     assert kelly_f > 0, "Kelly fraction should be positive with edge"
     assert stake > 0, "Stake should be positive"
     assert stake <= config.max_bet_fraction * config.bankroll, "Stake should be capped"
-    print("   PASS: Kelly staking working")
+    print("   PASS: Kelly staking correct (verified numerically)")
 
     # Test 7: Edge case - model agrees with line
     print("\n7. Edge case - model == line at -110/-110:")
