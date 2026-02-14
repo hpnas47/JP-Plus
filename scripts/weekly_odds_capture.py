@@ -162,6 +162,8 @@ def init_database() -> sqlite3.Connection:
             commence_time TEXT,
             last_update TEXT,
             cfbd_game_id INTEGER,
+            home_rotation INTEGER,
+            away_rotation INTEGER,
             FOREIGN KEY (snapshot_id) REFERENCES odds_snapshots(id),
             UNIQUE(snapshot_id, game_id, sportsbook)
         )
@@ -177,6 +179,13 @@ def init_database() -> sqlite3.Connection:
         cursor.execute("ALTER TABLE odds_lines ADD COLUMN cfbd_game_id INTEGER")
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # Migration: Add rotation number columns if missing
+    for col in ["home_rotation", "away_rotation"]:
+        try:
+            cursor.execute(f"ALTER TABLE odds_lines ADD COLUMN {col} INTEGER")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
     # P0: Migration - convert composite snapshot_type labels to simple labels
     # Old format: "opening_2024_week5" -> New format: "opening" with season=2024, week=5
@@ -321,6 +330,8 @@ def capture_odds(
             line.price_away,
             line.commence_time.isoformat() if line.commence_time else None,
             line.last_update.isoformat() if line.last_update else None,
+            line.home_rotation,
+            line.away_rotation,
         ))
 
     if null_spread_skipped > 0:
@@ -367,14 +378,16 @@ def capture_odds(
             INSERT INTO odds_lines
             (snapshot_id, game_id, sportsbook, home_team, away_team,
              spread_home, spread_away, price_home, price_away,
-             commence_time, last_update)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             commence_time, last_update, home_rotation, away_rotation)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(snapshot_id, game_id, sportsbook) DO UPDATE SET
                 spread_home = excluded.spread_home,
                 spread_away = excluded.spread_away,
                 price_home = excluded.price_home,
                 price_away = excluded.price_away,
-                last_update = excluded.last_update
+                last_update = excluded.last_update,
+                home_rotation = excluded.home_rotation,
+                away_rotation = excluded.away_rotation
         """, line_tuples_with_id)
 
         # All inserts succeeded - commit transaction

@@ -38,6 +38,9 @@ class BettingLine:
     spread_close: Optional[float]  # Closing spread (home team perspective)
     source: str  # 'odds_api' or 'cfbd'
     sportsbook: Optional[str] = None
+    # Rotation numbers (Nevada standard betting IDs)
+    home_rotation: Optional[int] = None  # Even number
+    away_rotation: Optional[int] = None  # Odd number
 
 
 def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
@@ -73,7 +76,7 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
         # Include cfbd_game_id for proper keying
         opening_cursor = conn.execute(f"""
             SELECT l.game_id, l.cfbd_game_id, l.home_team, l.away_team,
-                   l.spread_home, l.sportsbook
+                   l.spread_home, l.sportsbook, l.home_rotation, l.away_rotation
             FROM odds_lines l
             JOIN odds_snapshots s ON l.snapshot_id = s.id
             WHERE s.snapshot_type LIKE ?
@@ -98,12 +101,14 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
                     spread_close=None,
                     source='odds_api',
                     sportsbook=row['sportsbook'],
+                    home_rotation=row['home_rotation'],
+                    away_rotation=row['away_rotation'],
                 )
 
         # Get closing lines for this year, ordered by provider priority
         closing_cursor = conn.execute(f"""
             SELECT l.game_id, l.cfbd_game_id, l.home_team, l.away_team,
-                   l.spread_home, l.sportsbook
+                   l.spread_home, l.sportsbook, l.home_rotation, l.away_rotation
             FROM odds_lines l
             JOIN odds_snapshots s ON l.snapshot_id = s.id
             WHERE s.snapshot_type LIKE ?
@@ -119,6 +124,11 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
 
             if key in lines:
                 lines[key].spread_close = row['spread_home']
+                # Update rotation numbers if not set (opening might not have had them)
+                if lines[key].home_rotation is None:
+                    lines[key].home_rotation = row['home_rotation']
+                if lines[key].away_rotation is None:
+                    lines[key].away_rotation = row['away_rotation']
             else:
                 lines[key] = BettingLine(
                     game_id=key,
@@ -128,6 +138,8 @@ def get_odds_api_lines(year: int) -> dict[str, BettingLine]:
                     spread_close=row['spread_home'],
                     source='odds_api',
                     sportsbook=row['sportsbook'],
+                    home_rotation=row['home_rotation'],
+                    away_rotation=row['away_rotation'],
                 )
 
         logger.info(
@@ -266,6 +278,9 @@ def get_merged_lines(
                         odds_line.sportsbook if odds_line.sportsbook is not None
                         else cfbd_line.sportsbook
                     ),
+                    # Rotation numbers only come from Odds API
+                    home_rotation=odds_line.home_rotation,
+                    away_rotation=odds_line.away_rotation,
                 )
             else:
                 # Only use Odds API if CFBD doesn't have opening line

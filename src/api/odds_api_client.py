@@ -39,6 +39,9 @@ class OddsLine:
     price_away: int
     commence_time: datetime
     last_update: datetime
+    # Rotation numbers (Nevada standard betting IDs)
+    home_rotation: Optional[int] = None  # Even number
+    away_rotation: Optional[int] = None  # Odd number
 
 
 @dataclass
@@ -124,6 +127,9 @@ class OddsAPIClient:
             home_team = game.get("home_team")
             away_team = game.get("away_team")
             commence_time_str = game.get("commence_time")
+            # Rotation numbers (may be null for new/far-out games)
+            home_rotation = game.get("home_rotation_number")
+            away_rotation = game.get("away_rotation_number")
 
             if commence_time_str:
                 commence_time = datetime.fromisoformat(
@@ -174,6 +180,8 @@ class OddsAPIClient:
                         price_away=away_outcome.get("price", -110),
                         commence_time=commence_time,
                         last_update=last_update,
+                        home_rotation=home_rotation,
+                        away_rotation=away_rotation,
                     ))
 
         return lines
@@ -204,6 +212,7 @@ class OddsAPIClient:
             "markets": market,
             "oddsFormat": "american",
             "dateFormat": "iso",
+            "includeRotationNumbers": "true",  # Request rotation numbers
         }
 
         if bookmakers:
@@ -265,6 +274,7 @@ class OddsAPIClient:
             "markets": market,
             "oddsFormat": "american",
             "dateFormat": "iso",
+            "includeRotationNumbers": "true",  # Request rotation numbers
         }
 
         if bookmakers:
