@@ -50,9 +50,10 @@ def get_abbrev(team: str) -> str:
 
 
 def get_result(row) -> str:
-    if row['push'] == True:
+    """Get result vs OPEN line (matches Bet (Open) column)."""
+    if row.get('ats_push_open', False) == True or row.get('ats_push_open', 0) == 1:
         return 'Push'
-    elif row['jp_side_covered'] == True:
+    elif row.get('ats_win_open', False) == True or row.get('ats_win_open', 0) == 1:
         return 'Win ✓'
     else:
         return 'Loss'
@@ -122,10 +123,10 @@ def show_spread_bets(year: int, week: int):
         result = get_result(row)
         print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | +{row['ev']*100:.1f}% | {score} | {result} |")
 
-    # Calculate record
-    p_wins = len(primary[primary['jp_side_covered'] == True])
-    p_losses = len(primary[(primary['jp_side_covered'] == False) & (primary['push'] == False)])
-    p_pushes = len(primary[primary['push'] == True])
+    # Calculate record (vs OPEN line)
+    p_wins = (primary['ats_win_open'] == 1).sum()
+    p_pushes = (primary['ats_push_open'] == 1).sum()
+    p_losses = len(primary) - p_wins - p_pushes
 
     if p_pushes > 0:
         print(f"\n**Record: {p_wins}-{p_losses}-{p_pushes} ({p_wins/(p_wins+p_losses)*100:.1f}%)**")
@@ -148,10 +149,10 @@ def show_spread_bets(year: int, week: int):
         result = get_result(row)
         print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | {score} | {result} |")
 
-    # Calculate record
-    e_wins = len(edge5[edge5['jp_side_covered'] == True])
-    e_losses = len(edge5[(edge5['jp_side_covered'] == False) & (edge5['push'] == False)])
-    e_pushes = len(edge5[edge5['push'] == True])
+    # Calculate record (vs OPEN line)
+    e_wins = (edge5['ats_win_open'] == 1).sum()
+    e_pushes = (edge5['ats_push_open'] == 1).sum()
+    e_losses = len(edge5) - e_wins - e_pushes
 
     if e_pushes > 0:
         print(f"\n**Record: {e_wins}-{e_losses}-{e_pushes} ({e_wins/(e_wins+e_losses)*100:.1f}%)**")
