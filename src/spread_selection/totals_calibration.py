@@ -23,7 +23,7 @@ Usage:
 import json
 import logging
 import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Optional
 
@@ -100,8 +100,16 @@ class TotalsCalibrationConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TotalsCalibrationConfig":
-        """Create from dictionary."""
-        return cls(**d)
+        """Create from dictionary, ignoring unknown keys for forward compatibility."""
+        valid_keys = {f.name for f in fields(cls)}
+        unknown_keys = set(d.keys()) - valid_keys
+        if unknown_keys:
+            logger.warning(
+                f"TotalsCalibrationConfig.from_dict: ignoring unknown keys {unknown_keys} "
+                f"(may be from newer code version)"
+            )
+        filtered = {k: v for k, v in d.items() if k in valid_keys}
+        return cls(**filtered)
 
 
 @dataclass
@@ -546,12 +554,18 @@ def calculate_totals_probabilities(
     Args:
         mu: Model predicted total
         line: Vegas line (integer or half-point)
-        sigma: Standard deviation
+        sigma: Standard deviation (must be positive)
         side: "OVER" or "UNDER"
 
     Returns:
         (p_win, p_loss, p_push)
+
+    Raises:
+        ValueError: If sigma is not positive
     """
+    if sigma <= 0:
+        raise ValueError(f"sigma must be positive, got {sigma}")
+
     is_half_point = (line % 1.0) != 0.0
 
     if is_half_point:
@@ -572,6 +586,13 @@ def calculate_totals_probabilities(
         return (p_under, p_over, p_push)
 
 
+def _vectorized_normal_cdf(x: np.ndarray) -> np.ndarray:
+    """Vectorized standard normal CDF for arrays."""
+    if SCIPY_AVAILABLE:
+        return scipy_norm.cdf(x)
+    return 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
+
+
 def backtest_ev_roi(
     preds_df: pd.DataFrame,
     sigma: float,
@@ -579,8 +600,9 @@ def backtest_ev_roi(
     kelly_fraction: float = 0.25,
     max_bet_fraction: float = 0.02,
     default_odds: int = -110,
+    mu_column: Optional[str] = None,
 ) -> dict:
-    """Backtest EV-based betting with historical results.
+    """Backtest EV-based betting with historical results (vectorized).
 
     Args:
         preds_df: DataFrame with predicted_total, actual_total, vegas_total_close
@@ -589,6 +611,8 @@ def backtest_ev_roi(
         kelly_fraction: Fractional Kelly
         max_bet_fraction: Max stake as fraction of bankroll
         default_odds: Default American odds if not in data
+        mu_column: Explicit column to use for mu. If None, falls back to
+            'mu_used' -> 'adjusted_total' -> 'predicted_total' for backward compat.
 
     Returns:
         Dict with ROI metrics
@@ -598,80 +622,122 @@ def backtest_ev_roi(
     if vegas_col not in preds_df.columns or preds_df[vegas_col].isna().all():
         return {"error": "No Vegas lines available"}
 
-    pred_col = 'adjusted_total' if 'adjusted_total' in preds_df.columns else 'predicted_total'
+    # Resolve mu column
+    if mu_column is not None:
+        if mu_column not in preds_df.columns:
+            return {"error": f"Specified mu_column '{mu_column}' not found"}
+        pred_col = mu_column
+    elif 'mu_used' in preds_df.columns:
+        pred_col = 'mu_used'
+    elif 'adjusted_total' in preds_df.columns:
+        pred_col = 'adjusted_total'
+    else:
+        pred_col = 'predicted_total'
 
     valid = preds_df[preds_df[vegas_col].notna()].copy()
     if len(valid) == 0:
         return {"error": "No valid games with lines"}
 
-    results = []
+    # Extract arrays for vectorized computation
+    mu = valid[pred_col].values
+    line = valid[vegas_col].values
+    actual = valid['actual_total'].values
+    years = valid['year'].values if 'year' in valid.columns else np.zeros(len(valid))
+    weeks = valid['week'].values if 'week' in valid.columns else np.zeros(len(valid))
 
-    for _, row in valid.iterrows():
-        mu = row[pred_col]
-        line = row[vegas_col]
-        actual = row['actual_total']
+    # Determine best side (vectorized)
+    edge_over = mu - line
+    edge_under = line - mu
+    pick_over = np.abs(edge_over) > np.abs(edge_under)
+    side = np.where(pick_over, "OVER", "UNDER")
+    edge = np.where(pick_over, edge_over, edge_under)
 
-        # Determine best side
-        edge_over = mu - line
-        edge_under = line - mu
-
-        if abs(edge_over) > abs(edge_under):
-            side = "OVER"
-            edge = edge_over
-        else:
-            side = "UNDER"
-            edge = edge_under
-
-        if abs(edge) < 0.5:  # Skip tiny edges
-            continue
-
-        # Calculate probabilities
-        p_win, p_loss, p_push = calculate_totals_probabilities(mu, line, sigma, side)
-
-        # Calculate EV
-        odds_decimal = american_to_decimal(default_odds)
-        b = odds_decimal - 1.0
-        ev = p_win * b - p_loss
-
-        if ev < ev_min:
-            continue
-
-        # Kelly stake
-        numerator = p_win * b - p_loss
-        denominator = b * p_win + p_loss
-        if denominator <= 0 or numerator <= 0:
-            continue
-
-        f_star = numerator / denominator
-        f = min(kelly_fraction * f_star, max_bet_fraction)
-
-        # Actual result
-        if actual == line:
-            profit = 0.0  # Push
-            outcome = "push"
-        elif (side == "OVER" and actual > line) or (side == "UNDER" and actual < line):
-            profit = f * b  # Win
-            outcome = "win"
-        else:
-            profit = -f  # Loss
-            outcome = "loss"
-
-        results.append({
-            "year": row.get('year'),
-            "week": row.get('week'),
-            "side": side,
-            "edge": edge,
-            "ev": ev,
-            "stake_frac": f,
-            "outcome": outcome,
-            "profit": profit,
-            "at_cap": f >= max_bet_fraction - 0.0001,
-        })
-
-    if len(results) == 0:
+    # Filter: skip tiny edges
+    edge_mask = np.abs(edge) >= 0.5
+    if not edge_mask.any():
         return {"error": "No qualifying bets"}
 
-    results_df = pd.DataFrame(results)
+    # Calculate probabilities (vectorized)
+    is_half_point = (line % 1.0) != 0.0
+
+    # For half-point lines
+    z_half = (line - mu) / sigma
+    p_under_half = _vectorized_normal_cdf(z_half)
+    p_over_half = 1.0 - p_under_half
+    p_push_half = np.zeros_like(mu)
+
+    # For integer lines
+    z_low = (line - 0.5 - mu) / sigma
+    z_high = (line + 0.5 - mu) / sigma
+    p_under_int = _vectorized_normal_cdf(z_low)
+    p_over_int = 1.0 - _vectorized_normal_cdf(z_high)
+    p_push_int = _vectorized_normal_cdf(z_high) - _vectorized_normal_cdf(z_low)
+
+    # Select based on line type
+    p_under = np.where(is_half_point, p_under_half, p_under_int)
+    p_over = np.where(is_half_point, p_over_half, p_over_int)
+    p_push = np.where(is_half_point, p_push_half, p_push_int)
+
+    # Win/loss probabilities based on side
+    p_win = np.where(pick_over, p_over, p_under)
+    p_loss = np.where(pick_over, p_under, p_over)
+
+    # Calculate EV (vectorized)
+    odds_decimal = american_to_decimal(default_odds)
+    b = odds_decimal - 1.0
+    ev = p_win * b - p_loss
+
+    # Filter: EV >= ev_min
+    ev_mask = ev >= ev_min
+
+    # Kelly stake (vectorized)
+    numerator = p_win * b - p_loss
+    denominator = b * p_win + p_loss
+    kelly_mask = (denominator > 0) & (numerator > 0)
+
+    f_star = np.where(kelly_mask, numerator / denominator, 0.0)
+    f = np.minimum(kelly_fraction * f_star, max_bet_fraction)
+
+    # Actual results (vectorized)
+    is_push = actual == line
+    is_win = np.where(
+        pick_over,
+        actual > line,
+        actual < line
+    )
+
+    profit = np.where(
+        is_push,
+        0.0,
+        np.where(is_win, f * b, -f)
+    )
+
+    outcome = np.where(
+        is_push,
+        "push",
+        np.where(is_win, "win", "loss")
+    )
+
+    at_cap = f >= max_bet_fraction - 0.0001
+
+    # Combined filter mask
+    final_mask = edge_mask & ev_mask & kelly_mask
+
+    if not final_mask.any():
+        return {"error": "No qualifying bets"}
+
+    # Build results DataFrame from filtered arrays
+    results_df = pd.DataFrame({
+        "year": years[final_mask],
+        "week": weeks[final_mask],
+        "side": side[final_mask],
+        "edge": edge[final_mask],
+        "ev": ev[final_mask],
+        "stake_frac": f[final_mask],
+        "outcome": outcome[final_mask],
+        "profit": profit[final_mask],
+        "at_cap": at_cap[final_mask],
+    })
 
     # Compute metrics
     n_bets = len(results_df)
@@ -725,14 +791,22 @@ def tune_sigma_for_coverage(
 
     Args:
         residuals: DataFrame with 'error' column
-        sigma_candidates: List of sigma values to try
+        sigma_candidates: List of sigma values to try (all must be positive)
         targets: Coverage targets to evaluate
 
     Returns:
         (best_sigma, coverage_results_by_sigma)
+
+    Raises:
+        ValueError: If any sigma candidate is not positive
     """
     if sigma_candidates is None:
         sigma_candidates = [s * 0.5 + 10.0 for s in range(21)]  # 10.0 to 20.0 step 0.5
+
+    # Validate all sigma candidates are positive
+    invalid = [s for s in sigma_candidates if s <= 0]
+    if invalid:
+        raise ValueError(f"All sigma candidates must be positive, got invalid values: {invalid}")
 
     if targets is None:
         targets = [0.50, 0.68, 0.80, 0.90, 0.95]
@@ -757,26 +831,37 @@ def tune_sigma_for_roi(
     preds_df: pd.DataFrame,
     sigma_candidates: list[float] = None,
     ev_min: float = 0.02,
+    mu_column: Optional[str] = None,
 ) -> tuple[float, dict]:
     """Find sigma that maximizes ROI (with constraints).
 
     Args:
         preds_df: DataFrame with predictions and lines
-        sigma_candidates: List of sigma values to try
+        sigma_candidates: List of sigma values to try (all must be positive)
         ev_min: Minimum EV threshold
+        mu_column: Explicit mu column to use in backtest_ev_roi
 
     Returns:
         (best_sigma, roi_results_by_sigma)
+        If no valid candidate found, roi_results will contain "no_valid_candidate": True
+
+    Raises:
+        ValueError: If any sigma candidate is not positive
     """
     if sigma_candidates is None:
         sigma_candidates = [s * 0.5 + 10.0 for s in range(21)]
+
+    # Validate all sigma candidates are positive
+    invalid = [s for s in sigma_candidates if s <= 0]
+    if invalid:
+        raise ValueError(f"All sigma candidates must be positive, got invalid values: {invalid}")
 
     results = {}
     best_sigma = sigma_candidates[0]
     best_roi = -float('inf')
 
     for sigma in sigma_candidates:
-        roi_result = backtest_ev_roi(preds_df, sigma, ev_min=ev_min)
+        roi_result = backtest_ev_roi(preds_df, sigma, ev_min=ev_min, mu_column=mu_column)
         results[sigma] = roi_result
 
         if "error" in roi_result:
@@ -792,21 +877,52 @@ def tune_sigma_for_roi(
             best_roi = roi_result["roi"]
             best_sigma = sigma
 
+    # Check if any valid candidate was found
+    if best_roi == -float('inf'):
+        logger.warning(
+            f"tune_sigma_for_roi: All {len(sigma_candidates)} sigma candidates rejected. "
+            f"Constraints: cap_hit_rate <= 0.30, n_bets_per_season >= 50. "
+            f"Returning first candidate ({sigma_candidates[0]}) as fallback."
+        )
+        results["no_valid_candidate"] = True
+
     return best_sigma, results
 
 
-def compute_week_bucket_multipliers(residuals: pd.DataFrame) -> dict[str, float]:
+def compute_week_bucket_multipliers(
+    residuals: pd.DataFrame,
+    min_multiplier: float = 0.8,
+    max_multiplier: float = 1.5,
+) -> dict[str, float]:
     """Compute week bucket multipliers relative to global sigma.
 
-    Returns multipliers such that sigma_bucket = sigma_global * multiplier
+    Returns multipliers such that sigma_bucket = sigma_global * multiplier.
+    Multipliers are clamped to [min_multiplier, max_multiplier] to prevent
+    extreme values from noisy buckets (especially "15+" with few games).
+
+    Args:
+        residuals: DataFrame with 'error' and 'week_bucket' columns
+        min_multiplier: Minimum allowed multiplier (default 0.8)
+        max_multiplier: Maximum allowed multiplier (default 1.5)
+
+    Returns:
+        Dict mapping bucket name to clamped multiplier
     """
     global_sigma = float(residuals['error'].std())
     bucket_estimates = estimate_sigma_by_week_bucket(residuals)
 
     multipliers = {}
     for bucket, estimate in bucket_estimates.items():
-        mult = estimate.sigma / global_sigma if global_sigma > 0 else 1.0
-        multipliers[bucket] = float(mult)  # Ensure native Python float
+        raw_mult = estimate.sigma / global_sigma if global_sigma > 0 else 1.0
+        clamped_mult = max(min_multiplier, min(max_multiplier, raw_mult))
+
+        if clamped_mult != raw_mult:
+            logger.warning(
+                f"Week bucket '{bucket}' multiplier clamped: {raw_mult:.3f} -> {clamped_mult:.3f} "
+                f"(n_games={estimate.n_games})"
+            )
+
+        multipliers[bucket] = float(clamped_mult)  # Ensure native Python float
 
     return multipliers
 
@@ -836,6 +952,7 @@ def run_full_calibration(
         sigma_candidates = [10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 17.0, 18.0, 19.0, 20.0]
 
     # Collect residuals with specified calibration mode
+    # This resolves the mu column and stores it in 'mu_used'
     residuals = collect_walk_forward_residuals(preds_df, calibration_mode=calibration_mode)
 
     # Check if weather data was available
@@ -850,15 +967,30 @@ def run_full_calibration(
     )
 
     # Check if we have lines for ROI tuning
-    has_lines = 'vegas_total_close' in preds_df.columns and preds_df['vegas_total_close'].notna().any()
+    has_lines = 'vegas_total_close' in residuals.columns and residuals['vegas_total_close'].notna().any()
 
     roi_by_sigma = {}
     best_sigma_roi = None
+    roi_tuning_skipped = False
     if has_lines:
-        best_sigma_roi, roi_by_sigma = tune_sigma_for_roi(preds_df, sigma_candidates)
+        # CRITICAL: Pass residuals (which has 'mu_used') and specify the mu_column
+        # This ensures ROI backtest uses the same mu as sigma calibration
+        best_sigma_roi, roi_by_sigma = tune_sigma_for_roi(
+            residuals,
+            sigma_candidates,
+            mu_column='mu_used',  # Matches what collect_walk_forward_residuals computed
+        )
+        # Check if all candidates were rejected
+        if roi_by_sigma.get("no_valid_candidate", False):
+            roi_tuning_skipped = True
+            logger.info(
+                "ROI tuning found no valid candidates; falling back to coverage-optimized sigma"
+            )
 
     # Choose best sigma (prefer ROI-tuned if available and better)
-    if best_sigma_roi is not None and roi_by_sigma.get(best_sigma_roi, {}).get("roi", -1) > 0:
+    if (best_sigma_roi is not None
+        and not roi_tuning_skipped
+        and roi_by_sigma.get(best_sigma_roi, {}).get("roi", -1) > 0):
         best_sigma = best_sigma_roi
         best_method = "ROI-optimized"
     else:

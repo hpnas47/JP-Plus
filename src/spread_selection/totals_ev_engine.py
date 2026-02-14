@@ -19,7 +19,7 @@ Key Differences from Spread Engine:
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -278,7 +278,7 @@ class TotalsBetRecommendation:
     guardrail_reason: str = GUARDRAIL_OK
 
     # Phase 2: Calibration tracking
-    sigma_used: float = 0.0  # Actual sigma used (may differ from sigma_total due to calibration)
+    sigma_used: Optional[float] = None  # Actual sigma used (may differ from sigma_total due to calibration)
     rel_game: float = 1.0  # Game reliability (0-1)
     sigma_mode: str = "fixed"  # Calibration mode used
 
@@ -956,9 +956,9 @@ def evaluate_single_market(
         )
         recommendations.append(rec)
 
-    # Apply one_bet_per_market filter: keep side with higher EV
-    if config.one_bet_per_market and len(recommendations) == 2:
-        recommendations = [max(recommendations, key=lambda r: r.ev)]
+    # NOTE: one_bet_per_market filtering is now done in evaluate_totals_markets
+    # after the List A / List B split. This ensures List B candidates are not
+    # prematurely dropped when one side has higher EV but fails the EV cut.
 
     return recommendations
 
@@ -968,7 +968,8 @@ def evaluate_single_market(
 # =============================================================================
 
 # Type alias for mu override function
-MuOverrideFn = Optional[callable]  # Callable[[float, float, TotalsEvent, TotalMarket], float]
+# Signature: fn(mu_raw: float, line: float, event: TotalsEvent, market: TotalMarket) -> float
+MuOverrideFn = Optional[Callable[[float, float, "TotalsEvent", "TotalMarket"], float]]
 
 
 def evaluate_totals_markets(
@@ -1081,6 +1082,9 @@ def evaluate_totals_markets(
             # mu_raw = mu_model + weather_adj (before baseline blend)
             # mu_used = mu_raw + baseline_shift (final for probability calculations)
 
+            # CRITICAL: Always use pred.predicted_total, NEVER pred.adjusted_total.
+            # pred.adjusted_total adds weather_adjustment again, causing double-counting.
+            # The config.use_adjusted_total flag is DEPRECATED and ignored.
             mu_model = pred.predicted_total
 
             # Apply weather adjustment with guardrail cap
@@ -1132,16 +1136,9 @@ def evaluate_totals_markets(
         empty_df = pd.DataFrame()
         return (empty_df, empty_df)
 
-    # Apply one_bet_per_event filter if enabled
-    if config.one_bet_per_event:
-        # Group by event_id, keep highest EV
-        by_event: dict[str, TotalsBetRecommendation] = {}
-        for rec in all_recommendations:
-            if rec.event_id not in by_event or rec.ev > by_event[rec.event_id].ev:
-                by_event[rec.event_id] = rec
-        all_recommendations = list(by_event.values())
-
-    # Split into Primary Edge Execution Engine and 5+ Edge
+    # Split into Primary Edge Execution Engine (List A) and 5+ Edge (List B) FIRST,
+    # BEFORE applying one_bet_per_event or one_bet_per_market filters.
+    # This ensures List B candidates are not prematurely dropped.
     primary: list[TotalsBetRecommendation] = []
     edge5: list[TotalsBetRecommendation] = []
 
@@ -1161,6 +1158,31 @@ def evaluate_totals_markets(
                 # Only include if EV <= 0 OR stake == 0
                 if rec.ev <= 0 or rec.stake == 0:
                     edge5.append(rec)
+
+    # Helper for deterministic tie-breaking: (EV desc, stake desc, book, line, side)
+    def _comparison_key(rec: TotalsBetRecommendation) -> tuple:
+        """Deterministic comparison key for filtering ties.
+
+        Higher EV wins, then higher stake, then deterministic by book/line/side.
+        """
+        return (-rec.ev, -rec.stake, rec.book, rec.line, rec.side)
+
+    # Apply one_bet_per_market filter to List A only (keep best side per event+book+line)
+    if config.one_bet_per_market:
+        by_market: dict[tuple[str, str, float], TotalsBetRecommendation] = {}
+        for rec in primary:
+            key = (rec.event_id, rec.book, rec.line)
+            if key not in by_market or _comparison_key(rec) < _comparison_key(by_market[key]):
+                by_market[key] = rec
+        primary = list(by_market.values())
+
+    # Apply one_bet_per_event filter to List A only (keep best EV per event)
+    if config.one_bet_per_event:
+        by_event: dict[str, TotalsBetRecommendation] = {}
+        for rec in primary:
+            if rec.event_id not in by_event or _comparison_key(rec) < _comparison_key(by_event[rec.event_id]):
+                by_event[rec.event_id] = rec
+        primary = list(by_event.values())
 
     # Sort results
     if config.sort_key == "ev":
