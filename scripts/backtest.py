@@ -1158,6 +1158,14 @@ def calculate_ats_results(
     spread_open = df["spread_open"].values
     spread_close = df["spread_close"].values
 
+    # Calculate ATS result vs OPEN line (for betting analysis)
+    home_cover_open = actual_margin + spread_open
+    ats_win_open = np.where(model_pick_home, home_cover_open > 0, home_cover_open < 0)
+    ats_push_open = home_cover_open == 0
+    # Handle NaN spreads
+    ats_win_open = np.where(pd.isna(spread_open), np.nan, ats_win_open)
+    ats_push_open = np.where(pd.isna(spread_open), np.nan, ats_push_open)
+
     # Calculate CLV (Closing Line Value) - vectorized
     # If betting home: CLV = spread_open - spread_close (positive if line moved toward home)
     # If betting away: CLV = spread_close - spread_open (positive if line moved toward away)
@@ -1170,8 +1178,10 @@ def calculate_ats_results(
     df["vegas_spread"] = vegas_spread_vals
     df["edge"] = np.abs(edge)
     df["pick"] = np.where(model_pick_home, "HOME", "AWAY")
-    df["ats_win"] = ats_win
-    df["ats_push"] = ats_push
+    df["ats_win"] = ats_win  # vs CLOSE line
+    df["ats_push"] = ats_push  # vs CLOSE line
+    df["ats_win_open"] = ats_win_open  # vs OPEN line
+    df["ats_push_open"] = ats_push_open  # vs OPEN line
     df["clv"] = clv
 
     # Sanity report: log match rate and unmatched games
@@ -4451,7 +4461,7 @@ def main():
                 "predicted_spread", "actual_margin", "spread_open", "spread_close",
             ]
             # Add optional columns if present
-            optional_cols = ["vegas_spread", "edge", "pick", "ats_win", "ats_push", "clv"]
+            optional_cols = ["vegas_spread", "edge", "pick", "ats_win", "ats_push", "ats_win_open", "ats_push_open", "clv"]
             for col in optional_cols:
                 if col in ats_df.columns:
                     export_cols.append(col)
