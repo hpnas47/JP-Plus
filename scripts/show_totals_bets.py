@@ -84,21 +84,22 @@ def show_totals_bets(year: int, week: int):
     # Filter to games with lines
     week_data = week_data[week_data['vegas_total_open'].notna()].copy()
 
-    # Calculate EV estimate (simple version based on edge)
-    # Using analytical Normal CDF approximation: ~3.7% EV per point of edge at sigma=13
-    week_data['ev_est'] = week_data['edge_open'].abs() * 0.037
+    # Calculate EV estimate based on edge
+    # At sigma=13, 5pt edge ≈ 65% win prob ≈ 24% EV
+    # Roughly 4.8% EV per point of edge
+    week_data['ev_est'] = week_data['edge_open'].abs() * 0.048
 
-    # Primary EV Engine: EV >= 2% (roughly 0.5+ pt edge)
-    primary = week_data[week_data['ev_est'] >= 0.02].sort_values('ev_est', ascending=False)
+    # Primary: 5+ point edge (55.3% ATS historically)
+    primary = week_data[week_data['edge_open'].abs() >= 5.0].sort_values('edge_open', key=abs, ascending=False)
 
-    # 5+ Edge Non-Primary
-    edge5 = week_data[
-        (week_data['edge_open'].abs() >= 5.0) &
-        (week_data['ev_est'] < 0.02)
+    # Secondary: 3-5 point edge (54.5% ATS historically)
+    edge3to5 = week_data[
+        (week_data['edge_open'].abs() >= 3.0) &
+        (week_data['edge_open'].abs() < 5.0)
     ].sort_values('edge_open', key=abs, ascending=False)
 
-    # Print Primary EV Engine
-    print(f"\n## {year} Week {week} — Totals Primary EV Engine\n")
+    # Print 5+ Edge (Primary)
+    print(f"\n## {year} Week {week} — Totals 5+ Edge\n")
     print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | ~EV | Final | Result |")
     print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
 
@@ -126,13 +127,13 @@ def show_totals_bets(year: int, week: int):
     else:
         print("\n**Record: No qualifying bets**")
 
-    # Print 5+ Edge (if any exist outside primary)
-    if len(edge5) > 0:
-        print(f"\n## 5+ Point Edge (Below EV Cut)\n")
+    # Print 3-5 Edge (secondary list)
+    if len(edge3to5) > 0:
+        print(f"\n## 3-5 Point Edge (Secondary)\n")
         print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | Final | Result |")
         print("|---|---------|-----------|--------------|------|------|-------|--------|")
 
-        for i, (_, row) in enumerate(edge5.iterrows(), 1):
+        for i, (_, row) in enumerate(edge3to5.iterrows(), 1):
             matchup = f"{row['away_team']} @ {row['home_team']}"
             jp_total = f"{row['adjusted_total']:.1f}"
             vegas_total = f"{row['vegas_total_open']:.1f}"
@@ -143,9 +144,9 @@ def show_totals_bets(year: int, week: int):
             print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {final} | {result} |")
 
         # Calculate record
-        e_wins = len(edge5[edge5['result'] == 'WIN'])
-        e_losses = len(edge5[edge5['result'] == 'LOSS'])
-        e_pushes = len(edge5[edge5['result'] == 'PUSH'])
+        e_wins = len(edge3to5[edge3to5['result'] == 'WIN'])
+        e_losses = len(edge3to5[edge3to5['result'] == 'LOSS'])
+        e_pushes = len(edge3to5[edge3to5['result'] == 'PUSH'])
 
         if e_wins + e_losses > 0:
             if e_pushes > 0:
@@ -155,8 +156,8 @@ def show_totals_bets(year: int, week: int):
 
     # Footnotes
     print("\n---")
-    print("*Primary EV Engine: Bets with estimated EV >= 2% based on edge magnitude.*")
-    print("*5+ Edge: Games with 5+ point edge vs opening line that didn't meet EV threshold.*")
+    print("*5+ Edge: High conviction bets (55.3% ATS historical).*")
+    print("*3-5 Edge: Secondary opportunities (54.5% ATS historical).*")
 
 
 if __name__ == '__main__':
