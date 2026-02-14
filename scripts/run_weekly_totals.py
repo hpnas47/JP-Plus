@@ -314,11 +314,11 @@ def print_recommendations(
                 side = r['side']
 
                 if actual_total > line:
-                    result = "Win ✓" if side == "OVER" else "Loss"
+                    result = "Win ✓" if side == "OVER" else "Loss "
                 elif actual_total < line:
-                    result = "Win ✓" if side == "UNDER" else "Loss"
+                    result = "Win ✓" if side == "UNDER" else "Loss "
                 else:
-                    result = "Push"
+                    result = "Push "
 
         if show_ev:
             if show_results:
