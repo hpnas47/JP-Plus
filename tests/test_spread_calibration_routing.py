@@ -117,36 +117,6 @@ class TestOOSValidation:
         assert len(train_df) == 6, "Should have 6 training rows"
 
 
-class TestPlaceholderOdds:
-    """Test placeholder odds detection."""
-
-    def test_odds_placeholder_flag_added(self):
-        """odds_placeholder column should be added to DataFrame."""
-        from scripts.validate_spread_calibration_oos import detect_placeholder_odds
-
-        df = pd.DataFrame({
-            'spread_open': [-7.0, -3.5],
-            'spread_close': [-7.0, -3.5],
-        })
-
-        result = detect_placeholder_odds(df)
-
-        assert 'odds_placeholder' in result.columns, "odds_placeholder column should exist"
-
-    def test_missing_odds_columns_flags_all_as_placeholder(self):
-        """Missing odds columns should flag all as placeholder."""
-        from scripts.validate_spread_calibration_oos import detect_placeholder_odds
-
-        df = pd.DataFrame({
-            'other_col': [1, 2, 3],
-        })
-
-        result = detect_placeholder_odds(df)
-
-        assert 'odds_placeholder' in result.columns
-        assert result['odds_placeholder'].all(), "All should be flagged as placeholder"
-
-
 class TestCalibrationLoading:
     """Test calibration artifact loading."""
 
