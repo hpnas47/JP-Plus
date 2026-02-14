@@ -1148,7 +1148,8 @@ def evaluate_totals_markets(
         if rec.ev >= rec.ev_min and rec.stake > 0:
             primary.append(rec)
         # 5+ Edge: edge_pts >= edge_pts_min AND fails EV cut
-        elif abs(rec.edge_pts) >= config.edge_pts_min:
+        # Note: edge_pts is directional (positive = bet side favored), so we check >= not abs()
+        elif rec.edge_pts >= config.edge_pts_min:
             # Check what qualifies as "fails EV cut"
             if config.listB_include_positive_ev_below_cut:
                 # Include if EV < ev_min OR stake == 0
