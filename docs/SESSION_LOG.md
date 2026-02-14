@@ -5948,3 +5948,104 @@ All functionality superseded by `totals_calibration.py` and `smoke_test_weather_
 ---
 
 *End of session*
+
+
+---
+
+## Session: February 14, 2026 (Continued)
+
+### Theme: Phase 1 Documentation & Code Cleanup
+
+---
+
+#### Week 0 Spread Selection Fix — COMMITTED
+**Status**: Committed (`f5f0805`)
+**Files**: 7 files in `src/spread_selection/`
+
+CFB has week 0 games (Dublin game, pre-Labor Day) that were being excluded from Phase 1:
+
+- `phase1_edge_baseline.py`: weeks `[1,2,3]` → `[0,1,2,3]`
+- `phase1_sp_gate.py`: weeks `[1,2,3]` → `[0,1,2,3]`
+- `calibration.py`: week bucket `(1, 3)` → `(0, 3)`
+- Updated all "weeks 1-3" comments to "weeks 0-3" across 7 files
+
+---
+
+#### SP+ Agreement Gate: Documentation Inconsistency Found
+**Status**: Research validated, docs corrected
+
+**The Problem**: MODEL_EXPLAINER.md and MODEL_ARCHITECTURE.md showed 60% ATS for SP+ confirms, but PHASE1_SP_POLICY.md (research frozen 2026-02-13) showed:
+- 2022: **18.8% ATS** (catastrophic)
+- Aggregate 60% hid year-by-year variance
+
+**Resolution**: The 60% was misleading. SP+ gating research was already frozen with conclusion: "SP+ confirm-only gating is harmful."
+
+---
+
+#### SP+ Gate Documentation Removal — COMMITTED
+**Status**: Committed (`f755c14`)
+**Files**: `docs/MODEL_EXPLAINER.md`, `docs/MODEL_ARCHITECTURE.md`
+
+Removed misleading SP+ Agreement Gate sections (-54 lines):
+- Threshold optimization table
+- Gating modes table
+- Decision matrix SP+ rows
+
+---
+
+#### Kill-Switch Documentation Removal — COMMITTED
+**Status**: Committed (`653a053`)
+**Files**: `docs/MODEL_EXPLAINER.md`, `docs/MODEL_ARCHITECTURE.md`
+
+Kill-switch required manual result tracking to function in production. Was documented as if it worked automatically. Removed (-61 lines):
+- Kill-switch protection section
+- Historical trigger analysis table
+- CLI reference for kill-switch flags
+
+**Simplified Phase 1 guidance**: "Bet cautiously at half stakes. The ~51% ATS is barely above breakeven, so position sizing matters more than selection."
+
+---
+
+#### SP+ Gate Code Removal — COMMITTED
+**Status**: Committed (`cc859ee`)
+**Files**: 4 files, -894 lines
+
+Deleted:
+- `src/predictions/sp_gate.py` (331 lines)
+- `src/spread_selection/policies/phase1_sp_gate.py` (468 lines)
+- CLI args and imports from `run_weekly.py`
+- Updated `policies/__init__.py` to empty exports
+
+---
+
+#### Kill-Switch Code Removal — COMMITTED
+**Status**: Committed (`7ed15a1`)
+**Files**: 2 files, -331 lines
+
+Deleted:
+- `src/predictions/phase1_killswitch.py` (259 lines)
+- CLI args, function parameters, and logic from `run_weekly.py`
+
+---
+
+#### Total Phase 1 Cleanup Summary
+
+| Item | Lines Removed |
+|------|---------------|
+| SP+ gate docs | -54 |
+| Kill-switch docs | -61 |
+| `sp_gate.py` | -331 |
+| `phase1_sp_gate.py` | -468 |
+| `phase1_killswitch.py` | -259 |
+| `run_weekly.py` SP+/KS code | -112 |
+| **Total** | **~1,285 lines** |
+
+**Rationale**: Both features had fundamental issues:
+1. **SP+ Gate**: Unstable year-to-year (18.8% in 2022 vs 70%+ in other years)
+2. **Kill-Switch**: Required manual result tracking that didn't exist in production
+
+**New Phase 1 guidance**: Simple and honest — bet cautiously at half stakes, ~51% ATS expected.
+
+---
+
+*End of session*
