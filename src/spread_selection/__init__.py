@@ -96,14 +96,8 @@ from .selection import (
 )
 
 # V3: Policy layers (post-selection filters)
-from .policies import (
-    Phase1SPGateConfig,
-    Phase1SPGateResult,
-    SPGateCategory,
-    SPGateMode,
-    apply_phase1_sp_gate,
-    fetch_sp_spreads_vegas,
-)
+# SP+ gate removed (2026-02-14) - research showed unstable year-to-year results
+# See docs/PHASE1_SP_POLICY.md for rationale
 
 # V4: Separate strategies (distinct bet lists, NOT merged with EV)
 from .strategies import (
@@ -250,13 +244,7 @@ __all__ = [
     "evaluate_game",
     "evaluate_slate",
     "summarize_slate",
-    # V3: Policy layers
-    "Phase1SPGateConfig",
-    "Phase1SPGateResult",
-    "SPGateCategory",
-    "SPGateMode",
-    "apply_phase1_sp_gate",
-    "fetch_sp_spreads_vegas",
+    # V3: Policy layers (SP+ gate removed 2026-02-14)
     # V4: Separate strategies
     "Phase1EdgeBaselineConfig",
     "Phase1EdgeVetoConfig",

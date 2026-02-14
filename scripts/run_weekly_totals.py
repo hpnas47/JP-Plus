@@ -10,6 +10,13 @@ Usage:
     python scripts/run_weekly_totals.py --year 2025 --week 6 --min-edge 7
     python scripts/run_weekly_totals.py --year 2025 --week 6 --primary-only
 
+Weather (2026 Production):
+    python scripts/run_weekly_totals.py --year 2026 --week 6 --weather
+    python scripts/run_weekly_totals.py --year 2026 --week 6 --weather --no-high-variance-overs
+
+    Weather forecasts must be captured first via:
+        python scripts/weather_thursday_capture.py
+
 Output Lists:
     - Primary EV Engine: Bets meeting EV threshold (default 2%)
     - 5+ Edge: High-edge bets that don't meet EV cut (diagnostic)
@@ -32,6 +39,8 @@ sys.path.insert(0, str(project_root))
 import pandas as pd
 
 from src.api.cfbd_client import CFBDClient
+from src.api.tomorrow_io import TomorrowIOClient, DEFAULT_DB_PATH as WEATHER_DB_PATH
+from src.adjustments.weather import WeatherAdjuster, WeatherConditions
 from src.models.totals_model import TotalsModel
 from src.spread_selection.totals_ev_engine import (
     TotalsEvent,
@@ -111,6 +120,14 @@ Examples:
         "--debug", action="store_true",
         help="Enable debug output"
     )
+    parser.add_argument(
+        "--weather", action="store_true",
+        help="Enable weather adjustments (2026+ production). Requires prior forecast capture."
+    )
+    parser.add_argument(
+        "--no-high-variance-overs", action="store_true",
+        help="Disable OVER bets on high-variance weather games (confidence < 0.75 AND adj > 3.0)"
+    )
 
     return parser.parse_args()
 
@@ -156,14 +173,103 @@ def fetch_games_and_lines(client: CFBDClient, year: int) -> tuple[pd.DataFrame, 
     return games_df, betting_df
 
 
+def load_weather_adjustments(
+    games_df: pd.DataFrame,
+    week: int,
+    fbs_set: set[str],
+    block_high_variance_overs: bool = False,
+) -> dict[int, dict]:
+    """Load weather forecasts and calculate adjustments for games in a week.
+
+    Returns dict mapping game_id -> {
+        'adjustment': float (dampened points adjustment, negative = lower scoring),
+        'high_variance': bool (True if forecast uncertain + severe weather),
+        'conditions': WeatherConditions or None,
+        'confidence': float,
+    }
+    """
+    week_games = games_df[games_df['week'] == week].copy()
+    week_games = week_games[
+        (week_games['home_team'].isin(fbs_set)) &
+        (week_games['away_team'].isin(fbs_set))
+    ]
+
+    # api_key not needed for DB reads only - pass placeholder
+    weather_client = TomorrowIOClient(api_key="DB_READ_ONLY", db_path=WEATHER_DB_PATH)
+    adjuster = WeatherAdjuster()
+    adjustments = {}
+
+    for g in week_games.itertuples():
+        game_id = g.id
+        forecast = weather_client.get_betting_forecast(game_id)
+
+        if forecast is None:
+            # No forecast captured for this game
+            adjustments[game_id] = {
+                'adjustment': 0.0,
+                'high_variance': False,
+                'conditions': None,
+                'confidence': 1.0,
+            }
+            continue
+
+        # Build WeatherConditions from forecast
+        conditions = WeatherConditions(
+            game_id=game_id,
+            home_team=g.home_team,
+            away_team=g.away_team,
+            venue="",  # Not needed for adjustment calculation
+            game_indoors=forecast.is_indoor,
+            temperature=forecast.temperature,
+            wind_speed=forecast.wind_speed,
+            wind_gust=forecast.wind_gust,
+            wind_direction=forecast.wind_direction,
+            precipitation=(forecast.rain_intensity or 0.0) + (forecast.snow_intensity or 0.0),
+            snowfall=forecast.snow_intensity,
+            humidity=forecast.humidity,
+            weather_condition=str(forecast.weather_code) if forecast.weather_code else None,
+        )
+
+        # Calculate adjustment with confidence scaling
+        result = adjuster.calculate_adjustment(
+            conditions,
+            combined_pass_rate=None,  # Could add team-specific pass rates later
+            confidence_factor=forecast.confidence_factor or 1.0,
+        )
+
+        adjustments[game_id] = {
+            'adjustment': result.total_adjustment,
+            'high_variance': result.high_variance,
+            'conditions': conditions,
+            'confidence': forecast.confidence_factor or 1.0,
+        }
+
+    return adjustments
+
+
 def build_events(
     games_df: pd.DataFrame,
     betting_df: pd.DataFrame,
     week: int,
     year: int,
     fbs_set: set[str],
-) -> list[TotalsEvent]:
-    """Build TotalsEvent objects for a given week."""
+    weather_adjustments: Optional[dict[int, dict]] = None,
+    block_high_variance_overs: bool = False,
+) -> tuple[list[TotalsEvent], list[int]]:
+    """Build TotalsEvent objects for a given week.
+
+    Args:
+        games_df: DataFrame with game data
+        betting_df: DataFrame with betting lines
+        week: Week number
+        year: Season year
+        fbs_set: Set of FBS team names
+        weather_adjustments: Optional dict mapping game_id -> weather adjustment info
+        block_high_variance_overs: If True, mark high-variance weather games
+
+    Returns:
+        Tuple of (events list, blocked_game_ids list)
+    """
     week_games = games_df[games_df['week'] == week].copy()
 
     # FBS filter
@@ -173,7 +279,7 @@ def build_events(
     ]
 
     if betting_df.empty:
-        return []
+        return [], []
 
     # Merge betting lines (take first line per game)
     lines_df = betting_df[['game_id', 'over_under']].drop_duplicates(subset=['game_id'])
@@ -181,10 +287,24 @@ def build_events(
     week_games = week_games.merge(lines_df, on='id', how='left')
 
     events = []
+    blocked_game_ids = []  # Games where OVER is blocked due to high variance weather
+
     for g in week_games.itertuples():
         line = getattr(g, 'total_line', None)
         if pd.isna(line):
             continue
+
+        # Get weather adjustment if available
+        weather_adj = 0.0
+        is_high_variance = False
+        if weather_adjustments and g.id in weather_adjustments:
+            wx_info = weather_adjustments[g.id]
+            weather_adj = wx_info.get('adjustment', 0.0)
+            is_high_variance = wx_info.get('high_variance', False)
+
+        # Track blocked games for reporting
+        if block_high_variance_overs and is_high_variance:
+            blocked_game_ids.append(g.id)
 
         events.append(TotalsEvent(
             event_id=str(g.id),
@@ -192,7 +312,7 @@ def build_events(
             away_team=g.away_team,
             year=year,
             week=week,
-            weather_adjustment=0.0,
+            weather_adjustment=weather_adj,
             markets=[
                 TotalMarket(
                     book="CFBD",
@@ -203,7 +323,7 @@ def build_events(
             ],
         ))
 
-    return events
+    return events, blocked_game_ids
 
 
 def format_matchup(away_team: str, home_team: str) -> str:
@@ -394,9 +514,53 @@ def main():
 
     print("      Model trained successfully")
 
+    # Load weather adjustments if enabled
+    weather_adjustments = None
+    blocked_game_ids = []
+    weather_status = "Disabled"
+
+    if args.weather:
+        print(f"\n[4/5] Loading weather forecasts...")
+        try:
+            weather_adjustments = load_weather_adjustments(
+                games_df, week, fbs_set,
+                block_high_variance_overs=args.no_high_variance_overs,
+            )
+            games_with_wx = sum(1 for v in weather_adjustments.values() if v['conditions'] is not None)
+            games_with_adj = sum(1 for v in weather_adjustments.values() if abs(v['adjustment']) > 0.1)
+            high_var_count = sum(1 for v in weather_adjustments.values() if v['high_variance'])
+
+            print(f"      {games_with_wx} games with forecasts, {games_with_adj} with adjustments")
+            if high_var_count > 0:
+                print(f"      {high_var_count} games flagged high-variance weather")
+                if args.no_high_variance_overs:
+                    print(f"      OVER bets will be blocked on high-variance games")
+
+            weather_status = f"Enabled ({games_with_adj} adj)"
+            if args.no_high_variance_overs and high_var_count > 0:
+                weather_status += f", {high_var_count} blocked"
+
+            # Track blocked games for reporting
+            blocked_game_ids = [
+                gid for gid, v in weather_adjustments.items()
+                if v['high_variance'] and args.no_high_variance_overs
+            ]
+
+        except Exception as e:
+            logger.warning(f"Weather loading failed: {e}")
+            print(f"      WARNING: Weather loading failed - {e}")
+            print(f"      Proceeding without weather adjustments")
+            weather_adjustments = None
+            weather_status = "Failed"
+
     # Build events
-    print(f"\n[4/4] Building predictions for week {week}...")
-    events = build_events(games_df, betting_df, week, year, fbs_set)
+    step_num = "5/5" if args.weather else "4/4"
+    print(f"\n[{step_num}] Building predictions for week {week}...")
+    events, _ = build_events(
+        games_df, betting_df, week, year, fbs_set,
+        weather_adjustments=weather_adjustments,
+        block_high_variance_overs=args.no_high_variance_overs,
+    )
     print(f"      {len(events)} games with betting lines")
 
     if not events:
@@ -407,7 +571,7 @@ def main():
     config = TotalsEVConfig(
         sigma_total=args.sigma,
         bankroll=args.bankroll,
-        use_weather_adjustment=False,
+        use_weather_adjustment=args.weather,
         ev_min=args.ev_min,
         edge_pts_min=5.0,
     )
@@ -416,6 +580,25 @@ def main():
     primary_df, edge5_df = evaluate_totals_markets(
         model, events, config, n_train_games=len(train_games)
     )
+
+    # Filter out OVER bets on high-variance weather games if requested
+    blocked_overs_count = 0
+    if args.no_high_variance_overs and blocked_game_ids:
+        blocked_ids_str = set(str(gid) for gid in blocked_game_ids)
+
+        # Filter primary list
+        before_primary = len(primary_df)
+        if not primary_df.empty:
+            mask = ~((primary_df['event_id'].isin(blocked_ids_str)) & (primary_df['side'] == 'OVER'))
+            primary_df = primary_df[mask].copy()
+            blocked_overs_count += before_primary - len(primary_df)
+
+        # Filter 5+ edge list
+        before_edge5 = len(edge5_df)
+        if not edge5_df.empty:
+            mask = ~((edge5_df['event_id'].isin(blocked_ids_str)) & (edge5_df['side'] == 'OVER'))
+            edge5_df = edge5_df[mask].copy()
+            blocked_overs_count += before_edge5 - len(edge5_df)
 
     # Get results for this week (for historical data)
     week_results = games_df[games_df['week'] == week].copy()
@@ -465,6 +648,9 @@ def main():
     elif args.min_edge > 0:
         print(f"  Displayed ({args.min_edge}+ edge): {displayed_primary} Primary, {displayed_edge5} 5+ Edge")
     print(f"  Config: sigma={args.sigma}, ev_min={args.ev_min * 100:.0f}%, bankroll=${args.bankroll:.0f}")
+    print(f"  Weather: {weather_status}")
+    if blocked_overs_count > 0:
+        print(f"  High-variance OVER bets blocked: {blocked_overs_count}")
 
     # Record summary for historical data
     if has_results and len(primary_df) > 0:
