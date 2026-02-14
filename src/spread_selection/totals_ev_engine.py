@@ -63,9 +63,23 @@ class TotalsEvent:
 class TotalsEVConfig:
     """Configuration for totals EV evaluation.
 
+    CFB-SPECIFIC DEFAULTS:
+        These defaults are calibrated for college football, which differs from NFL:
+        - sigma_total=20.0: CFB has ~20pt score standard deviation vs NFL's ~13.
+          CFB games are more volatile due to talent gaps, tempo variance, and
+          scheme diversity across 134 FBS teams.
+        - baseline_prior_per_team=30.0: CFB average is ~30 PPG per team (~60 total).
+        - baseline_sanity_min/max=7.0/55.0: CFB per-team totals routinely range from
+          low-scoring defensive games (~35 total) to Big 12 shootouts (80+ total).
+        - enable_baseline_blend=False: Global game counts don't reflect per-team sample
+          stability across 134 heterogeneous teams. Disabled by default; model
+          predictions are trusted directly without regression to prior.
+        - baseline_blend_n0=500: Safety fallback if blending is ever re-enabled.
+          High value ensures minimal prior influence given CFB's team heterogeneity.
+
     Attributes:
         sigma_total: Standard deviation of prediction errors (from backtest residuals).
-            Default 13.0 based on historical backtest RMSE ~13.0.
+            Default 20.0 for CFB (vs ~13 for NFL) due to higher game variance.
         use_adjusted_total: DEPRECATED - use use_weather_adjustment instead.
 
         ev_min: Minimum EV for Primary Edge Execution Engine qualification.
@@ -94,14 +108,18 @@ class TotalsEVConfig:
 
     Phase 1 Baseline Blending:
         enable_baseline_blend: Enable baseline prior blending for early-season stability.
-        baseline_prior_per_team: Prior expectation for per-team PPG (default 26.0).
-        baseline_blend_n0: Sample size parameter for blend decay (default 80).
+            Default False for CFB - global game counts don't reflect per-team stability
+            across 134 heterogeneous teams. When False, blend weight is always 0.0
+            (fully trust model, no regression to prior).
+        baseline_prior_per_team: Prior expectation for per-team PPG (default 30.0 for CFB).
+        baseline_blend_n0: Sample size parameter for blend decay (default 500 for CFB).
+            High value ensures minimal prior influence if blending is ever re-enabled.
         baseline_blend_mode: "rational" (n0/(n0+n)) or "exp" (exp(-n/n0)).
 
     Phase 1 Guardrails:
         min_train_games_for_staking: Minimum training games to generate stakes.
-        baseline_sanity_min: Minimum acceptable per-team baseline.
-        baseline_sanity_max: Maximum acceptable per-team baseline.
+        baseline_sanity_min: Minimum acceptable per-team baseline (7.0 for CFB).
+        baseline_sanity_max: Maximum acceptable per-team baseline (55.0 for CFB).
         diagnostic_only_mode: Force stake=0 for all bets (diagnostic output only).
         auto_diagnostic_if_guardrail_hit: Auto-enable diagnostic mode on guardrail violation.
 
@@ -113,8 +131,8 @@ class TotalsEVConfig:
         Weather adjustment is applied AFTER model prediction but BEFORE baseline blending.
         Sign convention: negative weather_adj means "lower scoring expected" (reduce total).
     """
-    # Model parameters
-    sigma_total: float = 13.0
+    # Model parameters (CFB defaults - see docstring for rationale)
+    sigma_total: float = 20.0  # CFB ~20pt std dev vs NFL ~13
     use_adjusted_total: bool = True  # DEPRECATED: kept for backwards compatibility
 
     # Weather adjustment (2026 production)
@@ -144,16 +162,16 @@ class TotalsEVConfig:
     allow_scipy: bool = True
     sort_key: str = "ev"  # "ev" or "edge_pts"
 
-    # Phase 1: Baseline Prior Blending
-    enable_baseline_blend: bool = True
-    baseline_prior_per_team: float = 26.0
-    baseline_blend_n0: float = 80.0
+    # Phase 1: Baseline Prior Blending (CFB defaults)
+    enable_baseline_blend: bool = False  # Disabled for CFB - 134 teams too heterogeneous
+    baseline_prior_per_team: float = 30.0  # CFB average ~30 PPG per team
+    baseline_blend_n0: float = 500.0  # High value if blending ever re-enabled
     baseline_blend_mode: str = "rational"  # "rational" or "exp"
 
-    # Phase 1: Guardrails
+    # Phase 1: Guardrails (CFB defaults)
     min_train_games_for_staking: int = 80
-    baseline_sanity_min: float = 18.0  # Widened from 22.0 - Phase 1 backtest shows 57.9% ATS
-    baseline_sanity_max: float = 34.0  # Widened from 30.0 - don't block early season
+    baseline_sanity_min: float = 7.0  # CFB can have very low-scoring games
+    baseline_sanity_max: float = 55.0  # CFB shootouts can exceed 40 PPG per team
     diagnostic_only_mode: bool = False
     auto_diagnostic_if_guardrail_hit: bool = True
 
