@@ -152,8 +152,8 @@ class TotalsEVConfig:
 
     # Phase 1: Guardrails
     min_train_games_for_staking: int = 80
-    baseline_sanity_min: float = 22.0
-    baseline_sanity_max: float = 30.0
+    baseline_sanity_min: float = 18.0  # Widened from 22.0 - Phase 1 backtest shows 57.9% ATS
+    baseline_sanity_max: float = 34.0  # Widened from 30.0 - don't block early season
     diagnostic_only_mode: bool = False
     auto_diagnostic_if_guardrail_hit: bool = True
 
