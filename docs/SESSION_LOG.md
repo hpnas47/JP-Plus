@@ -5779,3 +5779,69 @@ Added `ats_win_open` and `ats_push_open` columns to `ats_export.csv` for direct 
 ---
 
 *End of session*
+
+
+---
+
+## Session: February 14, 2026
+
+### Theme: Weather Layer Smoke Test Infrastructure
+
+---
+
+#### Smoke Test Script for Weather + Totals EV — COMMITTED
+**Status**: Committed (`4e9253f`)
+**Files**: `scripts/smoke_test_weather_ev.py`, `.gitignore`
+
+Created comprehensive smoke test for the weather layer integration with the Totals EV Engine. Two execution modes:
+
+**Mode A (Synthetic):**
+- Deterministic, always runs with hard assertions
+- Tests mu composition formula: `mu_used = mu_model + weather_adj + baseline_shift`
+- Validates push probability (0 for half-points, >0 for integers)
+- Validates guardrail capping at ±10 points
+- Validates Kelly staking logic
+
+**Mode B (Real-Data):**
+- Three-phase architecture: Preflight → Model Prep → Evaluation
+- `--require-weather` flag for strict weather data requirement
+- Graceful skip if data missing (preflight checks run before any heavy compute)
+
+**CLI Enhancements:**
+- `--max-train-seconds N`: Time-bounded training with multiprocessing timeout
+- `--max-games N`: Limit training data for faster iteration
+- `--save-model-path PATH`: Cache trained model for reuse
+- `--load-model-path PATH`: Load pre-trained model (directory auto-discovery supported)
+- `--overwrite-model`: Allow overwriting existing saved models
+
+**Model Filename Convention:**
+- Format: `totals_{year}_pred_w{pred_week}_trained_thru_w{train_week}.joblib`
+- Example: `totals_2024_pred_w10_trained_thru_w9.joblib`
+- Walk-forward semantics explicit in filename (pred_week > train_thru_week always)
+
+**Git Hygiene (.gitignore additions):**
+- `artifacts/` - smoke test model cache directory
+- `*.joblib` - serialized models
+- `data/weather/` - captured weather data (not source-controlled)
+- `calibration_artifacts/` - calibration outputs
+
+**Usage Examples:**
+```bash
+# Full synthetic + real-data test
+python3 scripts/smoke_test_weather_ev.py --year 2024 --week 10
+
+# Save model for future runs
+python3 scripts/smoke_test_weather_ev.py --year 2024 --week 10 \
+    --save-model-path artifacts/models/
+
+# Fast rerun with cached model
+python3 scripts/smoke_test_weather_ev.py --year 2024 --week 10 \
+    --load-model-path artifacts/models/
+
+# Strict weather requirement (fails fast if no weather file)
+python3 scripts/smoke_test_weather_ev.py --year 2024 --week 10 --require-weather
+```
+
+---
+
+*End of session*
