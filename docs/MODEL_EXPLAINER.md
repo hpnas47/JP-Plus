@@ -546,7 +546,29 @@ This isn't about predicting which years will be bad. It's about **reacting quick
 | **Core** (Weeks 4-15) | Opening (4+ days) | Fixed mode, 5+ edge |
 | **Core** (Weeks 4-15) | Closing (<4 days) | Edge-aware (auto LSA for 5+ edge) |
 
-*For CLI usage and configuration, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
+### Production Betting System (2026+)
+
+The edge framework above is implemented in a production system that:
+
+1. **Calculates calibrated EV** — Converts edge to cover probability using walk-forward logistic regression, then computes expected value at -110 odds
+2. **Applies selection policies** — The `balanced` preset takes the top 3 bets by EV each week (minimum 1% EV floor)
+3. **Routes by phase** — Phase 1 (weeks 1-3) uses stricter constraints and half stakes; Phase 2 (weeks 4-15) uses full stakes
+4. **Logs recommendations** — CSV logging with deduplication for tracking and settlement
+5. **Settles results** — Post-game settlement updates with actual margins and P/L
+
+**Two Output Lists:**
+- **List A (Primary):** EV-qualified bets meeting selection policy — these are the actionable recommendations
+- **List B (Diagnostic):** Games with 5+ point edge that didn't meet EV threshold — tracked for analysis only
+
+```bash
+# Generate weekly spread recommendations
+python scripts/run_spread_weekly.py --year 2026 --week 5
+
+# Settle completed bets with actual results
+python scripts/run_spread_weekly.py --year 2026 --week 5 --settle
+```
+
+*For full CLI options, selection policy details, and CSV schema, see [MODEL_ARCHITECTURE.md](MODEL_ARCHITECTURE.md).*
 
 ---
 

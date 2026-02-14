@@ -1382,6 +1382,137 @@ The engine produces the following columns in `comparison_df`:
 | `sp_gate_category` | str | "confirms", "neutral", "opposes", "missing" |
 | `phase1_sp_gate_passed` | bool | Whether game passes gate |
 
+### Production Spread Betting System (2026+)
+
+The production spread betting system converts JP+ predictions into actionable bet recommendations with calibrated EV estimation, phase-aware routing, and automated logging.
+
+**Implementation:** `scripts/run_spread_weekly.py`
+
+#### Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  SpreadGenerator │────▶│  EV Calibration   │────▶│ Selection Policy │
+│  (predictions)   │     │  (edge → P(cover))│     │  (filtering)     │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                                                          │
+                              ┌────────────────────────────┼────────────────┐
+                              ▼                            ▼                ▼
+                        ┌──────────┐              ┌──────────┐      ┌──────────┐
+                        │  List A   │              │  List B   │      │ CSV Log  │
+                        │ (EV bets) │              │ (5+ edge) │      │ (append) │
+                        └──────────┘              └──────────┘      └──────────┘
+```
+
+#### Phase Routing
+
+The system uses different configurations for different parts of the season:
+
+| Phase | Weeks | Calibration | Constraints | Stake |
+|-------|-------|-------------|-------------|-------|
+| **Phase 1** | 1-3 | `weighted` | top_n=2, ev_floor=2%, max=2 | 0.5x |
+| **Phase 2** | 4-15 | `phase2_only` | top_n=3, ev_floor=1%, max=3 | 1.0x |
+| **Phase 3** | 16+ | `phase2_only` | top_n=3, ev_floor=1%, max=3 | 1.0x |
+
+**Phase 1 Rationale:** Early-season predictions rely heavily on priors with higher variance. Conservative constraints (stricter EV floor, fewer bets, half stakes) protect against calibration uncertainty.
+
+#### Selection Policy Presets
+
+Three presets are available, with `balanced` as the production default:
+
+| Preset | Policy | top_n | ev_floor | ev_min | max_bets |
+|--------|--------|-------|----------|--------|----------|
+| `conservative` | TOP_N_PER_WEEK | 2 | 2.0% | 3.0% | 2 |
+| **`balanced`** | **TOP_N_PER_WEEK** | **3** | **1.0%** | **3.0%** | **3** |
+| `aggressive` | EV_THRESHOLD | — | 0.5% | 2.0% | 5 |
+
+**TOP_N_PER_WEEK:** Takes the top N bets by EV each week, subject to ev_floor minimum. This ensures consistent volume while avoiding marginal bets.
+
+**EV_THRESHOLD:** Takes all bets above ev_min threshold. Higher variance, more bets in good weeks, fewer in bad weeks.
+
+#### EV Calculation
+
+Expected Value is computed from calibrated cover probability:
+
+```python
+# Calibration: logistic regression trained on walk-forward edge → cover outcomes
+p_cover = predict_cover_probability(edge_abs, calibration_result)
+
+# EV at standard -110 odds
+implied_prob = 110 / 210  # 0.524
+ev = (p_cover * 1.909) + ((1 - p_cover) * -1.0) - 1.0
+# Simplified: ev = p_cover - implied_prob (approximately)
+```
+
+**Calibration Modes:**
+- `weighted`: Uses Phase 1 + Phase 2 data with Phase 2 weighted higher (for weeks 1-3)
+- `phase2_only`: Uses only Core season data (for weeks 4+)
+
+#### Output Lists
+
+The system produces two distinct bet lists:
+
+| List | Selection Criteria | Purpose |
+|------|-------------------|---------|
+| **List A** | EV ≥ ev_floor, passes selection policy | Primary betting recommendations |
+| **List B** | Edge ≥ 5 pts, NOT in List A | Diagnostic — high disagreement games |
+
+List B captures games where JP+ strongly disagrees with Vegas but EV doesn't meet threshold. These are tracked for analysis but not recommended for betting.
+
+#### CLI Usage
+
+```bash
+# Generate weekly recommendations (balanced preset, weighted Phase 1)
+python scripts/run_spread_weekly.py --year 2026 --week 5
+
+# Use aggressive preset
+python scripts/run_spread_weekly.py --year 2026 --week 5 --preset aggressive
+
+# Skip Phase 1 EV bets (List B only for weeks 1-3)
+python scripts/run_spread_weekly.py --year 2026 --week 2 --phase1-policy skip
+
+# Dry run (no CSV logging)
+python scripts/run_spread_weekly.py --year 2026 --week 5 --dry-run
+
+# Settle completed bets
+python scripts/run_spread_weekly.py --year 2026 --week 5 --settle
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--preset` | `balanced` | Selection policy preset |
+| `--phase1-policy` | `weighted` | Phase 1 mode: `weighted` (EV bets) or `skip` (List B only) |
+| `--phase1-stake` | `0.5` | Stake multiplier for Phase 1 bets |
+| `--dry-run` | Off | Print recommendations without logging |
+| `--settle` | Off | Update CSV with actual results |
+
+#### CSV Logging
+
+Bets are logged to `data/spread_selection/logs/spread_bets_{year}.csv` with deduplication by `(year, week, game_id, side)`.
+
+**Key columns:**
+- `run_timestamp`: When recommendation was generated
+- `phase`, `calibration_name`: Routing info
+- `ev`, `p_cover`, `edge_pts`: EV calculation inputs
+- `stake`, `stake_multiplier_used`: Position sizing
+- `list_type`: "A" (EV bet) or "B" (5+ edge diagnostic)
+- `guardrail_reason`: Why game is in List B (e.g., "BELOW_EV_THRESHOLD")
+- `actual_margin`, `covered`, `profit_units`: Filled by settlement
+
+#### Settlement
+
+Settlement updates unsettled rows with actual results:
+
+```bash
+python scripts/run_spread_weekly.py --year 2026 --week 5 --settle
+```
+
+Adds:
+- `actual_margin`: Home margin from CFBD
+- `covered`: "W", "L", or "P" (push)
+- `profit_units`: +0.909 (win), -1.0 (loss), 0.0 (push)
+- `settled_timestamp`: When settled
+
 ---
 
 ## Key Design Decisions
