@@ -73,6 +73,22 @@ from src.spread_selection.strategies.phase1_edge_baseline import (
 
 logger = logging.getLogger(__name__)
 
+
+def _to_native(obj):
+    """Convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif pd.isna(obj):
+        return None
+    return obj
+
+
 # Team abbreviations for display formatting
 TEAM_ABBREVS = {
     "Florida International": "FIU",
@@ -353,20 +369,20 @@ def run_backtest_for_calibration(years: list[int]) -> pd.DataFrame:
         "--export-ats", export_path,
     ]
 
-    logger.info(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        logger.info(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
 
-    if result.returncode != 0:
-        logger.error(f"Backtest failed: {result.stderr}")
-        raise RuntimeError(f"Backtest failed: {result.stderr}")
+        if result.returncode != 0:
+            logger.error(f"Backtest failed: {result.stderr}")
+            raise RuntimeError(f"Backtest failed: {result.stderr}")
 
-    # Load the exported CSV
-    df = pd.read_csv(export_path)
-
-    # Clean up
-    Path(export_path).unlink(missing_ok=True)
-
-    return df
+        # Load the exported CSV
+        df = pd.read_csv(export_path)
+        return df
+    finally:
+        # Clean up temp file even on failure
+        Path(export_path).unlink(missing_ok=True)
 
 
 def print_sample_games(df: pd.DataFrame, n: int = 10) -> None:
@@ -1299,6 +1315,10 @@ def run_predict(
         distinct_lists: If True (default), Phase 1 Edge excludes games in Primary Engine
     """
     from scipy.special import expit
+    from src.api.cfbd_client import CFBDClient
+
+    # Create client once for reuse across FBS filtering and SP+ spread fetching
+    client = CFBDClient()
 
     print(f"\n{'=' * 80}")
     print("SPREAD SELECTION PREDICTION")
@@ -1335,8 +1355,6 @@ def run_predict(
     fbs_teams = set()
     if fbs_only:
         try:
-            from src.api.cfbd_client import CFBDClient
-            client = CFBDClient()
             # Get year from slate or current year
             filter_year = year if year else (int(slate_df["year"].iloc[0]) if "year" in slate_df.columns else datetime.now().year)
             fbs_list = client.get_fbs_teams(year=filter_year)
@@ -1431,6 +1449,9 @@ def run_predict(
             "min_ev": ultra_min_ev,
         },
     }
+
+    # Track primary bets for distinct_lists filtering in LIST B
+    primary_bets = None
 
     for mode in emit_modes:
         if mode not in mode_configs:
@@ -1551,10 +1572,8 @@ def run_predict(
         if sp_gate_config and sp_gate_config.should_apply(week):
             print(f"\n  Applying SP+ Gate (mode={sp_gate_config.mode})...")
 
-            # Fetch SP+ spreads
+            # Fetch SP+ spreads (reuse client from top of function)
             try:
-                from src.api.cfbd_client import CFBDClient
-                client = CFBDClient()
                 sp_spreads = fetch_sp_spreads_vegas(client, year, [week])
                 print(f"    Fetched {len(sp_spreads)} SP+ spreads")
             except Exception as e:
@@ -1622,6 +1641,10 @@ def run_predict(
             slate_pred['sp_gate_passed'] = True
             slate_pred['sp_gate_reason'] = None
 
+        # Capture primary bets for distinct_lists filtering
+        if mode == "primary":
+            primary_bets = bets.copy()
+
         print(f"\n  Results ({config['label']}):")
         print(f"    Total games: {len(slate_pred)}")
         print(f"    Bets selected: {len(bets)}")
@@ -1682,7 +1705,7 @@ def run_predict(
             "bets": bets.to_dict(orient="records"),
         }
         with open(bets_json_path, "w") as f:
-            json.dump(bets_json, f, indent=2, default=str)
+            json.dump(bets_json, f, indent=2, default=_to_native)
         print(f"  Wrote: {bets_json_path}")
 
         # 3. Full slate CSV (debug)
@@ -1697,7 +1720,7 @@ def run_predict(
             "games": slate_pred.to_dict(orient="records"),
         }
         with open(slate_json_path, "w") as f:
-            json.dump(slate_json, f, indent=2, default=str)
+            json.dump(slate_json, f, indent=2, default=_to_native)
         print(f"  Wrote: {slate_json_path}")
 
         # Print bet summary
@@ -1742,10 +1765,8 @@ def run_predict(
         print("execution_default=False, is_official_engine=False")
         print("=" * 80)
 
-        # Fetch SP+ spreads for monitoring (and veto if enabled)
+        # Fetch SP+ spreads for monitoring (and veto if enabled) - reuse client
         try:
-            from src.api.cfbd_client import CFBDClient
-            client = CFBDClient()
             list_b_sp_spreads = fetch_sp_spreads_vegas(client, year, [week])
             print(f"  Fetched {len(list_b_sp_spreads)} SP+ spreads for week {week}")
         except Exception as e:
@@ -1765,8 +1786,8 @@ def run_predict(
         )
 
         # Apply distinct lists filter: exclude games already in Primary Engine
-        if distinct_lists and 'bets' in dir() and len(bets) > 0:
-            primary_game_ids = set(bets['game_id'].values)
+        if distinct_lists and primary_bets is not None and len(primary_bets) > 0:
+            primary_game_ids = set(primary_bets['game_id'].values)
             pre_distinct_count = len(list_b_selected)
             list_b_selected = [rec for rec in list_b_selected if rec.game_id not in primary_game_ids]
             list_b_vetoed = [rec for rec in list_b_vetoed if rec.game_id not in primary_game_ids]
@@ -1819,7 +1840,7 @@ def run_predict(
                 "bets": list_b_df.to_dict(orient="records"),
             }
             with open(list_b_json_path, "w") as f:
-                json.dump(list_b_json, f, indent=2, default=str)
+                json.dump(list_b_json, f, indent=2, default=_to_native)
             print(f"  Wrote: {list_b_json_path}")
 
             # Print bet summary (selected only)
@@ -1880,7 +1901,7 @@ def run_predict(
 
         week_summary_path = output_path / f"week_summary_{year}_week{week}.json"
         with open(week_summary_path, "w") as f:
-            json.dump(week_summary, f, indent=2, default=str)
+            json.dump(week_summary, f, indent=2, default=_to_native)
         print(f"\n  Wrote: {week_summary_path}")
 
         # Overlap/conflict report
@@ -1987,6 +2008,10 @@ def run_backtest(
     end_year: int = 2025,
     output_dir: str = "data/spread_selection/outputs",
     compare_modes: bool = True,
+    save_artifacts: bool = False,
+    freeze_artifacts: bool = False,
+    artifact_description: str = "",
+    rebuild_history: bool = False,
 ) -> None:
     """Run walk-forward backtest with push modeling for P&L analysis.
 
@@ -1996,18 +2021,24 @@ def run_backtest(
         end_year: Last year
         output_dir: Output directory for results
         compare_modes: If True, run both PRIMARY and ULTRA modes
+        save_artifacts: If True, save calibration artifacts for reproducibility
+        freeze_artifacts: If True, mark artifacts as frozen for production
+        artifact_description: Description to include in artifact metadata
+        rebuild_history: If True, allow overwriting existing outputs with identical inputs
     """
-    print(f"\n{'=' * 80}")
-    print("WALK-FORWARD BACKTEST WITH PUSH MODELING")
-    print("=" * 80)
-    print(f"Data: {csv_path}")
-    print(f"Years: {start_year}-{end_year}")
-    print("=" * 80)
-
-    # Load and normalize data
-    raw_df = load_backtest_data(start_year, end_year, csv_path)
-    normalized_df = load_and_normalize_game_data(raw_df, jp_convention="pos_home_favored")
-    print(f"\nLoaded {len(normalized_df)} games total")
+    from .artifacts import (
+        ArtifactStore,
+        RunLog,
+        RunMetadata,
+        create_artifact_from_walk_forward,
+        compute_file_hash,
+        get_git_commit_hash,
+    )
+    from .reproducibility import (
+        create_fingerprint,
+        ReproducibilityGuard,
+    )
+    from datetime import datetime
 
     # Create output directory
     output_path = Path(output_dir)
@@ -2015,8 +2046,61 @@ def run_backtest(
 
     modes = ["primary", "ultra"] if compare_modes else ["primary"]
 
+    # Check reproducibility for each mode BEFORE loading data
+    guard = ReproducibilityGuard()
+    fingerprints = {}
+    modes_to_skip = []
     for mode in modes:
         config = CALIBRATION_MODES[mode]
+        fingerprint = create_fingerprint(
+            data_path=csv_path,
+            command="backtest",
+            calibration_mode=mode.upper(),
+            start_year=start_year,
+            end_year=end_year,
+            training_seasons=config["training_window_seasons"],
+        )
+        fingerprints[mode] = fingerprint
+
+        # Determine output path for this mode
+        results_csv = output_path / f"backtest_{mode}_{start_year}-{end_year}.csv"
+
+        # Print fingerprint header
+        fingerprint.print_header()
+
+        # Print change detection (per-output tracking)
+        guard.print_change_detection(results_csv, fingerprint)
+        should_proceed, message = guard.check_output_exists(
+            results_csv, fingerprint, rebuild_history
+        )
+        if not should_proceed:
+            print(f"\n*** SKIPPING {mode.upper()} ***")
+            print(f"    {message}")
+            print(f"    Use --rebuild-history to force regeneration.")
+            modes_to_skip.append(mode)
+
+    # Remove skipped modes
+    modes = [m for m in modes if m not in modes_to_skip]
+
+    if not modes:
+        print("\n*** ALL MODES SKIPPED — no work to do ***")
+        return
+
+    # Load and normalize data (only if we have modes to process)
+    print(f"\n{'=' * 80}")
+    print("WALK-FORWARD BACKTEST WITH PUSH MODELING")
+    print("=" * 80)
+    print(f"Data: {csv_path}")
+    print(f"Years: {start_year}-{end_year}")
+    print("=" * 80)
+
+    raw_df = load_backtest_data(start_year, end_year, csv_path)
+    normalized_df = load_and_normalize_game_data(raw_df, jp_convention="pos_home_favored")
+    print(f"\nLoaded {len(normalized_df)} games total")
+
+    for mode in modes:
+        config = CALIBRATION_MODES[mode]
+        fingerprint = fingerprints[mode]
         print(f"\n{'=' * 60}")
         print(f"MODE: {config['label']}")
         print("=" * 60)
@@ -2030,12 +2114,15 @@ def run_backtest(
             include_push_modeling=True,
         )
 
-        # Filter to games with predictions
-        df = wf_result.game_results[
-            wf_result.game_results["p_cover_no_push"].notna() & ~wf_result.game_results["push"]
+        # Get all games with predictions (including pushes for counting)
+        all_games = wf_result.game_results[
+            wf_result.game_results["p_cover_no_push"].notna()
         ].copy()
 
-        print(f"\nGames with predictions: {len(df)}")
+        # Filter to non-push games for W-L calculations
+        df = all_games[~all_games["push"]].copy()
+
+        print(f"\nGames with predictions: {len(all_games)} ({len(df)} decided, {len(all_games) - len(df)} pushes)")
 
         # ----- Per-Year P&L with pushes -----
         print("\nPER-YEAR P&L (with push modeling):")
@@ -2044,49 +2131,50 @@ def run_backtest(
         print("-" * 70)
 
         yearly_results = []
-        for year in sorted(df["year"].unique()):
+        for year in sorted(all_games["year"].unique()):
+            year_all = all_games[all_games["year"] == year]
             year_df = df[df["year"] == year]
 
-            # Calculate W-L-P
-            # For backtest, we already have outcome data
-            wins = year_df["jp_side_covered"].sum()
-            n = len(year_df)
-            losses = n - wins
+            # Calculate W-L-P from actual data
+            wins = int(year_df["jp_side_covered"].sum())
+            n_decided = len(year_df)
+            losses = n_decided - wins
+            pushes = int(year_all["push"].sum())
 
-            # Pushes would be 0 here since we filtered them out
-            cover_rate = wins / n if n > 0 else 0
+            cover_rate = wins / n_decided if n_decided > 0 else 0
 
-            # ROI at -110
+            # ROI at -110 (pushes don't affect ROI calculation)
             roi = (cover_rate * (100 / 110) - (1 - cover_rate)) * 100
 
             # Avg EV
-            avg_ev = year_df["ev"].mean()
+            avg_ev = year_df["ev"].mean() if len(year_df) > 0 else 0
 
             yearly_results.append({
                 "year": year,
-                "n": n,
-                "wins": int(wins),
-                "losses": int(losses),
-                "pushes": 0,
+                "n": n_decided,
+                "wins": wins,
+                "losses": losses,
+                "pushes": pushes,
                 "cover_rate": cover_rate,
                 "roi": roi,
                 "avg_ev": avg_ev,
             })
 
-            wlp = f"{int(wins)}-{int(losses)}-0"
-            print(f"{year:>6} | {n:>6} | {wlp:>12} | {cover_rate*100:>7.1f}% | {roi:>+7.1f}% | {avg_ev:>+7.4f}")
+            wlp = f"{wins}-{losses}-{pushes}"
+            print(f"{year:>6} | {n_decided:>6} | {wlp:>12} | {cover_rate*100:>7.1f}% | {roi:>+7.1f}% | {avg_ev:>+7.4f}")
 
         print("-" * 70)
 
         # Totals
         total_wins = sum(r["wins"] for r in yearly_results)
         total_losses = sum(r["losses"] for r in yearly_results)
+        total_pushes = sum(r["pushes"] for r in yearly_results)
         total_n = sum(r["n"] for r in yearly_results)
         total_cover_rate = total_wins / total_n if total_n > 0 else 0
         total_roi = (total_cover_rate * (100 / 110) - (1 - total_cover_rate)) * 100
-        total_avg_ev = df["ev"].mean()
+        total_avg_ev = df["ev"].mean() if len(df) > 0 else 0
 
-        wlp = f"{total_wins}-{total_losses}-0"
+        wlp = f"{total_wins}-{total_losses}-{total_pushes}"
         print(f"{'TOTAL':>6} | {total_n:>6} | {wlp:>12} | {total_cover_rate*100:>7.1f}% | {total_roi:>+7.1f}% | {total_avg_ev:>+7.4f}")
         print("-" * 70)
 
@@ -2142,8 +2230,343 @@ def run_backtest(
         df.to_csv(results_csv, index=False)
         print(f"\nSaved results to: {results_csv}")
 
+        # ----- Verify determinism -----
+        is_deterministic, det_message = guard.verify_determinism(results_csv, fingerprint)
+        if is_deterministic:
+            print(f"  {det_message}")
+        else:
+            print(f"\n*** {det_message} ***")
+            # This is a critical error - identical inputs produced different outputs
+            raise RuntimeError(det_message)
+
+        # ----- Record run -----
+        guard.record_run(fingerprint, results_csv)
+        print(f"  Run recorded for reproducibility tracking")
+
+        # ----- Save calibration artifacts -----
+        if save_artifacts:
+            print(f"\n--- Saving calibration artifacts for {mode} ---")
+            artifact = create_artifact_from_walk_forward(
+                wf_result=wf_result,
+                mode=mode,
+                ats_export_path=csv_path,
+                description=artifact_description or f"Backtest {start_year}-{end_year}",
+            )
+
+            store = ArtifactStore()
+            artifact_path = store.save(artifact)
+            print(f"Saved artifact: {artifact.artifact_id}")
+            print(f"  Path: {artifact_path}")
+            print(f"  Data hash: {artifact.ats_export_hash}")
+            print(f"  Git commit: {artifact.git_commit or 'N/A'}")
+
+            if freeze_artifacts:
+                store.freeze(artifact.artifact_id)
+                print(f"  Status: FROZEN for production")
+            else:
+                print(f"  Status: Not frozen (use --freeze-artifacts to lock)")
+
+            # Log run metadata
+            run_log = RunLog()
+            run_metadata = RunMetadata(
+                timestamp=datetime.now().isoformat(),
+                command=f"backtest --csv {csv_path} --start-year {start_year} --end-year {end_year}",
+                calibration_mode=mode,
+                artifact_id=artifact.artifact_id,
+                years_range=(start_year, end_year),
+                ats_export_hash=artifact.ats_export_hash,
+                git_commit=artifact.git_commit,
+                frozen_mode=freeze_artifacts,
+                output_files=[str(results_csv), str(artifact_path)],
+                notes=artifact_description,
+            )
+            run_log.append(run_metadata)
+            print(f"  Run logged to: {run_log.log_path}")
+
     print("\n" + "=" * 80)
     print("BACKTEST COMPLETE")
+    print("=" * 80)
+
+
+def run_replay(
+    artifact_id: str | None,
+    mode: str,
+    year: int,
+    week: int | None,
+    csv_path: str,
+    verify_hash: bool,
+    output_dir: str | None,
+) -> None:
+    """Replay historical results using frozen calibration artifacts.
+
+    This provides deterministic reproduction of historical predictions
+    using the exact calibration parameters from a saved artifact.
+
+    Args:
+        artifact_id: Artifact ID to use (None = latest for mode)
+        mode: Calibration mode ("primary" or "ultra")
+        year: Year to replay
+        week: Specific week to replay (None = all weeks for year)
+        csv_path: Path to ATS export CSV
+        verify_hash: If True, verify data hash matches artifact
+        output_dir: Output directory for replay results
+    """
+    from .artifacts import (
+        ArtifactStore,
+        verify_data_integrity,
+        RunLog,
+        RunMetadata,
+        compute_file_hash,
+        get_git_commit_hash,
+    )
+    from datetime import datetime
+    import numpy as np
+
+    print(f"\n{'=' * 80}")
+    print("DETERMINISTIC REPLAY FROM FROZEN ARTIFACTS")
+    print("=" * 80)
+
+    # Load artifact
+    store = ArtifactStore()
+    if artifact_id:
+        artifact = store.load(artifact_id)
+    else:
+        artifact = store.load_latest(mode)
+        if artifact is None:
+            print(f"ERROR: No artifacts found for mode '{mode}'")
+            print("Run 'backtest --save-artifacts' first to create artifacts.")
+            return
+
+    print(f"Artifact: {artifact.artifact_id}")
+    print(f"Mode: {artifact.calibration_mode}")
+    print(f"Created: {artifact.created_at}")
+    print(f"Frozen: {'Yes' if artifact.frozen else 'No'}")
+    print(f"Data hash: {artifact.ats_export_hash[:16]}...")
+
+    # Verify data integrity
+    if verify_hash:
+        is_valid, message = verify_data_integrity(artifact, csv_path)
+        if not is_valid:
+            print(f"\nWARNING: {message}")
+            print("Results may differ from original due to data changes.")
+            print("Use --no-verify-hash to proceed anyway.")
+            return
+        else:
+            print(f"Data integrity: VERIFIED")
+
+    # Get fold calibration for the target year
+    fold_cal = artifact.get_fold_calibration(year)
+    if fold_cal is None:
+        print(f"\nERROR: No calibration found for year {year}")
+        print(f"Available years: {[fc.eval_year for fc in artifact.fold_calibrations]}")
+        return
+
+    # Get push rates for the target year
+    fold_push = artifact.get_fold_push_rates(year)
+
+    print(f"\n--- Calibration for {year} ---")
+    print(f"Slope: {fold_cal.slope:.6f}")
+    print(f"Intercept: {fold_cal.intercept:.6f}")
+    print(f"Breakeven edge: {fold_cal.breakeven_edge:.2f}")
+    print(f"P(cover) at edge=0: {fold_cal.p_cover_at_zero:.4f}")
+    print(f"Training years: {fold_cal.training_years}")
+    print(f"Training games: {fold_cal.n_train_games}")
+
+    # Load data
+    raw_df = load_backtest_data(year, year, csv_path)
+    normalized_df = load_and_normalize_game_data(raw_df, jp_convention="pos_home_favored")
+
+    # Filter to specific week if requested
+    if week is not None:
+        normalized_df = normalized_df[normalized_df["week"] == week].copy()
+        print(f"\nFiltered to week {week}: {len(normalized_df)} games")
+    else:
+        print(f"\nAll weeks for {year}: {len(normalized_df)} games")
+
+    if len(normalized_df) == 0:
+        print("No games found for the specified criteria.")
+        return
+
+    # Apply frozen calibration parameters
+    def compute_ev_frozen(row):
+        """Compute EV using frozen calibration parameters."""
+        edge_abs = row["edge_abs"]
+        logit = fold_cal.intercept + fold_cal.slope * edge_abs
+        p_cover = 1 / (1 + np.exp(-logit))
+
+        # Get push rate if available
+        push_rate = 0.0
+        if fold_push is not None:
+            vegas_spread = row.get("vegas_spread_close", row.get("vegas_spread", 0))
+            tick = int(abs(vegas_spread * 2)) if not np.isnan(vegas_spread) else 0
+            push_rate = fold_push.tick_rates.get(tick, fold_push.default_overall)
+
+        # Adjust for push
+        p_cover_adj = p_cover * (1 - push_rate)
+        p_lose = (1 - p_cover) * (1 - push_rate)
+
+        # EV at -110
+        ev = p_cover_adj * (100 / 110) - p_lose
+        return ev, p_cover, push_rate
+
+    # Compute EV for all games
+    results = []
+    for _, row in normalized_df.iterrows():
+        ev, p_cover, push_rate = compute_ev_frozen(row)
+
+        # Get jp_side from jp_favored_side or compute from edge_pts
+        jp_side = row.get("jp_favored_side", None)
+        if jp_side is None:
+            edge_pts = row["edge_pts"]
+            jp_side = "HOME" if edge_pts < 0 else "AWAY"
+
+        results.append({
+            "game_id": row["game_id"],
+            "year": row["year"],
+            "week": row["week"],
+            "home_team": row["home_team"],
+            "away_team": row["away_team"],
+            "jp_spread": row.get("jp_spread", -row.get("predicted_spread", 0)),
+            "vegas_spread": row.get("vegas_spread_close", row.get("vegas_spread", None)),
+            "edge_pts": row["edge_pts"],
+            "edge_abs": row["edge_abs"],
+            "jp_side": jp_side,
+            "p_cover": p_cover,
+            "push_rate": push_rate,
+            "ev": ev,
+            "fold_slope": fold_cal.slope,
+            "fold_intercept": fold_cal.intercept,
+            "artifact_id": artifact.artifact_id,
+        })
+
+    results_df = pd.DataFrame(results)
+
+    # Filter to EV >= 3% (Primary threshold)
+    ev_threshold = 0.03 if mode == "primary" else 0.05
+    selected = results_df[results_df["ev"] >= ev_threshold].copy()
+
+    print(f"\n--- Results (EV >= {ev_threshold*100:.0f}%) ---")
+    print(f"Total games: {len(results_df)}")
+    print(f"Selected: {len(selected)}")
+
+    if len(selected) > 0:
+        # Sort by EV descending
+        selected = selected.sort_values("ev", ascending=False)
+
+        print(f"\n{'#':<3} | {'Matchup':<35} | {'Edge':>6} | {'~EV':>8} | {'JP+ Line':<15} | {'Bet':<20}")
+        print("-" * 100)
+
+        for i, (_, row) in enumerate(selected.iterrows(), 1):
+            matchup = f"{row['away_team']} @ {row['home_team']}"
+            if len(matchup) > 35:
+                matchup = matchup[:32] + "..."
+
+            # Determine bet side and JP+ line
+            if row["jp_side"] == "HOME":
+                bet_team = row["home_team"]
+                jp_line = f"{bet_team} {row['jp_spread']:+.1f}"
+                vegas_spread = row["vegas_spread"] if pd.notna(row["vegas_spread"]) else 0
+                bet_line = f"{bet_team} {vegas_spread:+.1f}"
+            else:
+                bet_team = row["away_team"]
+                jp_line = f"{bet_team} {-row['jp_spread']:+.1f}"
+                vegas_spread = row["vegas_spread"] if pd.notna(row["vegas_spread"]) else 0
+                bet_line = f"{bet_team} {-vegas_spread:+.1f}"
+
+            print(f"{i:<3} | {matchup:<35} | {row['edge_abs']:>5.1f} | {row['ev']:>+7.2%} | {jp_line:<15} | {bet_line:<20}")
+
+        print("-" * 100)
+        print(f"Average EV: {selected['ev'].mean():+.2%}")
+
+    # Save results if output_dir specified
+    if output_dir:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        week_str = f"_week{week}" if week else ""
+        output_file = output_path / f"replay_{mode}_{year}{week_str}_{artifact.artifact_id}.csv"
+        results_df.to_csv(output_file, index=False)
+        print(f"\nSaved replay results to: {output_file}")
+
+    # Log replay run
+    run_log = RunLog()
+    run_metadata = RunMetadata(
+        timestamp=datetime.now().isoformat(),
+        command=f"replay --mode {mode} --year {year}" + (f" --week {week}" if week else ""),
+        calibration_mode=mode,
+        artifact_id=artifact.artifact_id,
+        years_range=(year, year),
+        ats_export_hash=compute_file_hash(csv_path),
+        git_commit=get_git_commit_hash(),
+        frozen_mode=artifact.frozen,
+        output_files=[str(output_file)] if output_dir else [],
+        notes=f"Replay of {year}" + (f" week {week}" if week else ""),
+    )
+    run_log.append(run_metadata)
+
+    print("\n" + "=" * 80)
+    print("REPLAY COMPLETE")
+    print("=" * 80)
+
+
+def run_list_artifacts(
+    mode: str | None,
+    verbose: bool = False,
+) -> None:
+    """List available calibration artifacts.
+
+    Args:
+        mode: Filter by calibration mode (None = all)
+        verbose: If True, show artifact details
+    """
+    from .artifacts import ArtifactStore
+
+    print(f"\n{'=' * 80}")
+    print("CALIBRATION ARTIFACTS")
+    print("=" * 80)
+
+    store = ArtifactStore()
+    artifact_ids = store.list_artifacts(mode)
+
+    if not artifact_ids:
+        print(f"No artifacts found" + (f" for mode '{mode}'" if mode else ""))
+        print("\nRun 'backtest --save-artifacts' to create artifacts.")
+        return
+
+    print(f"Found {len(artifact_ids)} artifact(s)")
+    print()
+
+    if verbose:
+        # Show full details for each artifact
+        for artifact_id in artifact_ids:
+            artifact = store.load(artifact_id)
+            print(f"{'=' * 60}")
+            print(f"Artifact ID: {artifact.artifact_id}")
+            print(f"Mode: {artifact.calibration_mode}")
+            print(f"Created: {artifact.created_at}")
+            print(f"Frozen: {'Yes' if artifact.frozen else 'No'}")
+            print(f"Years: {artifact.years_range[0]}-{artifact.years_range[1]}")
+            print(f"Data hash: {artifact.ats_export_hash[:16]}...")
+            print(f"Git commit: {artifact.git_commit or 'N/A'}")
+            if artifact.description:
+                print(f"Description: {artifact.description}")
+            print(f"\nFold calibrations:")
+            for fc in artifact.fold_calibrations:
+                print(f"  {fc.eval_year}: slope={fc.slope:.6f}, intercept={fc.intercept:.6f}, "
+                      f"breakeven={fc.breakeven_edge:.2f}, n={fc.n_train_games}")
+            print()
+    else:
+        # Summary table
+        print(f"{'ID':<30} | {'Mode':<8} | {'Years':<10} | {'Frozen':<7} | {'Created':<20}")
+        print("-" * 85)
+        for artifact_id in artifact_ids:
+            artifact = store.load(artifact_id)
+            years_str = f"{artifact.years_range[0]}-{artifact.years_range[1]}"
+            frozen_str = "Yes" if artifact.frozen else "No"
+            created_short = artifact.created_at[:19] if len(artifact.created_at) >= 19 else artifact.created_at
+            print(f"{artifact_id:<30} | {artifact.calibration_mode:<8} | {years_str:<10} | {frozen_str:<7} | {created_short:<20}")
+        print("-" * 85)
+
+    print("\nUse --verbose for full details")
     print("=" * 80)
 
 
@@ -2436,11 +2859,78 @@ Examples:
         help="Output directory for results"
     )
     backtest_parser.add_argument(
-        "--compare-modes", action="store_true", default=True,
+        "--compare-modes", action="store_true",
         help="Compare PRIMARY and ULTRA modes (default: True)"
+    )
+    backtest_parser.set_defaults(compare_modes=True)
+    backtest_parser.add_argument(
+        "--save-artifacts", action="store_true", default=False,
+        help="Save calibration artifacts for reproducibility"
+    )
+    backtest_parser.add_argument(
+        "--freeze-artifacts", action="store_true", default=False,
+        help="Mark saved artifacts as frozen for production use"
+    )
+    backtest_parser.add_argument(
+        "--artifact-description", type=str, default="",
+        help="Description to include in artifact metadata"
     )
     backtest_parser.add_argument(
         "--verbose", "-v", action="store_true", help="Verbose logging"
+    )
+    backtest_parser.add_argument(
+        "--rebuild-history", action="store_true", default=False,
+        help="Allow overwriting existing output files even if inputs are identical"
+    )
+
+    # Replay command - deterministic reproduction from artifacts
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="Replay historical results using frozen calibration artifacts"
+    )
+    replay_parser.add_argument(
+        "--artifact-id", type=str, default=None,
+        help="Artifact ID to use (default: latest for mode)"
+    )
+    replay_parser.add_argument(
+        "--mode", type=str, default="primary", choices=["primary", "ultra"],
+        help="Calibration mode (default: primary)"
+    )
+    replay_parser.add_argument(
+        "--year", type=int, required=True,
+        help="Year to replay"
+    )
+    replay_parser.add_argument(
+        "--week", type=int, default=None,
+        help="Specific week to replay (default: all weeks)"
+    )
+    replay_parser.add_argument(
+        "--csv", type=str, default="data/spread_selection/ats_export.csv",
+        help="Path to ATS export CSV"
+    )
+    replay_parser.add_argument(
+        "--verify-hash", action="store_true", default=True,
+        help="Verify data hash matches artifact (default: True)"
+    )
+    replay_parser.add_argument(
+        "--output-dir", type=str, default=None,
+        help="Output directory for replay results"
+    )
+    replay_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Verbose logging"
+    )
+
+    # List artifacts command
+    list_artifacts_parser = subparsers.add_parser(
+        "list-artifacts",
+        help="List available calibration artifacts"
+    )
+    list_artifacts_parser.add_argument(
+        "--mode", type=str, default=None, choices=["primary", "ultra"],
+        help="Filter by calibration mode"
+    )
+    list_artifacts_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show artifact details"
     )
 
     args = parser.parse_args()
@@ -2491,6 +2981,25 @@ Examples:
             end_year=args.end_year,
             output_dir=args.output_dir,
             compare_modes=args.compare_modes,
+            save_artifacts=args.save_artifacts,
+            freeze_artifacts=args.freeze_artifacts,
+            artifact_description=args.artifact_description,
+            rebuild_history=args.rebuild_history,
+        )
+    elif args.command == "replay":
+        run_replay(
+            artifact_id=args.artifact_id,
+            mode=args.mode,
+            year=args.year,
+            week=args.week,
+            csv_path=args.csv,
+            verify_hash=args.verify_hash,
+            output_dir=args.output_dir,
+        )
+    elif args.command == "list-artifacts":
+        run_list_artifacts(
+            mode=args.mode,
+            verbose=getattr(args, "verbose", False),
         )
     elif args.command == "predict":
         # Build SP+ gate config (applies to EV-based LIST A)
