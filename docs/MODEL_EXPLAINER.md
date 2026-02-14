@@ -507,19 +507,7 @@ Early-season is statistically distinct. With only preseason priors available, JP
 
 Phase 1 isn't unprofitable, but it's not where we have edge. The Core season — where efficiency data has accumulated — is where JP+ shines.
 
-### Phase 1 Risk Controls
-
-Given Phase 1's marginal EV, we have one key safeguard:
-
-#### Kill-Switch Protection
-
-Some seasons start catastrophically (2022 Week 1: 40% ATS). The kill-switch evaluates early results and protects against regime failure:
-
-- **Trigger:** If Week 1 ATS ≤ 40%, activate protection for Weeks 2-3
-- **Action:** Either disable Phase 1 bets entirely or raise threshold to 8+
-- **Backtest:** Triggered in 1 of 4 years (2022 only) — the one year it was needed
-
-This isn't about predicting which years will be bad. It's about **reacting quickly when the data tells you something is wrong**.
+**Phase 1 Guidance:** Bet cautiously at half stakes. The ~51% ATS is barely above breakeven, so position sizing matters more than selection.
 
 ### The Decision Matrix
 
@@ -529,7 +517,6 @@ This isn't about predicting which years will be bad. It's about **reacting quick
 | Core, closing line, 5+ edge | Bet (LSA mode) | ~55.1% |
 | Core, any line, 3-5 edge | Bet cautiously (Fixed) | ~52.9% |
 | Phase 1, 5+ edge | Bet cautiously (half stakes) | ~51% |
-| Phase 1, kill-switch triggered | **Pass** or raise threshold | Regime protection |
 | **Core** (Weeks 4-15) | Opening (4+ days) | Fixed mode, 5+ edge |
 | **Core** (Weeks 4-15) | Closing (<4 days) | Edge-aware (auto LSA for 5+ edge) |
 

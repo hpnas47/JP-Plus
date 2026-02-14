@@ -1260,36 +1260,6 @@ Phase 1 (Weeks 1-3) has distinct characteristics requiring separate handling:
 | 5+ Edge ATS (Close) | 51.1% | 55.1% | -4.0% |
 | Mean Signed Error | +0.90 | +0.46 | Home bias amplified |
 
-##### Kill-Switch Protection
-
-**Implementation:** `src/predictions/phase1_killswitch.py`
-
-Evaluates live betting results after Week 1 to detect regime failure:
-
-```python
-def evaluate_killswitch(week1_results: DataFrame, trigger_ats: float = 0.40) -> bool:
-    wins = (week1_results["ats_outcome"] == 1.0).sum()
-    losses = (week1_results["ats_outcome"] == 0.0).sum()
-    total = wins + losses
-
-    if total < 5:  # Minimum sample
-        return False
-
-    ats_pct = wins / total
-    return ats_pct <= trigger_ats  # Trigger if <= 40%
-```
-
-**Historical Trigger Analysis:**
-
-| Year | Week 1 ATS | Triggered | Action | Weeks 2-3 ATS (Baseline) | Weeks 2-3 ATS (With KS) |
-|------|------------|-----------|--------|--------------------------|-------------------------|
-| 2022 | 40.0% | ✓ | disable | 40.0% | N/A (no bets) |
-| 2023 | 81.8% | ✗ | — | 61.1% | 61.1% |
-| 2024 | 100.0% | ✗ | — | 71.4% | 71.4% |
-| 2025 | 52.9% | ✗ | — | 65.2% | 65.2% |
-
-The kill-switch activates only in genuinely problematic years, avoiding false positives that would reduce profitable volume.
-
 #### CLI Reference
 
 ```bash
@@ -1301,29 +1271,12 @@ python scripts/run_weekly.py --no-lsa
 
 # Custom timing threshold
 python scripts/run_weekly.py --lsa-threshold-days 3
-
-# Phase 1 SP+ Gate
-python scripts/run_weekly.py --sp-gate
-python scripts/run_weekly.py --sp-gate --sp-gate-mode veto_opposes
-python scripts/run_weekly.py --sp-gate --sp-gate-sp-edge 3.0 --sp-gate-jp-edge 6.0
-
-# Phase 1 Kill-Switch
-python scripts/run_weekly.py --killswitch
-python scripts/run_weekly.py --killswitch --killswitch-action raise_threshold
-python scripts/run_weekly.py --killswitch --killswitch-trigger-ats 0.35
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--no-lsa` | Off | Disable LSA, use Fixed for all predictions |
 | `--lsa-threshold-days` | 4 | Days before game to switch from Fixed to LSA |
-| `--sp-gate` | Off | Enable SP+ gating (Phase 1 only) |
-| `--sp-gate-mode` | `confirm_only` | Gating mode |
-| `--sp-gate-sp-edge` | 2.0 | Min SP+ edge for "confirms" |
-| `--sp-gate-jp-edge` | 5.0 | Min JP+ edge for candidates |
-| `--killswitch` | Off | Enable kill-switch (Phase 1 only) |
-| `--killswitch-action` | `disable_phase1_bets` | Action when triggered |
-| `--killswitch-trigger-ats` | 0.40 | Trigger threshold |
 
 #### Output Schema
 
