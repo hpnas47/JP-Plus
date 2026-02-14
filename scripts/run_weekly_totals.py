@@ -221,8 +221,21 @@ def print_recommendations(
     title: str,
     show_ev: bool = True,
     min_edge: float = 0.0,
+    results_df: Optional[pd.DataFrame] = None,
 ) -> int:
-    """Print formatted bet recommendations. Returns count of displayed bets."""
+    """Print formatted bet recommendations with vertical separators.
+
+    Format: # Matchup | JP+ Total | Edge | ~EV | Bet (Open) | Result
+
+    Args:
+        df: DataFrame with recommendations
+        title: Section title
+        show_ev: Whether to show EV column
+        min_edge: Minimum edge to display
+        results_df: Optional DataFrame with game results (must have 'id', 'home_points', 'away_points')
+
+    Returns count of displayed bets.
+    """
     if df.empty:
         print(f"\n{title}: No recommendations")
         return 0
@@ -231,7 +244,7 @@ def print_recommendations(
 
     # Filter by min edge
     if min_edge > 0:
-        df = df[df['edge_pts'].abs() >= min_edge]
+        df = df[df['edge_pts'].abs() >= min_edge].copy()
 
     if df.empty:
         print(f"\n{title}: No recommendations meeting {min_edge}+ edge threshold")
@@ -240,42 +253,82 @@ def print_recommendations(
     # Sort by EV descending
     df = df.sort_values('ev', ascending=False).reset_index(drop=True)
 
-    filtered_note = f" (showing {len(df)} of {total_count} with {min_edge}+ edge)" if min_edge > 0 and len(df) < total_count else ""
-    print(f"\n{'=' * 80}")
-    print(f"{title} ({len(df)} bets{filtered_note})")
-    print('=' * 80)
+    # Check if we have results
+    show_results = results_df is not None and not results_df.empty
 
-    # Build display table
-    rows = []
-    for i, r in df.iterrows():
+    # Build results lookup if available
+    results_lookup = {}
+    if show_results:
+        for _, row in results_df.iterrows():
+            game_id = str(row['id'])
+            home_pts = row.get('home_points')
+            away_pts = row.get('away_points')
+            if pd.notna(home_pts) and pd.notna(away_pts):
+                results_lookup[game_id] = int(home_pts) + int(away_pts)
+
+    # Calculate column widths
+    matchups = [format_matchup(r['away_team'], r['home_team']) for _, r in df.iterrows()]
+    max_matchup = max(len(m) for m in matchups)
+
+    # Column widths
+    w_num = 3
+    w_matchup = max(max_matchup, 25)
+    w_total = 9
+    w_edge = 6
+    w_ev = 7
+    w_bet = 12
+    w_result = 8
+
+    filtered_note = f" (showing {len(df)} of {total_count} with {min_edge}+ edge)" if min_edge > 0 and len(df) < total_count else ""
+    print(f"\n{'=' * 100}")
+    print(f"{title} ({len(df)} bets{filtered_note})")
+    print('=' * 100)
+
+    # Header
+    if show_ev:
+        if show_results:
+            header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_total}} | {'Edge':^{w_edge}} | {'~EV':^{w_ev}} | {'Bet (Open)':^{w_bet}} | {'Result':^{w_result}}"
+        else:
+            header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_total}} | {'Edge':^{w_edge}} | {'~EV':^{w_ev}} | {'Bet (Open)':^{w_bet}}"
+    else:
+        header = f"{'#':<{w_num}} {'Matchup':<{w_matchup}} | {'JP+ Total':^{w_total}} | {'Edge':^{w_edge}} | {'Bet (Open)':^{w_bet}}"
+
+    print(header)
+    print('-' * len(header))
+
+    # Rows
+    for i, (_, r) in enumerate(df.iterrows()):
         matchup = format_matchup(r['away_team'], r['home_team'])
         jp_total = f"{r['mu_used']:.1f}"
-        bet = format_bet(r['side'], r['line'])
         edge = f"+{abs(r['edge_pts']):.1f}"
         ev = f"+{r['ev']*100:.1f}%" if r['ev'] > 0 else f"{r['ev']*100:.1f}%"
-        stake = f"${r['stake']:.0f}" if r['stake'] > 0 else "-"
+        bet = f"{r['side']} {r['line']}"
+
+        # Result column
+        result = ""
+        if show_results:
+            event_id = str(r['event_id'])
+            if event_id in results_lookup:
+                actual_total = results_lookup[event_id]
+                line = r['line']
+                side = r['side']
+
+                if actual_total > line:
+                    result = "W ✓" if side == "OVER" else "L"
+                elif actual_total < line:
+                    result = "W ✓" if side == "UNDER" else "L"
+                else:
+                    result = "Push"
 
         if show_ev:
-            rows.append({
-                '#': i + 1,
-                'Matchup': matchup,
-                'JP+ Total': jp_total,
-                'Bet': bet,
-                'Edge': edge,
-                'EV': ev,
-                'Stake': stake,
-            })
+            if show_results:
+                row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_total}} | {edge:^{w_edge}} | {ev:^{w_ev}} | {bet:^{w_bet}} | {result:^{w_result}}"
+            else:
+                row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_total}} | {edge:^{w_edge}} | {ev:^{w_ev}} | {bet:^{w_bet}}"
         else:
-            rows.append({
-                '#': i + 1,
-                'Matchup': matchup,
-                'JP+ Total': jp_total,
-                'Bet': bet,
-                'Edge': edge,
-            })
+            row_str = f"{i+1:<{w_num}} {matchup:<{w_matchup}} | {jp_total:^{w_total}} | {edge:^{w_edge}} | {bet:^{w_bet}}"
 
-    display_df = pd.DataFrame(rows)
-    print(display_df.to_string(index=False))
+        print(row_str)
 
     return len(df)
 
@@ -355,6 +408,10 @@ def main():
         model, events, config, n_train_games=len(train_games)
     )
 
+    # Get results for this week (for historical data)
+    week_results = games_df[games_df['week'] == week].copy()
+    has_results = week_results['home_points'].notna().any()
+
     # Print results
     displayed_primary = 0
     displayed_edge5 = 0
@@ -363,14 +420,18 @@ def main():
         # Combine and show all
         all_df = pd.concat([primary_df, edge5_df], ignore_index=True)
         all_df = all_df.drop_duplicates(subset=['event_id', 'side'])
-        print_recommendations(all_df, "All Evaluated Games", show_ev=True, min_edge=0)
+        print_recommendations(
+            all_df, "All Evaluated Games", show_ev=True, min_edge=0,
+            results_df=week_results if has_results else None
+        )
     else:
         # Primary EV Engine
         displayed_primary = print_recommendations(
             primary_df,
             "PRIMARY EV ENGINE",
             show_ev=True,
-            min_edge=args.min_edge
+            min_edge=args.min_edge,
+            results_df=week_results if has_results else None
         )
 
         # 5+ Edge (diagnostic)
@@ -379,18 +440,58 @@ def main():
                 edge5_df,
                 "5+ EDGE (Below EV Cut)",
                 show_ev=False,
-                min_edge=max(args.min_edge, 5.0)
+                min_edge=max(args.min_edge, 5.0),
+                results_df=week_results if has_results else None
             )
 
     # Summary stats
-    print("\n" + "-" * 80)
+    print("\n" + "-" * 100)
     print("Summary")
-    print("-" * 80)
+    print("-" * 100)
     print(f"  Games evaluated: {len(events)}")
     print(f"  Total qualifying bets: {len(primary_df)} Primary, {len(edge5_df)} 5+ Edge")
     if args.min_edge > 0:
         print(f"  Displayed ({args.min_edge}+ edge): {displayed_primary} Primary, {displayed_edge5} 5+ Edge")
     print(f"  Config: sigma={args.sigma}, ev_min={args.ev_min * 100:.0f}%, bankroll=${args.bankroll:.0f}")
+
+    # Record summary for historical data
+    if has_results and len(primary_df) > 0:
+        # Build results lookup from week_results
+        results_lookup = {}
+        for _, row in week_results.iterrows():
+            game_id = str(row['id'])
+            home_pts = row.get('home_points')
+            away_pts = row.get('away_points')
+            if pd.notna(home_pts) and pd.notna(away_pts):
+                results_lookup[game_id] = int(home_pts) + int(away_pts)
+
+        wins = 0
+        losses = 0
+        pushes = 0
+        for _, r in primary_df.iterrows():
+            event_id = str(r['event_id'])
+            if event_id in results_lookup:
+                actual_total = results_lookup[event_id]
+                line = r['line']
+                side = r['side']
+                if actual_total > line:
+                    if side == "OVER":
+                        wins += 1
+                    else:
+                        losses += 1
+                elif actual_total < line:
+                    if side == "UNDER":
+                        wins += 1
+                    else:
+                        losses += 1
+                else:
+                    pushes += 1
+
+        total = wins + losses
+        if total > 0:
+            pct = wins / total * 100
+            push_str = f", {pushes} Push" if pushes > 0 else ""
+            print(f"\n  RECORD: {wins}-{losses}{push_str} ({pct:.1f}%)")
 
     # Export if requested
     if args.export:
