@@ -1260,45 +1260,6 @@ Phase 1 (Weeks 1-3) has distinct characteristics requiring separate handling:
 | 5+ Edge ATS (Close) | 51.1% | 55.1% | -4.0% |
 | Mean Signed Error | +0.90 | +0.46 | Home bias amplified |
 
-##### SP+ Agreement Gate
-
-**Implementation:** `src/predictions/sp_gate.py`
-
-Fetches SP+ pregame predictions from CFBD API and categorizes agreement:
-
-```python
-def categorize_sp_agreement(jp_edge: float, sp_edge: float, threshold: float) -> str:
-    jp_side = sign(jp_edge)  # -1 = home, +1 = away
-    sp_side = sign(sp_edge)
-
-    if jp_side == sp_side:
-        if abs(sp_edge) >= threshold:
-            return "confirms"   # Same side, strong SP+ edge
-        else:
-            return "neutral"    # Same side, weak SP+ edge
-    else:
-        return "opposes"        # Opposite sides
-```
-
-**Threshold Optimization (Phase 1, 2022-2025):**
-
-| SP+ Edge Min | Confirms N | Confirms ATS | Retention |
-|--------------|------------|--------------|-----------|
-| 1.0 pts | 203 | 57.1% | 29.8% |
-| **2.0 pts** | **127** | **60.0%** | **18.7%** |
-| 3.0 pts | 84 | 58.3% | 12.4% |
-| 4.0 pts | 52 | 55.8% | 7.6% |
-
-The 2.0 threshold maximizes ATS while retaining meaningful volume.
-
-**Gating Modes:**
-
-| Mode | Logic | Retention | ATS |
-|------|-------|-----------|-----|
-| `confirm_only` | Keep only "confirms" | 18.7% | 60.0% |
-| `veto_opposes` | Reject "opposes", keep rest | 67.0% | 52.2% |
-| `confirm_or_neutral` | Same as veto_opposes | 67.0% | 52.2% |
-
 ##### Kill-Switch Protection
 
 **Implementation:** `src/predictions/phase1_killswitch.py`

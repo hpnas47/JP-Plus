@@ -509,19 +509,7 @@ Phase 1 isn't unprofitable, but it's not where we have edge. The Core season —
 
 ### Phase 1 Risk Controls
 
-Given Phase 1's marginal EV, we built two optional safeguards:
-
-#### SP+ Agreement Gate
-
-Cross-referencing with SP+ (Bill Connelly's model) dramatically improves Phase 1 precision:
-
-| SP+ Agreement | N | ATS % | Expected Value |
-|---------------|---|-------|----------------|
-| **Confirms** (both models agree, SP+ edge ≥2) | 127 | **60.0%** | **+7.6% over vig** |
-| Neutral (same side, weak SP+ edge) | 412 | 51.2% | ~Breakeven |
-| **Opposes** (models disagree) | 185 | **46.7%** | **-5.7% (losing)** |
-
-When JP+ and SP+ both see the same edge, win rate jumps to 60%. When they disagree, we're literally losing money. The gate filters accordingly.
+Given Phase 1's marginal EV, we have one key safeguard:
 
 #### Kill-Switch Protection
 
@@ -540,8 +528,7 @@ This isn't about predicting which years will be bad. It's about **reacting quick
 | Core, opening line, 5+ edge | Bet (Fixed mode) | ~56.5% |
 | Core, closing line, 5+ edge | Bet (LSA mode) | ~55.1% |
 | Core, any line, 3-5 edge | Bet cautiously (Fixed) | ~52.9% |
-| Phase 1, SP+ confirms | Bet selectively | ~60.0% |
-| Phase 1, SP+ opposes | **Pass** | ~46.7% |
+| Phase 1, 5+ edge | Bet cautiously (half stakes) | ~51% |
 | Phase 1, kill-switch triggered | **Pass** or raise threshold | Regime protection |
 | **Core** (Weeks 4-15) | Opening (4+ days) | Fixed mode, 5+ edge |
 | **Core** (Weeks 4-15) | Closing (<4 days) | Edge-aware (auto LSA for 5+ edge) |
