@@ -551,10 +551,19 @@ This isn't about predicting which years will be bad. It's about **reacting quick
 The edge framework above is implemented in a production system that:
 
 1. **Calculates calibrated EV** — Converts edge to cover probability using walk-forward logistic regression, then computes expected value at -110 odds
-2. **Applies selection policies** — The `balanced` preset takes the top 3 bets by EV each week (minimum 1% EV floor)
-3. **Routes by phase** — Phase 1 (weeks 1-3) uses stricter constraints and half stakes; Phase 2 (weeks 4-15) uses full stakes
+2. **Applies selection policies** — Phase-aware policy selection (see below)
+3. **Routes by phase** — Different constraints for weeks 1-3 vs 4-15
 4. **Logs recommendations** — CSV logging with deduplication for tracking and settlement
 5. **Settles results** — Post-game settlement updates with actual margins and P/L
+
+**Phase-Aware Selection:**
+
+| Phase | Weeks | Policy | EV Floor | Stake | Note |
+|-------|-------|--------|----------|-------|------|
+| **Phase 1** | 1-3 | All above threshold | 2% | 0.5x | ⚠️ Calibration less reliable |
+| **Phase 2** | 4-15 | Top 3 by EV | 1% | 1.0x | Primary betting phase |
+
+Phase 1 takes ALL bets above 2% EV at half stakes — no arbitrary cap. This is more principled than picking 2 bets when 5 qualify.
 
 **Two Output Lists:**
 - **List A (Primary):** EV-qualified bets meeting selection policy — these are the actionable recommendations

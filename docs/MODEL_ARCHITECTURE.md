@@ -1408,13 +1408,18 @@ The production spread betting system converts JP+ predictions into actionable be
 
 The system uses different configurations for different parts of the season:
 
-| Phase | Weeks | Calibration | Constraints | Stake |
-|-------|-------|-------------|-------------|-------|
-| **Phase 1** | 1-3 | `weighted` | top_n=2, ev_floor=2%, max=2 | 0.5x |
-| **Phase 2** | 4-15 | `phase2_only` | top_n=3, ev_floor=1%, max=3 | 1.0x |
-| **Phase 3** | 16+ | `phase2_only` | top_n=3, ev_floor=1%, max=3 | 1.0x |
+| Phase | Weeks | Calibration | Policy | ev_floor | Stake | Note |
+|-------|-------|-------------|--------|----------|-------|------|
+| **Phase 1** | 1-3 | `weighted` | EV_THRESHOLD | 2% | 0.5x | ⚠️ Calibration less reliable |
+| **Phase 2** | 4-15 | `phase2_only` | TOP_N (n=3) | 1% | 1.0x | Primary betting phase |
+| **Phase 3** | 16+ | `phase2_only` | TOP_N (n=3) | 1% | 1.0x | Postseason |
 
-**Phase 1 Rationale:** Early-season predictions rely heavily on priors with higher variance. Conservative constraints (stricter EV floor, fewer bets, half stakes) protect against calibration uncertainty.
+**Phase 1 Rationale:** Early-season predictions rely heavily on priors (51.1% ATS at 5+ edge vs 55.1% in Core). The system uses:
+- **EV_THRESHOLD policy** — Takes ALL bets above 2% EV (no arbitrary cap)
+- **Higher EV floor (2%)** — Only highest-conviction plays
+- **Half stakes (0.5x)** — Reduced exposure during uncertain period
+
+This approach is more principled than an arbitrary bet cap: if 5 games have legitimate 3%+ EV, bet them all at half stakes rather than picking 2 arbitrarily.
 
 #### Selection Policy Presets
 

@@ -131,14 +131,18 @@ class TestPhaseConfig:
         assert config_skip.calibration_name == "phase2_only"
 
     def test_phase1_conservative_constraints(self):
-        """Phase 1 should have stricter constraints than Phase 2."""
+        """Phase 1 uses EV_THRESHOLD with higher ev_floor than Phase 2."""
         phase1 = get_phase_config(week=2, phase1_policy="weighted")
         phase2 = get_phase_config(week=10)
 
-        # Phase 1 should have stricter constraints
-        assert phase1.top_n_per_week <= phase2.top_n_per_week
+        # Phase 1 uses EV_THRESHOLD (takes ALL above threshold, no cap)
+        assert phase1.selection_policy == "EV_THRESHOLD"
+        # Phase 2 uses TOP_N_PER_WEEK (takes top N)
+        assert phase2.selection_policy == "TOP_N_PER_WEEK"
+        # Phase 1 has stricter EV floor (2% vs 1%)
         assert phase1.ev_floor >= phase2.ev_floor
-        assert phase1.max_bets_per_week <= phase2.max_bets_per_week
+        # Phase 1 uses half stakes (calibration less reliable)
+        assert phase1.stake_multiplier < phase2.stake_multiplier
 
     def test_phase1_stake_multiplier_applied(self):
         """Phase 1 stake multiplier should reduce stakes."""
@@ -250,20 +254,22 @@ class TestPhase1Weighted:
         # we should have positive EV
         assert phase_config.calibration_name == "weighted"
 
-    def test_phase1_uses_stricter_constraints(self):
-        """Week 2 uses stricter selection constraints than week 10."""
+    def test_phase1_uses_ev_threshold_policy(self):
+        """Week 2 uses EV_THRESHOLD policy (all above 2%) vs TOP_N in Phase 2."""
         phase1_config = get_phase_config(week=2, phase1_policy="weighted")
         phase2_config = get_phase_config(week=10)
 
-        # Phase 1 conservative defaults
-        assert phase1_config.top_n_per_week == 2
+        # Phase 1: EV_THRESHOLD with 2% floor, half stakes
+        assert phase1_config.selection_policy == "EV_THRESHOLD"
         assert phase1_config.ev_floor == 0.02
-        assert phase1_config.max_bets_per_week == 2
+        assert phase1_config.stake_multiplier == 0.5
 
-        # Phase 2 balanced defaults
+        # Phase 2: TOP_N_PER_WEEK with 1% floor, full stakes
+        assert phase2_config.selection_policy == "TOP_N_PER_WEEK"
         assert phase2_config.top_n_per_week == 3
         assert phase2_config.ev_floor == 0.01
         assert phase2_config.max_bets_per_week == 3
+        assert phase2_config.stake_multiplier == 1.0
 
 
 class TestDeduplication:

@@ -130,6 +130,7 @@ class PhaseConfig:
         ev_floor: Override for EV floor
         max_bets_per_week: Override for max bets per week
         stake_multiplier: Multiplier for stake (1.0 = full, 0.5 = half)
+        selection_policy: Selection policy to use (EV_THRESHOLD or TOP_N_PER_WEEK)
     """
     phase: int
     calibration_name: str
@@ -137,16 +138,19 @@ class PhaseConfig:
     ev_floor: float
     max_bets_per_week: int
     stake_multiplier: float
+    selection_policy: str = "TOP_N_PER_WEEK"  # Default to TOP_N
 
 
-# Phase 1 Conservative Constraints (stricter than balanced preset)
+# Phase 1: EV_THRESHOLD policy (take ALL bets above 2% EV, no cap)
+# Note: Calibration less reliable in weeks 1-3, so 0.5x stake
 PHASE1_CONSERVATIVE_CONFIG = PhaseConfig(
     phase=1,
     calibration_name="weighted",
-    top_n_per_week=2,
-    ev_floor=0.02,  # 2% EV floor (vs 1% in balanced)
-    max_bets_per_week=2,  # 2 max (vs 3 in balanced)
-    stake_multiplier=0.5,  # 50% stake
+    top_n_per_week=99,  # Not used with EV_THRESHOLD
+    ev_floor=0.02,  # 2% EV floor (stricter than Phase 2)
+    max_bets_per_week=99,  # No cap with EV_THRESHOLD
+    stake_multiplier=0.5,  # 50% stake (calibration less reliable)
+    selection_policy="EV_THRESHOLD",  # Take ALL above threshold
 )
 
 # Phase 2 Default Config (uses balanced preset)
@@ -157,6 +161,7 @@ PHASE2_DEFAULT_CONFIG = PhaseConfig(
     ev_floor=0.01,
     max_bets_per_week=3,
     stake_multiplier=1.0,  # Full stake
+    selection_policy="TOP_N_PER_WEEK",
 )
 
 # Phase 3 (Postseason) - same as Phase 2
@@ -167,6 +172,7 @@ PHASE3_DEFAULT_CONFIG = PhaseConfig(
     ev_floor=0.01,
     max_bets_per_week=3,
     stake_multiplier=1.0,
+    selection_policy="TOP_N_PER_WEEK",
 )
 
 
@@ -198,9 +204,10 @@ def get_phase_config(
                 ev_floor=1.0,  # Effectively filter everything
                 max_bets_per_week=1,  # Minimum valid
                 stake_multiplier=0.0,
+                selection_policy="EV_THRESHOLD",
             )
         else:
-            # weighted or phase1_only mode: use conservative constraints
+            # weighted or phase1_only mode: use EV_THRESHOLD (take all above 2%)
             return PhaseConfig(
                 phase=1,
                 calibration_name=phase1_policy,
@@ -208,6 +215,7 @@ def get_phase_config(
                 ev_floor=PHASE1_CONSERVATIVE_CONFIG.ev_floor,
                 max_bets_per_week=PHASE1_CONSERVATIVE_CONFIG.max_bets_per_week,
                 stake_multiplier=phase1_stake_multiplier,
+                selection_policy=PHASE1_CONSERVATIVE_CONFIG.selection_policy,
             )
     elif week <= PHASE2_WEEKS[1]:
         # Phase 2 (weeks 4-15)
@@ -671,9 +679,9 @@ def generate_recommendations(
         return [], [], {"error": "No data available"}
 
     # Create phase-adjusted selection config
-    # Phase 1 uses stricter constraints from phase_config
+    # Phase 1 uses EV_THRESHOLD (all above 2%), Phase 2 uses TOP_N_PER_WEEK
     phase_adjusted_config = SelectionPolicyConfig(
-        selection_policy=config.selection_policy,
+        selection_policy=phase_config.selection_policy,  # Use phase policy
         ev_min=config.ev_min,
         ev_floor=phase_config.ev_floor,  # Use phase ev_floor
         top_n_per_week=phase_config.top_n_per_week,  # Use phase top_n
