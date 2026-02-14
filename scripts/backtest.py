@@ -777,18 +777,24 @@ def walk_forward_predict(
             if len(week_st) > 0:
                 st_by_week_pd[week] = optimize_dtypes(week_st.to_pandas())
 
-    for pred_week in range(start_week, max_week + 1):
-        # Training data: concat pre-converted week slices for weeks < pred_week
-        # Week-keyed dict guarantees no future data inclusion (walk-forward safe)
-        train_plays_pd = pd.concat(
-            [plays_by_week_pd[w] for w in range(1, pred_week) if w in plays_by_week_pd],
-            ignore_index=True
-        ) if any(w in plays_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
+    # P3.4: Initialize running training DataFrames for incremental concat
+    # This reduces O(weeks^2) copying to O(weeks) by appending only new week data each iteration
+    train_plays_pd = pd.DataFrame()
+    train_games_pd = pd.DataFrame()
+    train_st_pd = pd.DataFrame()
+    last_appended_week = 0  # Track which weeks have been added
 
-        train_games_pd = pd.concat(
-            [games_by_week_pd[w] for w in range(1, pred_week) if w in games_by_week_pd],
-            ignore_index=True
-        ) if any(w in games_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
+    for pred_week in range(start_week, max_week + 1):
+        # Incrementally append new weeks' data (only weeks not yet added)
+        # Week-keyed dict guarantees no future data inclusion (walk-forward safe)
+        for w in range(last_appended_week + 1, pred_week):
+            if w in plays_by_week_pd:
+                train_plays_pd = pd.concat([train_plays_pd, plays_by_week_pd[w]], ignore_index=True)
+            if w in games_by_week_pd:
+                train_games_pd = pd.concat([train_games_pd, games_by_week_pd[w]], ignore_index=True)
+            if w in st_by_week_pd:
+                train_st_pd = pd.concat([train_st_pd, st_by_week_pd[w]], ignore_index=True)
+        last_appended_week = pred_week - 1
 
         # P1.1 FIX: Explicit walk-forward chronology assertion
         # Validates no future data leaked into training set
@@ -909,22 +915,17 @@ def walk_forward_predict(
         rankings = {team: rank + 1 for rank, (team, _) in enumerate(sorted_teams)}
 
         # Calculate FG efficiency ratings from FG plays
+        # train_st_pd is built incrementally in the loop above (P3.4)
         special_teams = SpecialTeamsModel()
-        if st_by_week_pd:
-            # P3.3: Concat pre-converted ST week slices (walk-forward safe via week-keyed dict)
-            train_st_pd = pd.concat(
-                [st_by_week_pd[w] for w in range(1, pred_week) if w in st_by_week_pd],
-                ignore_index=True
-            ) if any(w in st_by_week_pd for w in range(1, pred_week)) else pd.DataFrame()
-            if len(train_st_pd) > 0:
-                # Calculate all ST ratings (FG + Punt + Kickoff)
-                special_teams.calculate_all_st_ratings_from_plays(
-                    train_st_pd, max_week=pred_week - 1
-                )
-                # Integrate special teams ratings into EFM for O/D/ST breakdown (diagnostic only)
-                if not use_pure_priors:
-                    for team, st_rating in special_teams.team_ratings.items():
-                        efm.set_special_teams_rating(team, st_rating.overall_rating)
+        if st_by_week_pd and len(train_st_pd) > 0:
+            # Calculate all ST ratings (FG + Punt + Kickoff)
+            special_teams.calculate_all_st_ratings_from_plays(
+                train_st_pd, max_week=pred_week - 1
+            )
+            # Integrate special teams ratings into EFM for O/D/ST breakdown (diagnostic only)
+            if not use_pure_priors:
+                for team, st_rating in special_teams.team_ratings.items():
+                    efm.set_special_teams_rating(team, st_rating.overall_rating)
 
         # Update FCS estimator with games from prior weeks (walk-forward safe)
         # Only update if we have an estimator and not using static mode
@@ -1214,87 +1215,8 @@ def calculate_ats_results(
     return df
 
 
-def assemble_spread(
-    base_margin: float,
-    home_field_raw: float,
-    situational: float,
-    travel: float,
-    altitude: float,
-    special_teams_raw: float,
-    fcs_adj: float,
-    pace_adj: float,
-    qb_adj: float,
-    env_score: float,
-    st_cap: Optional[float] = 2.5,
-    hfa_offset: float = 0.50,
-) -> float:
-    """Assemble spread from raw components with given caps/offsets.
-
-    This is a pure function for dual-cap mode: given raw component values,
-    reassemble the spread with different ST cap and HFA offset parameters.
-
-    Args:
-        base_margin: EFM ratings differential (home - away)
-        home_field_raw: Raw HFA before global offset
-        situational: Situational adjustment (bye weeks, letdown, etc.)
-        travel: Travel penalty (already smoothed via aggregator)
-        altitude: Altitude penalty (already smoothed via aggregator)
-        special_teams_raw: Raw ST differential before cap
-        fcs_adj: FCS team penalty
-        pace_adj: Triple-option pace compression
-        qb_adj: QB injury adjustment
-        env_score: Full environmental score from aggregator
-        st_cap: Cap on ST differential (None or 0 = no cap)
-        hfa_offset: Points subtracted from raw HFA (global offset)
-
-    Returns:
-        Assembled spread (positive = home favored)
-    """
-    # Apply HFA offset (with floor at 0.5)
-    hfa = max(0.5, home_field_raw - hfa_offset) if home_field_raw > 0 else 0.0
-
-    # Apply ST cap
-    if st_cap and st_cap > 0:
-        st = max(-st_cap, min(st_cap, special_teams_raw))
-    else:
-        st = special_teams_raw
-
-    # Reassemble spread
-    # Note: env_score includes HFA + travel + altitude (already smoothed)
-    # We need to compute the delta from using different HFA offset
-    # The original spread used: env_score (which includes smoothed HFA from home_field_raw - offset)
-    # For reassembly, we substitute the new HFA value
-    #
-    # Original spread = base_margin + env_score + situational + st + fcs + pace + qb
-    # where env_score = smoothed(hfa + travel + altitude) + rest + consec
-    #
-    # For dual-cap, we can't perfectly reconstruct the smoothing without the aggregator,
-    # so we use a simpler approach: just adjust the HFA and ST components relative to
-    # what was already in the spread.
-    #
-    # Actually, the cleanest approach: since we store all components, we rebuild from scratch
-    # But we need the smoothing factor from aggregator... which we don't have.
-    #
-    # Simpler: the spread is already computed with the original cap/offset.
-    # For dual-cap reassembly, we need to store the original predicted_spread and adjust it.
-    #
-    # Delta approach:
-    # new_spread = original_spread - old_st + new_st - old_hfa + new_hfa
-    #
-    # This function is called from vectorized code, so we need a different approach.
-    # Let's just compute a simple sum (ignoring smoothing for now, as it's a minor effect):
-
-    return (
-        base_margin
-        + hfa
-        + situational
-        + travel
-        + altitude
-        + st
-        + fcs_adj
-        + pace_adj
-        + qb_adj
-    )
+# Module-level flag for one-time smoothing approximation warning
+_smoothing_warning_emitted = False
 
 
 def assemble_spread_vectorized(
@@ -1323,6 +1245,15 @@ def assemble_spread_vectorized(
     Returns:
         Array of reassembled spreads
     """
+    global _smoothing_warning_emitted
+    if not _smoothing_warning_emitted:
+        logger.info(
+            "assemble_spread_vectorized: HFA delta is approximate because the "
+            "environmental aggregator's smoothing cannot be reconstructed from "
+            "stored components. Dual-cap sweep results may have minor inaccuracies."
+        )
+        _smoothing_warning_emitted = True
+
     # Get raw and original values
     st_raw = pred_df["special_teams_raw"].values
     st_original = pred_df["special_teams"].values
@@ -2398,6 +2329,7 @@ def fetch_week_data_delta(
                 selected_line = game_lines.lines[0] if game_lines.lines else None
 
             if selected_line and selected_line.spread is not None:
+                ou_open = getattr(selected_line, 'over_under_open', None)
                 betting.append({
                     "game_id": game_lines.id,
                     "home_team": game_lines.home_team,
@@ -2405,6 +2337,7 @@ def fetch_week_data_delta(
                     "spread_close": selected_line.spread,
                     "spread_open": selected_line.spread_open if selected_line.spread_open is not None else selected_line.spread,
                     "over_under": selected_line.over_under,
+                    "over_under_open": ou_open if ou_open is not None else selected_line.over_under,
                     "provider": selected_line.provider,
                 })
     except Exception as e:
@@ -3228,6 +3161,15 @@ def run_backtest(
     Returns:
         Dictionary with backtest results
     """
+    # Validate EFM component weights sum to 1.0
+    weight_sum = efficiency_weight + explosiveness_weight + turnover_weight
+    if abs(weight_sum - 1.0) >= 0.01:
+        raise ValueError(
+            f"EFM component weights must sum to 1.0 (within 0.01 tolerance). "
+            f"Got: efficiency={efficiency_weight}, explosiveness={explosiveness_weight}, "
+            f"turnover={turnover_weight}, sum={weight_sum:.4f}"
+        )
+
     # Optionally clear ridge adjustment cache at start of backtest
     # This ensures deterministic results across runs while enabling
     # within-run caching for repeated (season, week, metric) lookups
@@ -4066,7 +4008,6 @@ def main():
     parser.add_argument(
         "--qb-continuous",
         action="store_true",
-        default=True,
         help="Enable continuous QB rating system. Default: ENABLED",
     )
     parser.add_argument(
@@ -4106,7 +4047,6 @@ def main():
     parser.add_argument(
         "--qb-phase1-only",
         action="store_true",
-        default=True,
         help="Only apply QB adjustment for weeks 1-3 (skip Core weeks 4+). Default: ENABLED",
     )
     parser.add_argument(
@@ -4114,6 +4054,10 @@ def main():
         action="store_true",
         help="Apply QB adjustment for ALL weeks (not just Phase 1). Warning: may degrade Core ATS.",
     )
+
+    # Set default values for boolean flags that should default to True
+    # This is the standard argparse pattern: use set_defaults after argument definition
+    parser.set_defaults(qb_continuous=True, qb_phase1_only=True)
     parser.add_argument(
         "--qb-fix-misattribution",
         action="store_true",
