@@ -103,9 +103,7 @@ def show_totals_bets(year: int, week: int):
     print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
 
     for i, (_, row) in enumerate(primary.iterrows(), 1):
-        away_abbr = get_abbrev(row['away_team'])
-        home_abbr = get_abbrev(row['home_team'])
-        matchup = f"{away_abbr} @ {home_abbr}"
+        matchup = f"{row['away_team']} @ {row['home_team']}"
         jp_total = f"{row['adjusted_total']:.1f}"
         vegas_total = f"{row['vegas_total_open']:.1f}"
         side = row['play']
@@ -135,9 +133,7 @@ def show_totals_bets(year: int, week: int):
         print("|---|---------|-----------|--------------|------|------|-------|--------|")
 
         for i, (_, row) in enumerate(edge5.iterrows(), 1):
-            away_abbr = get_abbrev(row['away_team'])
-            home_abbr = get_abbrev(row['home_team'])
-            matchup = f"{away_abbr} @ {home_abbr}"
+            matchup = f"{row['away_team']} @ {row['home_team']}"
             jp_total = f"{row['adjusted_total']:.1f}"
             vegas_total = f"{row['vegas_total_open']:.1f}"
             side = row['play']
