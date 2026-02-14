@@ -1205,3 +1205,199 @@ def print_stratified_diagnostics(diag: dict) -> None:
         print("-" * 70)
 
     print("=" * 80)
+
+
+# =============================================================================
+# CALIBRATION ARTIFACT LOADING
+# =============================================================================
+
+def load_spread_calibration_from_artifact(
+    artifact_path,
+) -> CalibrationResult:
+    """Load a spread calibration from a JSON artifact file.
+
+    Args:
+        artifact_path: Path to JSON artifact file
+
+    Returns:
+        CalibrationResult with loaded parameters
+
+    Example:
+        >>> cal = load_spread_calibration_from_artifact(
+        ...     "data/spread_selection/artifacts/spread_ev_calibration_phase2_only_2022_2025.json"
+        ... )
+        >>> print(cal.implied_breakeven_edge)  # Should be ~5.3 pts
+    """
+    from pathlib import Path
+    import json
+
+    path = Path(artifact_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Calibration artifact not found: {artifact_path}")
+
+    with open(path, 'r') as f:
+        data = json.load(f)
+
+    # Extract parameters
+    params = data.get('parameters', {})
+    metadata = data.get('metadata', {})
+
+    return CalibrationResult(
+        intercept=params.get('intercept', 0.0),
+        slope=params.get('slope', 0.0),
+        n_games=metadata.get('n_games', 0),
+        years_trained=metadata.get('years_trained', []),
+        implied_breakeven_edge=metadata.get('breakeven_edge_at_110', float('inf')),
+        implied_5pt_pcover=metadata.get('p_cover_at_5pt', 0.5),
+        p_cover_at_zero=metadata.get('p_cover_at_zero', 0.5),
+    )
+
+
+def get_default_spread_calibration(
+    phase: str = "phase2",
+    artifact_dir: str = "data/spread_selection/artifacts",
+) -> CalibrationResult:
+    """Get default spread calibration for production use.
+
+    Args:
+        phase: Which calibration to use:
+            - "phase2": Weeks 4-15 calibration (recommended for Core Phase)
+            - "weighted": Full season with Phase 1 downweighted
+            - "phase1": Weeks 1-3 only (not recommended)
+            - "full": Full season baseline (not recommended)
+        artifact_dir: Directory containing calibration artifacts
+
+    Returns:
+        CalibrationResult for the requested phase
+
+    Example:
+        >>> cal = get_default_spread_calibration("phase2")
+        >>> print(cal.implied_breakeven_edge)  # ~5.3 pts
+    """
+    from pathlib import Path
+
+    phase_to_file = {
+        "phase2": "spread_ev_calibration_phase2_only_2022_2025.json",
+        "weighted": "spread_ev_calibration_weighted_2022_2025.json",
+        "phase1": "spread_ev_calibration_phase1_only_2022_2025.json",
+        "full": "spread_ev_calibration_full_season_2022_2025.json",
+    }
+
+    if phase not in phase_to_file:
+        raise ValueError(f"Unknown phase '{phase}'. Choose from: {list(phase_to_file.keys())}")
+
+    artifact_path = Path(artifact_dir) / phase_to_file[phase]
+
+    if not artifact_path.exists():
+        raise FileNotFoundError(
+            f"Calibration artifact not found: {artifact_path}. "
+            "Run scripts/rebuild_spread_calibration.py to generate artifacts."
+        )
+
+    return load_spread_calibration_from_artifact(artifact_path)
+
+
+# =============================================================================
+# PHASE-AWARE ROUTING (Production)
+# =============================================================================
+
+# Phase week boundaries
+PHASE1_WEEKS = (1, 3)
+PHASE2_WEEKS = (4, 15)
+PHASE3_WEEKS = (16, 99)
+
+
+def get_spread_calibration_for_week(
+    week: int,
+    phase_mode: str = "auto",
+    phase1_policy: str = "skip",
+    phase2_policy: str = "phase2_only",
+    phase3_policy: str = "phase2",
+    artifact_dir: str = "data/spread_selection/artifacts",
+) -> Optional[CalibrationResult]:
+    """Get the correct calibration for a given week with phase routing.
+
+    This is the production entrypoint for calibration selection.
+
+    Args:
+        week: Game week (1-15 regular, 16+ postseason)
+        phase_mode: Routing mode:
+            - "auto": Use policy args to determine calibration
+            - "force_phase2": Always use Phase 2 calibration
+            - "force_weighted": Always use weighted calibration
+        phase1_policy: How to handle weeks 1-3:
+            - "skip": Return None (engine should not generate EV bets)
+            - "weighted": Use weighted calibration
+            - "phase1_only": Use Phase 1-only calibration (not recommended)
+        phase2_policy: How to handle weeks 4-15:
+            - "phase2_only": Use Phase 2-only calibration (default)
+            - "weighted": Use weighted calibration
+        phase3_policy: How to handle weeks 16+ (postseason):
+            - "phase2": Treat as Phase 2 (use phase2_only)
+            - "skip": Return None (skip postseason)
+            - "weighted": Use weighted calibration
+        artifact_dir: Directory containing calibration artifacts
+
+    Returns:
+        CalibrationResult for the week, or None if policy is "skip"
+
+    Raises:
+        ValueError: If invalid policy or phase_mode
+
+    Examples:
+        >>> # Phase 2 game (week 10)
+        >>> cal = get_spread_calibration_for_week(10)
+        >>> cal.implied_breakeven_edge  # ~5.3 pts
+
+        >>> # Phase 1 game (week 2) with skip policy
+        >>> cal = get_spread_calibration_for_week(2, phase1_policy="skip")
+        >>> cal is None  # True - engine should skip EV bets
+
+        >>> # Force weighted for all weeks
+        >>> cal = get_spread_calibration_for_week(2, phase_mode="force_weighted")
+        >>> cal is not None  # True - weighted calibration returned
+    """
+    # Determine phase
+    if week <= PHASE1_WEEKS[1]:
+        phase = "phase1"
+    elif week <= PHASE2_WEEKS[1]:
+        phase = "phase2"
+    else:
+        phase = "phase3"
+
+    # Handle force modes
+    if phase_mode == "force_phase2":
+        return get_default_spread_calibration("phase2", artifact_dir)
+    elif phase_mode == "force_weighted":
+        return get_default_spread_calibration("weighted", artifact_dir)
+    elif phase_mode != "auto":
+        raise ValueError(f"Unknown phase_mode: {phase_mode}")
+
+    # Route based on phase and policy
+    if phase == "phase1":
+        if phase1_policy == "skip":
+            return None
+        elif phase1_policy == "weighted":
+            return get_default_spread_calibration("weighted", artifact_dir)
+        elif phase1_policy == "phase1_only":
+            return get_default_spread_calibration("phase1", artifact_dir)
+        else:
+            raise ValueError(f"Unknown phase1_policy: {phase1_policy}")
+
+    elif phase == "phase2":
+        if phase2_policy == "phase2_only":
+            return get_default_spread_calibration("phase2", artifact_dir)
+        elif phase2_policy == "weighted":
+            return get_default_spread_calibration("weighted", artifact_dir)
+        else:
+            raise ValueError(f"Unknown phase2_policy: {phase2_policy}")
+
+    else:  # phase3 (postseason)
+        if phase3_policy == "phase2":
+            return get_default_spread_calibration("phase2", artifact_dir)
+        elif phase3_policy == "skip":
+            return None
+        elif phase3_policy == "weighted":
+            return get_default_spread_calibration("weighted", artifact_dir)
+        else:
+            raise ValueError(f"Unknown phase3_policy: {phase3_policy}")

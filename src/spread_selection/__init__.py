@@ -42,6 +42,13 @@ Calibration Modes:
 Production Output:
 - LIST A (PRIMARY): EV-based recommendations from calibrated selection engine
 - LIST B (PHASE1_EDGE): Edge-based Phase 1 bets NOT in Primary (distinct list)
+
+V8 Additions (Selection Policy System):
+- SelectionPolicyConfig: Configuration for bet selection policy
+- SelectionPolicy: Enum for policy types (EV_THRESHOLD, TOP_N_PER_WEEK, HYBRID)
+- apply_selection_policy: Main policy application function
+- compute_selection_metrics: Compute ATS, ROI, and other metrics
+- compute_stability_score: Score for ranking configurations
 """
 
 from .calibration import (
@@ -72,6 +79,14 @@ from .calibration import (
     print_stratified_diagnostics,
     # Mode configuration
     get_calibration_label,
+    # Artifact loading
+    load_spread_calibration_from_artifact,
+    get_default_spread_calibration,
+    # Phase-aware routing
+    get_spread_calibration_for_week,
+    PHASE1_WEEKS,
+    PHASE2_WEEKS,
+    PHASE3_WEEKS,
     CALIBRATION_MODES,
     DEFAULT_CALIBRATION_MODE,
     DEFAULT_TRAINING_WINDOW_SEASONS,
@@ -184,6 +199,25 @@ from .totals_calibration import (
     get_sigma_for_game,
 )
 
+# V8: Selection Policy System
+from .selection_policy import (
+    SelectionPolicyConfig,
+    SelectionPolicy,
+    SelectionResult,
+    SelectionMetrics,
+    apply_selection_policy,
+    compute_selection_metrics,
+    compute_stability_score,
+    compute_max_drawdown,
+    generate_policy_grid,
+    config_to_label,
+    # Presets
+    get_selection_policy_preset,
+    configs_match,
+    PRESET_CONFIGS,
+    ALLOWED_PRESETS,
+)
+
 __all__ = [
     # Core classes
     "CalibrationResult",
@@ -216,6 +250,14 @@ __all__ = [
     "CALIBRATION_MODES",
     "DEFAULT_CALIBRATION_MODE",
     "DEFAULT_TRAINING_WINDOW_SEASONS",
+    # Artifact loading
+    "load_spread_calibration_from_artifact",
+    "get_default_spread_calibration",
+    # Phase-aware routing
+    "get_spread_calibration_for_week",
+    "PHASE1_WEEKS",
+    "PHASE2_WEEKS",
+    "PHASE3_WEEKS",
     # V2: Selection engine
     "BetRecommendation",
     "evaluate_game",
@@ -295,4 +337,20 @@ __all__ = [
     "load_calibration",
     "select_calibration_for_runtime",
     "get_sigma_for_game",
+    # V8: Selection Policy System
+    "SelectionPolicyConfig",
+    "SelectionPolicy",
+    "SelectionResult",
+    "SelectionMetrics",
+    "apply_selection_policy",
+    "compute_selection_metrics",
+    "compute_stability_score",
+    "compute_max_drawdown",
+    "generate_policy_grid",
+    "config_to_label",
+    # Presets
+    "get_selection_policy_preset",
+    "configs_match",
+    "PRESET_CONFIGS",
+    "ALLOWED_PRESETS",
 ]
