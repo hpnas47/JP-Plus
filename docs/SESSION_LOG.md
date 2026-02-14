@@ -68,6 +68,45 @@ Fixed import error in `src/spread_selection/__init__.py`:
 
 ---
 
+#### /show-totals-bets Skill — COMMITTED
+**Status**: Complete
+
+Created new skill for displaying totals betting recommendations (mirrors `/show-spread-bets`):
+
+**New Files:**
+- `scripts/show_totals_bets.py` — Fast display script using pre-computed backtest data
+- `.claude/skills/show-totals-bets/SKILL.md` — Skill definition
+- `data/spread_selection/outputs/backtest_totals_2023-2025.csv` — Pre-computed backtest data
+
+**Usage:**
+```
+/show-totals-bets 2025 6
+/show-totals-bets 2024 10
+```
+
+**Implementation Evolution:**
+1. Initial version used hardcoded sigma=17.0 and 10% EV threshold
+2. User flagged inconsistency with spread engine's 3% threshold
+3. Final version uses **calibrated sigma from backtest residuals** (16.4) and **3% EV threshold**
+
+**Calibration Approach:**
+- Sigma calculated from `df['jp_error'].std()` = 16.4 (actual prediction error std)
+- EV calculated using Normal CDF probability model (same as `totals_ev_engine.py`)
+- 3% EV threshold matches spread engine for consistency
+
+**Output Comparison:**
+| Threshold | Games (Week 6) | Record |
+|-----------|----------------|--------|
+| EV >= 10% | 26 | 19-7 (73.1%) |
+| EV >= 3% (final) | 35 | 25-10 (71.4%) |
+
+**Key Insight:** Totals market shows more edge opportunities than spreads at same 3% threshold. This could indicate:
+- Less efficient totals markets
+- Normal CDF model more generous than logistic calibration
+- Both factors combined
+
+---
+
 ## Session: February 13, 2026 (PM)
 
 ### Theme: Phase 1 SP+ Policy Finalization
