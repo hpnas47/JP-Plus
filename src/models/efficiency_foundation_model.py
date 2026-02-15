@@ -111,27 +111,33 @@ def _compute_data_hash(plays_df: pd.DataFrame, metric_col: str) -> str:
     if n_plays == 0:
         return "empty"
 
-    # Sample for large datasets to keep hashing fast
+    # Compute metric stats from FULL dataset (not sampled) for collision resistance.
+    # Sum/mean/std on numpy arrays is O(n) but very fast — no text hashing needed.
+    hash_parts = [
+        str(n_plays),
+        f"{plays_df[metric_col].sum():.10f}",
+        f"{plays_df[metric_col].mean():.10f}",
+    ]
+    if n_plays > 1:
+        hash_parts.append(f"{plays_df[metric_col].std():.10f}")
+    if "weight" in plays_df.columns:
+        hash_parts.append(f"{plays_df['weight'].sum():.10f}")
+    if "base_weight" in plays_df.columns:
+        hash_parts.append(f"{plays_df['base_weight'].sum():.10f}")
+
+    # Sample team sequences for structural changes (team reordering is rare)
     if n_plays > 10000:
         sample_idx = np.linspace(0, n_plays - 1, 1000, dtype=int)
         sample = plays_df.iloc[sample_idx]
     else:
         sample = plays_df
 
-    # P0.3: Robust hash using team sequences + metric stats + weight stats
     # P3.6: Use numpy tobytes() instead of str.cat() for faster hashing
     # Note: np.asarray() handles ArrowStringArray (pyarrow backend)
-    hash_parts = [
-        str(n_plays),
+    hash_parts.extend([
         hashlib.md5(np.asarray(sample["offense"]).astype(str).tobytes()).hexdigest()[:8],
         hashlib.md5(np.asarray(sample["defense"]).astype(str).tobytes()).hexdigest()[:8],
-        f"{sample[metric_col].sum():.8f}",
-        f"{sample[metric_col].mean():.8f}",
-    ]
-    if len(sample) > 1:
-        hash_parts.append(f"{sample[metric_col].std():.8f}")
-    if "weight" in sample.columns:
-        hash_parts.append(f"{sample['weight'].sum():.8f}")
+    ])
 
     hash_data = "|".join(hash_parts)
     return hashlib.sha256(hash_data.encode()).hexdigest()[:12]
@@ -1577,6 +1583,7 @@ class EfficiencyFoundationModel:
         self,
         plays_df: pd.DataFrame,
         games_df: Optional[pd.DataFrame] = None,
+        max_week: int | None = None,
     ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
         """Calculate per-game turnover stats for each team (P2.6: split O/D, now INT/fumble).
 
@@ -1587,6 +1594,7 @@ class EfficiencyFoundationModel:
         Args:
             plays_df: Play-by-play data with 'play_type', 'offense', 'defense' columns
             games_df: Games data for counting games played
+            max_week: Maximum week to include (walk-forward safety)
 
         Returns:
             Tuple of (lost_per_game, forced_per_game, margin_per_game) dicts
@@ -1595,6 +1603,12 @@ class EfficiencyFoundationModel:
             - margin_per_game: Net margin (forced - lost) for backward compat
             Also populates self.ints_thrown, self.ints_forced, self.fumbles_lost, self.fumbles_recovered
         """
+        # Walk-forward safety: filter to max_week
+        if max_week is not None:
+            if "week" in plays_df.columns:
+                plays_df = plays_df[plays_df["week"] <= max_week]
+            if games_df is not None and "week" in games_df.columns:
+                games_df = games_df[games_df["week"] <= max_week]
         empty_result = ({}, {}, {})
 
         if "play_type" not in plays_df.columns:
@@ -1825,6 +1839,9 @@ class EfficiencyFoundationModel:
             self._team_to_idx = {}
             return {}
 
+        # Clear stale ratings from prior calls (prevents cross-season leakage in backtests)
+        self.team_ratings.clear()
+
         # Prepare plays (with data leakage guard if max_week provided)
         # Season passed for year-conditional garbage time thresholds (2024+ clock rule change)
         prepared = self._prepare_plays(plays_df, max_week=max_week, team_conferences=team_conferences, season=season)
@@ -1875,10 +1892,13 @@ class EfficiencyFoundationModel:
         self.def_isoppp = adj_def_isoppp
 
         # Calculate turnover stats if turnover_weight > 0 (P2.6: split O/D)
+        # Use validated plays (NaN guard on offense/defense) but NOT scrimmage-filtered,
+        # since TURNOVER_PLAY_TYPES may not overlap with SCRIMMAGE_PLAY_TYPES
         if self.turnover_weight > 0 and "play_type" in plays_df.columns:
             logger.debug("Calculating turnover stats...")
+            validated_plays = self._validate_and_normalize_plays(plays_df)
             self.turnovers_lost, self.turnovers_forced, self.turnover_margin = \
-                self._calculate_turnover_stats(plays_df, games_df)
+                self._calculate_turnover_stats(validated_plays, games_df, max_week=max_week)
         else:
             self.turnovers_lost = {}
             self.turnovers_forced = {}
@@ -2444,7 +2464,22 @@ class EfficiencyFoundationModel:
         fbs_ratings = [r for team, r in self.team_ratings.items() if team in fbs_teams]
 
         if not fbs_ratings:
+            logger.error(
+                f"NORMALIZATION FAILURE: 0 of {len(self.team_ratings)} teams matched "
+                f"fbs_teams set ({len(fbs_teams)} entries). Ratings will NOT be normalized. "
+                f"Check for team name mismatches between play data and fbs_teams. "
+                f"Sample play data teams: {list(self.team_ratings.keys())[:5]}. "
+                f"Sample fbs_teams: {list(fbs_teams)[:5]}"
+            )
             return
+
+        coverage = len(fbs_ratings) / len(fbs_teams) * 100 if fbs_teams else 0
+        if coverage < 90:
+            logger.warning(
+                f"Normalization coverage low: {len(fbs_ratings)}/{len(fbs_teams)} "
+                f"FBS teams matched ({coverage:.0f}%). "
+                f"Missing teams will distort mean/std calculations."
+            )
 
         # Calculate component means from FBS teams (P2.5 fix: each component by its own mean)
         overall_values = [r.overall_rating for r in fbs_ratings]
