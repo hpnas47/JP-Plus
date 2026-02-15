@@ -280,10 +280,22 @@ def append_to_log(
     if new_rows.empty:
         return 0, 0
 
+    log_p = Path(log_path)
+
     if dry_run:
+        # Run dedup logic to give accurate preview, but don't write
+        if log_p.exists():
+            existing = pd.read_csv(log_p)
+            def _dk(df):
+                return df[DEDUP_KEY].astype(str).apply(tuple, axis=1)
+            existing_keys = set(_dk(existing))
+            mask = ~_dk(new_rows).isin(existing_keys)
+            would_append = int(mask.sum())
+            would_skip = int((~mask).sum())
+            return would_append, would_skip
         return len(new_rows), 0
 
-    return _append_to_log_impl(new_rows, Path(log_path))
+    return _append_to_log_impl(new_rows, log_p)
 
 
 # ---------------------------------------------------------------------------
@@ -308,10 +320,13 @@ def settle_week(
         raise FileNotFoundError(f"Log file not found: {log_path}")
 
     log = pd.read_csv(log_path)
+    # Ensure settlement columns exist (handles logs from older schema versions)
+    for col in SETTLEMENT_COLS:
+        if col not in log.columns:
+            log[col] = None
     # Ensure settlement columns are object-typed to accept mixed str/NaN
     for col in ("covered", "settled_timestamp"):
-        if col in log.columns:
-            log[col] = log[col].astype(object)
+        log[col] = log[col].astype(object)
     scores = load_scores(scores_path)
 
     # Filter to target rows: List A, this (year, week), not yet settled
@@ -347,6 +362,7 @@ def settle_week(
         row = log.loc[idx]
         gid = str(row["game_id"])
         if gid not in scores_map:
+            print(f"  WARNING: game_id={gid} ({row.get('home_team', '?')} vs {row.get('away_team', '?')}) not found in scores file — skipping")
             continue
 
         hp, ap = scores_map[gid]

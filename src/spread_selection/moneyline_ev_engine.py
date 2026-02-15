@@ -87,6 +87,20 @@ class MoneylineEVConfig:
     include_positive_ev_loser_in_listB: bool = False
     weekly_cap_to_listB: bool = True
 
+    def __post_init__(self) -> None:
+        if self.margin_sigma <= 0:
+            raise ValueError(f"margin_sigma must be > 0, got {self.margin_sigma}")
+        if self.bankroll <= 0:
+            raise ValueError(f"bankroll must be > 0, got {self.bankroll}")
+        if self.ev_min < 0:
+            raise ValueError(f"ev_min must be >= 0, got {self.ev_min}")
+        if not (0 <= self.kelly_fraction <= 1):
+            raise ValueError(f"kelly_fraction must be in [0, 1], got {self.kelly_fraction}")
+        if not (0 <= self.max_bet_fraction <= 1):
+            raise ValueError(f"max_bet_fraction must be in [0, 1], got {self.max_bet_fraction}")
+        if self.round_to < 0:
+            raise ValueError(f"round_to must be >= 0, got {self.round_to}")
+
 
 # ---------------------------------------------------------------------------
 # Odds helpers
@@ -284,6 +298,9 @@ def evaluate_moneylines(
                 row["reason_code"] = "OK"
                 list_a_rows.append(row)
             elif cand["ev"] < config.ev_min:
+                # Note: if both ev < ev_min AND stake == 0, this branch fires
+                # first, giving EV_BELOW_MIN. This is intentional — EV is the
+                # primary disqualifier; STAKE_ZERO only applies when EV passed.
                 row["reason_code"] = "EV_BELOW_MIN"
                 list_b_rows.append(row)
             else:
@@ -320,8 +337,9 @@ def evaluate_moneylines(
 
     if not list_b_df.empty:
         list_b_df = list_b_df.sort_values(
-            by=["reason_code", "game_id", "side"],
-            ascending=[True, True, True],
+            by=["reason_code", "ev", "disagreement_pts", "game_id", "side"],
+            ascending=[True, False, False, True, True],
+            na_position="last",
         ).reset_index(drop=True)
 
     return list_a_df, list_b_df
@@ -345,6 +363,10 @@ def estimate_margin_sigma_from_backtest(
     -------
     float : sample standard deviation (ddof=1) of residuals.
     """
+    required = {"actual_margin", "model_spread", "week"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Input DataFrame missing required columns: {missing}")
     filtered = df[df["week"] >= week_min].copy()
     if len(filtered) < 30:
         raise ValueError(
