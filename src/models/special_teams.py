@@ -476,14 +476,27 @@ class SpecialTeamsModel:
         for team in team_fg.index:
             per_game_rating = team_fg.loc[team, "per_game_rating"]
             n_attempts = int(team_fg.loc[team, "attempts"])
-            self.team_ratings[team] = SpecialTeamsRating(
-                team=team,
-                field_goal_rating=per_game_rating,
-                punt_rating=0.0,
-                kickoff_rating=0.0,
-                overall_rating=per_game_rating,  # FG-only
-                is_complete=False,
-            )
+            existing = self.team_ratings.get(team)
+            if existing is not None and existing.is_complete:
+                # Preserve complete rating, update FG component only
+                existing.field_goal_rating = per_game_rating
+                existing.raw_fg_rating = per_game_rating
+                existing.n_fg_attempts = n_attempts
+                existing.overall_rating = (
+                    existing.field_goal_rating + existing.punt_rating + existing.kickoff_rating
+                )
+                existing.raw_overall_rating = (
+                    existing.raw_fg_rating + existing.raw_punt_rating + existing.raw_kickoff_rating
+                )
+            else:
+                self.team_ratings[team] = SpecialTeamsRating(
+                    team=team,
+                    field_goal_rating=per_game_rating,
+                    punt_rating=0.0,
+                    kickoff_rating=0.0,
+                    overall_rating=per_game_rating,  # FG-only
+                    is_complete=False,
+                )
             # Track FG opportunities for shrinkage
             if team not in self._opportunities:
                 self._opportunities[team] = {"fg": 0, "punt": 0, "ko": 0}
@@ -737,11 +750,25 @@ class SpecialTeamsModel:
             else:
                 logger.debug(f"Kickoff return yards parse coverage: {ko_parse_pct:.0f}% ({n_parsed_ko}/{len(non_tb)} non-TB)")
 
-        # For non-touchbacks without parsed return yards, use average
-        kickoff_plays.loc[
-            ~kickoff_plays["is_touchback"] & kickoff_plays["return_yards"].isna(),
-            "return_yards"
-        ] = 23  # Default to expected
+        # Impute missing return yards with expected average
+        impute_mask = ~kickoff_plays["is_touchback"] & kickoff_plays["return_yards"].isna()
+        n_imputed = int(impute_mask.sum())
+        kickoff_plays.loc[impute_mask, "return_yards"] = 23
+
+        if n_imputed > 0:
+            n_non_tb = int((~kickoff_plays["is_touchback"]).sum())
+            impute_pct = n_imputed / n_non_tb * 100 if n_non_tb > 0 else 0
+            if impute_pct > 20:
+                logger.warning(
+                    f"Kickoff return yards: imputed {n_imputed}/{n_non_tb} "
+                    f"({impute_pct:.0f}%) non-touchback returns to 23 yds (expected avg). "
+                    f"High imputation rate may bias return ratings toward zero."
+                )
+            else:
+                logger.debug(
+                    f"Kickoff return yards: imputed {n_imputed}/{n_non_tb} "
+                    f"({impute_pct:.0f}%) non-touchback returns to 23 yds"
+                )
 
         # Kicking team = offense (the team kicking off)
         # Returning team = defense (the team receiving)
@@ -907,8 +934,9 @@ class SpecialTeamsModel:
             logger.warning("Empty plays dataframe, skipping all ST rating calculations")
             return
 
-        # Clear opportunities from prior calls (handles multiple seasons in backtest)
+        # Clear stale state from prior calls (handles multiple seasons in backtest)
         self._opportunities.clear()
+        self.team_ratings.clear()
 
         # DATA LEAKAGE GUARD: Verify no future weeks in training data
         if max_week is not None and "week" in plays_df.columns:
