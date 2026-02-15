@@ -44,7 +44,13 @@ DEFAULT_HFA = 3.0
 DEFAULT_N_SIMS = 50000
 # Max week for regular season games (excludes CCG, bowls, CFP)
 MAX_REGULAR_SEASON_WEEK = 15
-# Default rating for FCS opponents (~90-95% FBS win rate historically)
+# Default SP+ rating for FCS opponents (~90-95% FBS win rate historically).
+# The main JP+ pipeline has a dynamic FCS estimator (src/models/fcs_strength.py)
+# that uses Bayesian shrinkage on in-season game margins, but it requires
+# completed game data (Polars DataFrame + walk-forward week). For preseason
+# win totals where no games have been played, a static default is appropriate.
+# The -17.0 value is consistent with the estimator's baseline_margin of -28
+# (game-level margin including noise) mapped to a persistent team quality scale.
 FCS_DEFAULT_RATING = -17.0
 
 
