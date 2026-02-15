@@ -164,7 +164,7 @@ def main():
     # Use MARKET sigma (15.4) not model sigma (13.5) — we're estimating
     # what the market would price, not our model's win probability.
     MARKET_SIGMA = 15.4
-    MODEL_SIGMA = 13.5
+    MODEL_SIGMA = 15.8
     print(f"Synthesizing ML odds from opening spreads (market_sigma={MARKET_SIGMA})")
 
     # --- Run engine + populate logs ---
@@ -275,6 +275,11 @@ def main():
             year_dfs.append(pd.read_csv(log_path))
     if year_dfs:
         consolidated = pd.concat(year_dfs, ignore_index=True)
+        # Join scores from backtest source
+        scores = df[['game_id', 'home_points', 'away_points']].copy()
+        scores['game_id'] = scores['game_id'].astype(str)
+        consolidated['game_id'] = consolidated['game_id'].astype(str)
+        consolidated = consolidated.merge(scores, on='game_id', how='left')
         consolidated.to_csv(consolidated_path, index=False)
         print(f"\n  Consolidated artifact: {consolidated_path} ({len(consolidated)} rows)")
 

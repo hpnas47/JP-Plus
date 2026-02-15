@@ -177,9 +177,15 @@ def show_moneyline_bets(year: int, week: int):
     else:
         has_results = 'covered' in list_a.columns and list_a['covered'].notna().any()
 
+        has_scores = 'home_points' in list_a.columns and list_a['home_points'].notna().any()
+
         if has_results:
-            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence | Result |")
-            print("|---|---------|-----|------|--------|-----|----------|------------|--------|")
+            if has_scores:
+                print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence | Score | Result |")
+                print("|---|---------|-----|------|--------|-----|----------|------------|-------|--------|")
+            else:
+                print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence | Result |")
+                print("|---|---------|-----|------|--------|-----|----------|------------|--------|")
         else:
             print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence |")
             print("|---|---------|-----|------|--------|-----|----------|------------|")
@@ -197,7 +203,13 @@ def show_moneyline_bets(year: int, week: int):
 
             if has_results:
                 result = format_result(row)
-                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | {result} |")
+                if has_scores and pd.notna(row.get('home_points')):
+                    score = f"{int(row['away_points'])}-{int(row['home_points'])}"
+                    print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | {score} | {result} |")
+                elif has_scores:
+                    print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | — | {result} |")
+                else:
+                    print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | {result} |")
             else:
                 print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} |")
 
