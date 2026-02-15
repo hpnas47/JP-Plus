@@ -272,7 +272,7 @@ JP+'s most recent season — best Core MAE (12.25) and solid 5+ Edge performance
 
 ## 2025 JP+ Top 25
 
-End-of-season power ratings including all games through the National Championship. Note: Backtest metrics use regular season only (weeks 1-15) due to postseason betting edge degradation, but final ratings include postseason to capture each team's full body of work.
+End-of-season power ratings including all postseason (bowls + CFP through National Championship):
 
 | Rank | Team | Overall | Off (rank) | Def (rank) | ST (rank) |
 |------|------|---------|------------|------------|-----------|
