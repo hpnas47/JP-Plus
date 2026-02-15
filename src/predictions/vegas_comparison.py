@@ -112,6 +112,12 @@ class VegasComparison:
         raw_lines = self.client.get_betting_lines(year, week, season_type)
         vegas_lines = []
 
+        # Clear stale state from prior calls. Each fetch_lines call should
+        # represent a single week's lines. Accumulating across weeks causes
+        # stale line matching for rematches and unbounded memory growth.
+        self.lines_by_id.clear()
+        self.lines.clear()
+
         for game in raw_lines:
             if not game.lines:
                 continue
@@ -212,8 +218,13 @@ class VegasComparison:
             VegasLine or None if not found
         """
         # Prefer game_id matching (reliable)
-        if game_id is not None and game_id in self.lines_by_id:
-            return self.lines_by_id[game_id]
+        if game_id is not None:
+            try:
+                game_id = int(game_id)
+            except (ValueError, TypeError):
+                pass
+            if game_id in self.lines_by_id:
+                return self.lines_by_id[game_id]
 
         # Fall back to team name matching (legacy)
         return self.lines.get((home_team, away_team))
@@ -369,6 +380,12 @@ class VegasComparison:
             ]
             lines_df = pd.DataFrame(lines_data)
 
+            # Normalize game_id to int for consistent merge behavior
+            if "game_id" in df.columns:
+                df["game_id"] = pd.to_numeric(df["game_id"], errors="coerce").astype("Int64")
+            if "game_id" in lines_df.columns:
+                lines_df["game_id"] = pd.to_numeric(lines_df["game_id"], errors="coerce").astype("Int64")
+
             # Merge on game_id (left join)
             df = df.merge(lines_df, on="game_id", how="left")
         else:
@@ -387,6 +404,9 @@ class VegasComparison:
                     df.at[idx, "vegas_spread"] = vl.spread
                     df.at[idx, "vegas_open"] = vl.spread_open
                     df.at[idx, "over_under"] = vl.over_under
+                    # Propagate game_id from matched line if prediction had none
+                    if pd.isna(df.at[idx, "game_id"]):
+                        df.at[idx, "game_id"] = vl.game_id
 
         # Vectorized edge calculation: edge = (-model_spread) - vegas_spread
         df["edge"] = (-df["model_spread"]) - df["vegas_spread"]
