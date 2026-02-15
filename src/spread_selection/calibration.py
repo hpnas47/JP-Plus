@@ -21,6 +21,9 @@ V1 Assumptions:
     - Constant juice: -110
     - No push modeling: p_push = 0
     - Pure selection layer: does NOT modify JP+ predictions
+    - Positive American odds (e.g., +100, -105 reduced juice) are not supported.
+      calculate_ev will raise ValueError. V2 will add support for variable juice
+      including alternate spread pricing.
 """
 
 import logging
@@ -58,6 +61,16 @@ CALIBRATION_MODES = {
 # Default mode for production
 DEFAULT_CALIBRATION_MODE = "primary"
 DEFAULT_TRAINING_WINDOW_SEASONS = CALIBRATION_MODES["primary"]["training_window_seasons"]
+
+# Shared edge_abs bucket definitions for calibration diagnostics.
+# Both diagnose_calibration and stratified_diagnostics must use these.
+EDGE_BUCKETS = [
+    ("[0,3)", 0, 3),
+    ("[3,5)", 3, 5),
+    ("[5,7)", 5, 7),
+    ("[7,10)", 7, 10),
+    ("[10,+)", 10, float("inf")),
+]
 
 # ============================================================================
 # PUSH RATE CONSTANTS (V2)
@@ -384,6 +397,13 @@ def load_and_normalize_game_data(
         df["away_covered"]
     )
 
+    # Zero-edge games: JP+ has no opinion — must not be included in calibration or evaluation.
+    zero_edge_mask = df["edge_pts"] == 0
+    if zero_edge_mask.any():
+        df["jp_side_covered"] = df["jp_side_covered"].astype(object)
+        df.loc[zero_edge_mask, "jp_favored_side"] = "NO_BET"
+        df.loc[zero_edge_mask, "jp_side_covered"] = np.nan
+
     return df
 
 
@@ -627,19 +647,15 @@ def walk_forward_validate(
                 p_cover_vals = p_cover_no_push * (1 - p_push_vals)
                 eval_df.loc[bet_mask, "p_cover"] = p_cover_vals
 
-                # EV with push
-                # EV = P(win) * payout - P(lose) * stake
-                # P(win) = p_cover_no_push * (1 - p_push)
-                # P(lose) = (1 - p_cover_no_push) * (1 - p_push)
-                p_win = p_cover_no_push * (1 - p_push_vals)
-                p_lose = (1 - p_cover_no_push) * (1 - p_push_vals)
-                ev_vals = p_win * (100 / 110) - p_lose
+                # EV computed via canonical function to ensure consistency
+                ev_vals = calculate_ev_vectorized(p_cover_no_push, p_push=p_push_vals)
                 eval_df.loc[bet_mask, "ev"] = ev_vals
             else:
                 # No push modeling - p_push = 0
                 eval_df.loc[bet_mask, "p_push"] = 0.0
                 eval_df.loc[bet_mask, "p_cover"] = p_cover_no_push
-                ev_vals = p_cover_no_push * (100 / 110) - (1 - p_cover_no_push)
+                # EV computed via canonical function to ensure consistency
+                ev_vals = calculate_ev_vectorized(p_cover_no_push, p_push=0.0)
                 eval_df.loc[bet_mask, "ev"] = ev_vals
 
         # Add fold metadata
@@ -730,7 +746,10 @@ def breakeven_prob(juice: float = -110) -> float:
         Breakeven probability as decimal (e.g., 0.5238)
     """
     if juice >= 0:
-        raise ValueError(f"Expected negative juice, got {juice}")
+        raise ValueError(
+            f"V1 only supports negative American odds (e.g., -110). Got {juice}. "
+            "Positive odds support planned for V2."
+        )
     risk = abs(juice)
     win = 100
     return risk / (risk + win)
@@ -759,7 +778,10 @@ def calculate_ev(
         EV as fraction of stake (e.g., 0.03 = +3% EV)
     """
     if juice >= 0:
-        raise ValueError(f"Expected negative juice, got {juice}")
+        raise ValueError(
+            f"V1 only supports negative American odds (e.g., -110). Got {juice}. "
+            "Positive odds support planned for V2."
+        )
 
     # Adjust for push probability
     # P(win) = P(cover | no push) * (1 - p_push)
@@ -778,21 +800,25 @@ def calculate_ev(
 
 def calculate_ev_vectorized(
     p_cover_no_push: np.ndarray,
-    p_push: float = 0.0,
+    p_push: float | np.ndarray = 0.0,
     juice: float = -110,
 ) -> np.ndarray:
     """Vectorized EV calculation.
 
     Args:
         p_cover_no_push: Array of P(cover | no push)
-        p_push: P(push) - V1 always 0
+        p_push: P(push) as scalar or per-game array. NumPy broadcasting
+            handles both cases correctly.
         juice: American odds
 
     Returns:
         Array of EV values
     """
     if juice >= 0:
-        raise ValueError(f"Expected negative juice, got {juice}")
+        raise ValueError(
+            f"V1 only supports negative American odds (e.g., -110). Got {juice}. "
+            "Positive odds support planned for V2."
+        )
 
     p_win = p_cover_no_push * (1 - p_push)
     p_lose = (1 - p_cover_no_push) * (1 - p_push)
@@ -804,24 +830,18 @@ def calculate_ev_vectorized(
 
 
 def get_spread_bucket(edge_abs: float) -> str:
-    """Categorize edge_abs into diagnostic buckets.
+    """Categorize edge_abs into diagnostic buckets using EDGE_BUCKETS.
 
     Args:
         edge_abs: Absolute edge value
 
     Returns:
-        Bucket label: "[0,3)", "[3,5)", "[5,7)", "[7,10)", "[10,+)"
+        Bucket label from EDGE_BUCKETS (e.g., "[0,3)", "[3,5)", etc.)
     """
-    if edge_abs < 3:
-        return "[0,3)"
-    elif edge_abs < 5:
-        return "[3,5)"
-    elif edge_abs < 7:
-        return "[5,7)"
-    elif edge_abs < 10:
-        return "[7,10)"
-    else:
-        return "[10,+)"
+    for label, low, high in EDGE_BUCKETS:
+        if low <= edge_abs < high:
+            return label
+    return EDGE_BUCKETS[-1][0]  # Fallback to last bucket
 
 
 def diagnose_calibration(
@@ -855,7 +875,7 @@ def diagnose_calibration(
 
     # Per-bucket statistics
     bucket_stats = []
-    bucket_order = ["[0,3)", "[3,5)", "[5,7)", "[7,10)", "[10,+)"]
+    bucket_order = [label for label, _, _ in EDGE_BUCKETS]
 
     for bucket in bucket_order:
         bucket_df = df[df["bucket"] == bucket]
@@ -1021,7 +1041,7 @@ def stratified_diagnostics(
 
     Returns diagnostics stratified by:
         1. vegas_total terciles (low/med/high) - if vegas_total provided
-        2. abs(vegas_spread) buckets: [0,3), [3,7), [7,10), [10,14), [14,+)
+        2. abs(vegas_spread) buckets from EDGE_BUCKETS: [0,3), [3,5), [5,7), [7,10), [10,+)
         3. week buckets: weeks 0-3, 4-8, 9-15, 16+
 
     Per stratum:
@@ -1053,16 +1073,8 @@ def stratified_diagnostics(
         "total_terciles": [],
     }
 
-    # ----- Spread buckets -----
-    spread_buckets = [
-        ("[0,3)", 0, 3),
-        ("[3,7)", 3, 7),
-        ("[7,10)", 7, 10),
-        ("[10,14)", 10, 14),
-        ("[14,+)", 14, float("inf")),
-    ]
-
-    for label, low, high in spread_buckets:
+    # ----- Spread buckets (shared with diagnose_calibration) -----
+    for label, low, high in EDGE_BUCKETS:
         mask = (df["edge_abs"] >= low) & (df["edge_abs"] < high)
         stratum = df[mask]
         n = len(stratum)
