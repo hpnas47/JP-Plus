@@ -317,6 +317,11 @@ def evaluate_slate_edge_baseline(
         game_id = row["game_id"]  # Keep as-is (can be int or str)
         week = int(row["week"])
 
+        # Skip games outside Phase 1 weeks
+        if not config.should_apply(week):
+            logger.debug(f"Skipping game_id={game_id} week={week}: outside Phase 1 weeks {config.weeks}")
+            continue
+
         # Get Vegas OPEN spread
         vegas_open = row[vegas_col]
         if pd.isna(vegas_open):
@@ -363,7 +368,7 @@ def evaluate_slate_edge_baseline(
     n_selected = len(selected)
     n_vetoed = len(vetoed)
     n_candidates = len(all_candidates)
-    logger.info(f"Phase1 Edge Baseline: {n_candidates} candidates, {n_selected} selected, {n_vetoed} vetoed")
+    logger.info(f"Phase1 Edge Baseline (weeks {config.weeks}): {n_candidates} candidates, {n_selected} selected, {n_vetoed} vetoed")
 
     return selected, vetoed, all_candidates
 
