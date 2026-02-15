@@ -100,6 +100,19 @@ def get_sp_expected_wins(year: int) -> dict[str, float]:
             for _, row in sp_df.iterrows()}
 
 
+def get_book_lines(year: int) -> dict[str, float]:
+    """Load book lines from manually-sourced CSV."""
+    csv_path = Path(f"data/win_totals/book_lines_{year}.csv")
+    if not csv_path.exists():
+        return {}
+    bl_df = pd.read_csv(csv_path)
+    result = {}
+    for _, row in bl_df.iterrows():
+        if pd.notna(row.get('book_line')):
+            result[normalize_team_name(row['team'])] = row['book_line']
+    return result
+
+
 def is_season_complete(year: int) -> bool:
     """A season is complete if we're past January of the following year."""
     return date.today() >= date(year + 1, 1, 15)
@@ -132,6 +145,11 @@ def main():
     # Load SP+ preseason expected wins (if available)
     sp_ew_map = get_sp_expected_wins(year)
     df['sp_expected_wins'] = df['team'].map(sp_ew_map)
+
+    # Load book lines (if available)
+    book_lines_map = get_book_lines(year)
+    df['book_line'] = df['team'].map(book_lines_map)
+    has_book_lines = df['book_line'].notna().any()
 
     # Check if season is complete — fetch actual wins if so
     historical = is_season_complete(year)
@@ -173,35 +191,58 @@ def main():
     show_conf_col = conf_name is None
 
     if historical:
+        # Build header dynamically based on available data
+        cols = ["Rank", "Team"]
         if show_conf_col:
-            print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins | Actual | Result |")
-            print("|------|------|------|:---:|:---:|:---:|--------|")
+            cols.append("Conf")
+        cols += ["JP+ Exp. Wins", "SP+ Exp. Wins"]
+        if has_book_lines:
+            cols += ["Book Line", "Actual", "Result"]
         else:
-            print("| Rank | Team | JP+ Exp. Wins | SP+ Exp. Wins | Actual | Result |")
-            print("|------|------|:---:|:---:|:---:|--------|")
+            cols.append("Actual")
+
+        print("| " + " | ".join(cols) + " |")
+        seps = []
+        for c in cols:
+            if c in ("JP+ Exp. Wins", "SP+ Exp. Wins", "Book Line", "Actual"):
+                seps.append(":---:")
+            else:
+                seps.append("------")
+        print("| " + " | ".join(seps) + " |")
 
         for _, row in df.iterrows():
             ew = row['expected_wins']
             sp_ew = row.get('sp_expected_wins')
             sp_str = f"{sp_ew:.1f}" if pd.notna(sp_ew) else "—"
             actual = row.get('actual_wins')
-            if pd.notna(actual):
-                actual_int = int(actual)
-                if actual_int > round(ew):
-                    result = "Over"
-                elif actual_int < round(ew):
-                    result = "Under"
-                else:
-                    result = "Push"
-                actual_str = str(actual_int)
-            else:
-                actual_str = "—"
-                result = "—"
+            actual_str = str(int(actual)) if pd.notna(actual) else "—"
+            book = row.get('book_line')
 
+            parts = [str(int(row['rank'])), f"**{row['team']}**"]
             if show_conf_col:
-                print(f"| {int(row['rank'])} | **{row['team']}** | {row['conference']} | {ew:.1f} | {sp_str} | {actual_str} | {result} |")
+                parts.append(row['conference'])
+            parts += [f"{ew:.1f}", sp_str]
+
+            if has_book_lines:
+                book_str = f"{book:.1f}" if pd.notna(book) else "—"
+                parts.append(book_str)
+                parts.append(actual_str)
+                # Result vs book line
+                if pd.notna(book) and pd.notna(actual):
+                    actual_int = int(actual)
+                    if actual_int > book:
+                        result = "Over"
+                    elif actual_int < book:
+                        result = "Under"
+                    else:
+                        result = "Push"
+                else:
+                    result = "—"
+                parts.append(result)
             else:
-                print(f"| {int(row['rank'])} | **{row['team']}** | {ew:.1f} | {sp_str} | {actual_str} | {result} |")
+                parts.append(actual_str)
+
+            print("| " + " | ".join(parts) + " |")
     else:
         if show_conf_col:
             print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")
