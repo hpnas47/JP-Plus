@@ -44,6 +44,8 @@ DEFAULT_HFA = 3.0
 DEFAULT_N_SIMS = 50000
 # Max week for regular season games (excludes CCG, bowls, CFP)
 MAX_REGULAR_SEASON_WEEK = 15
+# Default rating for FCS opponents (~90-95% FBS win rate historically)
+FCS_DEFAULT_RATING = -17.0
 
 
 def setup_logging(verbose: bool = False):
@@ -240,6 +242,7 @@ def cmd_backtest(args):
 
     total_bets = 0
     total_wins = 0
+    total_pushes = 0
 
     for year in range(args.start_year, args.end_year + 1):
         lines_path = Path(f"data/win_totals/{year}_book_lines.csv")
@@ -267,6 +270,20 @@ def cmd_backtest(args):
         rng = np.random.default_rng(seed=42)
         tau = val_result.tau
 
+        # Build calibration for this backtest year (matching predict path)
+        cal_spreads, cal_outcomes, fb_spreads, fb_outcomes, fb_years, primary_years = (
+            _build_calibration_data_prior_folds(
+                val_result, builder.client, builder, max_year=year
+            )
+        )
+        calibration = calibrate_win_probability(
+            cal_spreads, cal_outcomes,
+            fallback_spreads=fb_spreads,
+            fallback_outcomes=fb_outcomes,
+            fallback_years=fb_years,
+            primary_years=primary_years,
+        )
+
         distributions = []
         for team in sorted(fbs_teams):
             if team not in pred_by_team:
@@ -276,7 +293,8 @@ def cmd_backtest(args):
                 continue
             dist = project_season(
                 team=team, year=year, team_rating=pred_by_team[team],
-                schedule=schedule, tau=tau, n_sims=DEFAULT_N_SIMS, rng=rng,
+                schedule=schedule, tau=tau, calibration=calibration,
+                n_sims=DEFAULT_N_SIMS, rng=rng,
             )
             distributions.append(dist)
 
@@ -288,6 +306,7 @@ def cmd_backtest(args):
 
         year_wins = 0
         year_bets = 0
+        year_pushes = 0
         for rec in recs:
             actual = actual_wins.get(rec.team)
             if actual is None:
@@ -297,19 +316,25 @@ def cmd_backtest(args):
                 year_wins += 1
             elif rec.side == "Under" and actual < rec.line:
                 year_wins += 1
+            elif actual == rec.line and rec.line == int(rec.line):
+                year_pushes += 1
 
         total_bets += year_bets
         total_wins += year_wins
+        total_pushes += year_pushes
 
         win_pct = year_wins / year_bets * 100 if year_bets > 0 else 0
         print(f"{year}: {year_wins}/{year_bets} ({win_pct:.1f}%), "
-              f"{len(recs)} recs, {len(distributions)} teams")
+              f"{year_pushes} pushes, {len(recs)} recs, {len(distributions)} teams")
 
     if total_bets > 0:
-        overall_pct = total_wins / total_bets * 100
-        print(f"\nOverall: {total_wins}/{total_bets} ({overall_pct:.1f}%)")
-        roi = (total_wins * (100 / 110) - (total_bets - total_wins)) / total_bets * 100
-        print(f"ROI at -110: {roi:+.1f}%")
+        decided = total_bets - total_pushes
+        overall_pct = total_wins / decided * 100 if decided > 0 else 0
+        print(f"\nOverall: {total_wins}/{decided} ({overall_pct:.1f}%), {total_pushes} pushes")
+        if decided > 0:
+            losses = decided - total_wins
+            roi = (total_wins * (100 / 110) - losses) / decided * 100
+            print(f"ROI at -110: {roi:+.1f}%")
 
 
 def cmd_calibrate(args):
@@ -369,7 +394,13 @@ def _compute_leakage_pcts(
 
     feature_cols = model.feature_names
     X = features[feature_cols].values.astype(np.float64)
-    X = np.nan_to_num(X, nan=0.0)
+    # Impute NaN with training column means (consistent with model.py)
+    if model._col_means is not None:
+        for j in range(X.shape[1]):
+            mask = np.isnan(X[:, j])
+            X[mask, j] = model._col_means[j]
+    else:
+        X = np.nan_to_num(X, nan=0.0)
     X_scaled = model.scaler.transform(X)
     coefficients = model.model.coef_
 
@@ -412,10 +443,7 @@ def _build_schedule(
         else:
             continue
 
-        if opp not in fbs_teams:
-            continue
-
-        opp_rating = pred_by_team.get(opp, 0.0)
+        opp_rating = pred_by_team.get(opp, FCS_DEFAULT_RATING if opp not in fbs_teams else 0.0)
         is_neutral = bool(getattr(g, 'neutral_site', False))
 
         schedule.append(ScheduledGame(
@@ -509,6 +537,7 @@ def _build_calibration_data_prior_folds(
             if year < 2005:
                 continue
             try:
+                prev_count = len(fb_spreads_list)
                 sp_prior = {}
                 raw = client.get_sp_ratings(year)
                 for r in raw:
@@ -543,10 +572,11 @@ def _build_calibration_data_prior_folds(
                     fb_spreads_list.append(spread)
                     fb_outcomes_list.append(outcome)
 
-                if fb_spreads_list:
+                new_games = len(fb_spreads_list) - prev_count
+                if new_games > 0:
                     fb_years.append(year)
                     logger.info(f"Fallback calibration: {year} contributed "
-                                f"{len(fb_spreads_list)} games (naive baseline, 30% regressed)")
+                                f"{new_games} games (naive baseline, 30% regressed)")
 
             except Exception as e:
                 logger.warning(f"Failed to build fallback for {year}: {e}")
