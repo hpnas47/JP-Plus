@@ -620,84 +620,15 @@ def _update_timestamp(content: str, today: str) -> str:
 # =============================================================================
 
 
-def generate_ratings(year: int, top_n: int = 25) -> list[dict]:
-    """Generate JP+ power ratings for a given year.
+def generate_ratings_for_docs(year: int, top_n: int = 25) -> list[dict]:
+    """Generate JP+ power ratings via canonical src.ratings.generate.
 
-    Args:
-        year: Season year
-        top_n: Number of teams to return (default 25)
-
-    Returns:
-        List of dicts with team ratings, sorted by overall rating
+    Thin wrapper that calls the single source of truth and slices to top_n.
     """
-    from scripts.backtest import fetch_all_season_data
-    from src.models.efficiency_foundation_model import EfficiencyFoundationModel
-    from src.models.special_teams import SpecialTeamsModel
+    from src.ratings.generate import generate_ratings as _generate_ratings
 
     logger.info(f"Generating {year} JP+ ratings...")
-
-    # fetch_all_season_data takes a list of years and returns dict[int, SeasonData]
-    season_data = fetch_all_season_data([year], use_priors=False, use_portal=False)
-    sd = season_data[year]
-
-    # Convert to pandas (plays already remapped by fetch_all_season_data)
-    plays_pd = sd.efficiency_plays_df.to_pandas()
-    games_pd = sd.games_df.to_pandas()
-
-    # Calculate EFM ratings (games_df used for turnover stats internally)
-    # ridge_alpha=50.0 matches backtest default for consistent ratings
-    efm = EfficiencyFoundationModel(ridge_alpha=50.0)
-    efm.calculate_ratings(plays_pd, games_pd, fbs_teams=sd.fbs_teams)
-    efm_df = efm.get_ratings_df()
-
-    # Filter to FBS only
-    efm_df = efm_df[efm_df["team"].isin(sd.fbs_teams)].copy()
-
-    # Calculate ST ratings
-    st = SpecialTeamsModel()
-    st_plays = sd.st_plays_df.to_pandas()
-    games_played = games_pd.groupby("home_team").size().to_dict()
-    away_games = games_pd.groupby("away_team").size().to_dict()
-    for team, count in away_games.items():
-        games_played[team] = games_played.get(team, 0) + count
-    st.calculate_all_st_ratings_from_plays(st_plays, games_played)
-
-    # Build ratings list
-    # EFM get_ratings_df() columns: team, overall, offense, defense, special_teams, etc.
-    ratings = []
-    for _, row in efm_df.iterrows():
-        team = row["team"]
-        st_rating = st.get_rating(team)
-        st_val = st_rating.overall_rating if st_rating else 0.0
-
-        ratings.append({
-            "team": team,
-            "overall": row["overall"] + st_val,  # EFM overall + ST
-            "offense": row["offense"],
-            "defense": row["defense"],
-            "st": st_val,
-        })
-
-    # Sort by overall and add ranks
-    ratings.sort(key=lambda x: -x["overall"])
-    for i, r in enumerate(ratings):
-        r["rank"] = i + 1
-
-    # Add component ranks
-    off_sorted = sorted(ratings, key=lambda x: -x["offense"])
-    def_sorted = sorted(ratings, key=lambda x: -x["defense"])
-    st_sorted = sorted(ratings, key=lambda x: -x["st"])
-
-    off_ranks = {r["team"]: i + 1 for i, r in enumerate(off_sorted)}
-    def_ranks = {r["team"]: i + 1 for i, r in enumerate(def_sorted)}
-    st_ranks = {r["team"]: i + 1 for i, r in enumerate(st_sorted)}
-
-    for r in ratings:
-        r["off_rank"] = off_ranks[r["team"]]
-        r["def_rank"] = def_ranks[r["team"]]
-        r["st_rank"] = st_ranks[r["team"]]
-
-    logger.info(f"Generated ratings for {len(ratings)} FBS teams")
+    ratings, _meta = _generate_ratings(year)
     return ratings[:top_n]
 
 
@@ -850,7 +781,7 @@ def main():
 
     # Handle ratings generation
     if args.ratings or args.ratings_only:
-        ratings = generate_ratings(args.ratings_year, top_n=25)
+        ratings = generate_ratings_for_docs(args.ratings_year, top_n=25)
         save_ratings_cache(ratings, args.ratings_year)
 
         # Print Top 25

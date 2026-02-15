@@ -675,7 +675,8 @@ def run_predictions(
 
         if not fbs_teams:
             raise ValueError(f"No FBS teams returned for {year}. Check API key and year.")
-        logger.info(f"Loaded {len(fbs_teams)} FBS teams")
+        team_conferences = {t.school: t.conference for t in fbs_teams_raw if t.school and t.conference}
+        logger.info(f"Loaded {len(fbs_teams)} FBS teams across {len(set(team_conferences.values()))} conferences")
 
         # Fetch current season data
         logger.info("Fetching current season game data...")
@@ -734,6 +735,7 @@ def run_predictions(
         efm.calculate_ratings(
             plays_df, current_games_df, max_week=week - 1, season=year,
             fbs_teams=fbs_teams,  # P0: Exclude FCS teams from normalization
+            team_conferences=team_conferences,  # Conference Strength Anchor
         )
 
         # Get team ratings from EFM
