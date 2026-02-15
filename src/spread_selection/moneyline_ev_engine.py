@@ -325,10 +325,10 @@ def evaluate_moneylines(
     list_a_df = pd.DataFrame(list_a_rows, columns=COLUMNS) if list_a_rows else _empty_df()
     list_b_df = pd.DataFrame(list_b_rows, columns=COLUMNS) if list_b_rows else _empty_df()
 
-    # --- Weekly cap ---
+    # --- Weekly cap (rank by Kelly fraction, not raw EV) ---
     if config.max_bets_per_week is not None and len(list_a_df) > config.max_bets_per_week:
         list_a_df = list_a_df.sort_values(
-            by=["ev", "stake", "game_id", "side"],
+            by=["kelly_f", "ev", "game_id", "side"],
             ascending=[False, False, True, True],
         ).reset_index(drop=True)
 
@@ -341,10 +341,10 @@ def evaluate_moneylines(
 
         list_a_df = keep.reset_index(drop=True)
 
-    # --- Deterministic sort ---
+    # --- Deterministic sort (display by Kelly fraction) ---
     if not list_a_df.empty:
         list_a_df = list_a_df.sort_values(
-            by=["ev", "stake", "game_id", "side"],
+            by=["kelly_f", "ev", "game_id", "side"],
             ascending=[False, False, True, True],
         ).reset_index(drop=True)
 
