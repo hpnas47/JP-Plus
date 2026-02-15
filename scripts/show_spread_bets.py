@@ -1,10 +1,27 @@
 #!/usr/bin/env python3
-"""Fast spread bet display script - no API calls, pre-computed data."""
+"""Fast spread bet display script - uses cached FBS team data."""
 
 import sys
 from pathlib import Path
 
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
+
+from src.api.cfbd_client import CFBDClient
+
+# Cache FBS teams at module level (fetched once per session)
+_fbs_teams_cache: dict[int, set[str]] = {}
+
+
+def get_fbs_teams(year: int) -> set[str]:
+    """Get FBS teams for a given year (cached)."""
+    if year not in _fbs_teams_cache:
+        client = CFBDClient()
+        teams = client.get_fbs_teams(year=year)
+        _fbs_teams_cache[year] = {t.school for t in teams}
+    return _fbs_teams_cache[year]
 
 # Team abbreviations
 ABBREV = {
@@ -120,6 +137,15 @@ def show_spread_bets(year: int, week: int):
 
     if len(week_data) == 0:
         print(f"No data found for {year} Week {week}")
+        return
+
+    # Filter to FBS vs FBS games only
+    fbs_teams = get_fbs_teams(year)
+    fbs_mask = week_data['home_team'].isin(fbs_teams) & week_data['away_team'].isin(fbs_teams)
+    week_data = week_data[fbs_mask]
+
+    if len(week_data) == 0:
+        print(f"No FBS vs FBS games found for {year} Week {week}")
         return
 
     # Primary Engine: EV >= 3%
