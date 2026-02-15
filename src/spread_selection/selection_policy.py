@@ -632,6 +632,22 @@ def compute_max_drawdown(
     if push_col not in df.columns:
         df[push_col] = False
 
+    # Drop unsettled bets (NaN outcomes would be counted as wins via bool(NaN)==True)
+    if outcome_col in df.columns:
+        settled_mask = df[outcome_col].notna()
+        if push_col in df.columns:
+            settled_mask = settled_mask & df[push_col].notna()
+        n_unsettled = int((~settled_mask).sum())
+        if n_unsettled > 0:
+            logger.warning(
+                "compute_max_drawdown: dropping %d rows with NaN outcomes (unsettled bets)",
+                n_unsettled,
+            )
+            df = df[settled_mask].copy()
+
+    if len(df) == 0:
+        return 0.0
+
     # Compute per-bet P&L
     if juice < 0:
         payout = 100 / abs(juice)
