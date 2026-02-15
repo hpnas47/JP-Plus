@@ -228,6 +228,20 @@ def cmd_predict(args):
     for i, d in enumerate(distributions[:25], 1):
         print(f"{i:>4}  {d.team:<25} {d.predicted_rating:>+6.1f} {d.expected_wins:>5.1f}")
 
+    # Save all predictions to CSV artifact for fast display script
+    pred_csv_path = Path(f"data/win_totals/predictions_{args.year}.csv")
+    pred_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for i, d in enumerate(distributions, 1):
+        rows.append({
+            'rank': i, 'team': d.team, 'year': d.year,
+            'sp_plus': round(d.predicted_rating, 1),
+            'expected_wins': round(d.expected_wins, 1),
+            'n_games': d.n_games,
+        })
+    pd.DataFrame(rows).to_csv(pred_csv_path, index=False)
+    print(f"\nSaved {len(rows)} predictions to {pred_csv_path}")
+
     if args.book_lines:
         book_lines = load_book_lines(args.book_lines)
         leakage_pcts = _compute_leakage_pcts(model, features)
