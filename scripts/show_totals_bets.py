@@ -142,6 +142,15 @@ def format_result(result: str) -> str:
     return '—'
 
 
+def format_date(row) -> str:
+    d = row.get('start_date')
+    if pd.isna(d) or not d:
+        return '—'
+    from datetime import datetime
+    dt = datetime.strptime(str(d)[:10], '%Y-%m-%d')
+    return dt.strftime('%b %-d')
+
+
 def format_score(row) -> str:
     if pd.isna(row['actual_total']):
         return '—'
@@ -194,9 +203,15 @@ def show_totals_bets(year: int, week: int):
     )
 
     # Print Primary 5+ Edge
+    has_dates = 'start_date' in week_data.columns and week_data['start_date'].notna().any()
+
     print(f"\n## {year} Week {week} — Totals Primary (5+ Edge)\n")
-    print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | ~EV | Final | Result |")
-    print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
+    if has_dates:
+        print("| # | Date | Matchup | JP+ Total | Vegas (Open) | Side | Edge | ~EV | Final | Result |")
+        print("|---|------|---------|-----------|--------------|------|------|-----|-------|--------|")
+    else:
+        print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | ~EV | Final | Result |")
+        print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
 
     for i, (_, row) in enumerate(primary.iterrows(), 1):
         matchup = f"{row['away_team']} @ {row['home_team']}"
@@ -207,7 +222,11 @@ def show_totals_bets(year: int, week: int):
         ev = f"+{row['ev']*100:.1f}%"
         final = format_score(row)
         result = format_result(row['result_open'])
-        print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
+        if has_dates:
+            date = format_date(row)
+            print(f"| {i} | {date} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
+        else:
+            print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
 
     # Calculate record (using OPEN-based results)
     p_wins = len(primary[primary['result_open'] == 'WIN'])

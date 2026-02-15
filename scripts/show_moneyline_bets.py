@@ -74,6 +74,15 @@ def get_abbrev(team: str) -> str:
     return ABBREV.get(team, team[:4].upper())
 
 
+def format_date(row) -> str:
+    d = row.get('start_date')
+    if pd.isna(d) or not d:
+        return '—'
+    from datetime import datetime
+    dt = datetime.strptime(str(d)[:10], '%Y-%m-%d')
+    return dt.strftime('%b %-d')
+
+
 def format_odds(odds) -> str:
     """Format American odds with sign."""
     odds = int(odds)
@@ -178,11 +187,16 @@ def show_moneyline_bets(year: int, week: int):
         has_results = 'covered' in list_a.columns and list_a['covered'].notna().any()
 
         has_scores = 'home_points' in list_a.columns and list_a['home_points'].notna().any()
+        has_dates = 'start_date' in list_a.columns and list_a['start_date'].notna().any()
 
         if has_results:
             if has_scores:
-                print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Score | Result |")
-                print("|---|---------|-----|------|------|-----|------|-------|--------|")
+                if has_dates:
+                    print("| # | Date | Matchup | Bet | Odds | p(W) | EV | Conf | Score | Result |")
+                    print("|---|------|---------|-----|------|------|-----|------|-------|--------|")
+                else:
+                    print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Score | Result |")
+                    print("|---|---------|-----|------|------|-----|------|-------|--------|")
             else:
                 print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Result |")
                 print("|---|---------|-----|------|------|-----|------|--------|")
@@ -199,14 +213,21 @@ def show_moneyline_bets(year: int, week: int):
             p_win = f"{row['p_win']:.0%}"
             ev = f"+{row['ev']*100:.0f}%"
             conf = format_confidence(row)
+            date = format_date(row) if has_dates else ''
 
             if has_results:
                 result = format_result(row)
                 if has_scores and pd.notna(row.get('home_points')):
                     score = f"{away_abbr} {int(row['away_points'])}, {home_abbr} {int(row['home_points'])}"
-                    print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {score} | {result} |")
+                    if has_dates:
+                        print(f"| {i} | {date} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {score} | {result} |")
+                    else:
+                        print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {score} | {result} |")
                 elif has_scores:
-                    print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | — | {result} |")
+                    if has_dates:
+                        print(f"| {i} | {date} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | — | {result} |")
+                    else:
+                        print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | — | {result} |")
                 else:
                     print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {result} |")
             else:

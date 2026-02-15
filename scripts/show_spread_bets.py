@@ -76,6 +76,16 @@ def get_result(row) -> str:
         return 'Loss'
 
 
+def format_date(row) -> str:
+    d = row.get('start_date')
+    if pd.isna(d) or not d:
+        return '—'
+    # "2022-09-03" -> "Sep 3"
+    from datetime import datetime
+    dt = datetime.strptime(str(d)[:10], '%Y-%m-%d')
+    return dt.strftime('%b %-d')
+
+
 def format_score(row) -> str:
     if pd.isna(row['home_points']) or pd.isna(row['away_points']):
         return '—'
@@ -155,9 +165,15 @@ def show_spread_bets(year: int, week: int):
     edge5 = week_data[(week_data['edge_abs'] >= 5.0) & (week_data['ev'] < 0.03)].sort_values('edge_abs', ascending=False)
 
     # Print Primary EV Engine
+    has_dates = 'start_date' in week_data.columns and week_data['start_date'].notna().any()
+
     print(f"\n## {year} Week {week} — Primary EV Engine\n")
-    print("| # | Matchup | JP+ Line | Bet (Open) | Edge | ~EV | Score | Result |")
-    print("|---|---------|----------|------------|------|-----|-------|--------|")
+    if has_dates:
+        print("| # | Date | Matchup | JP+ Line | Bet (Open) | Edge | ~EV | Score | Result |")
+        print("|---|------|---------|----------|------------|------|-----|-------|--------|")
+    else:
+        print("| # | Matchup | JP+ Line | Bet (Open) | Edge | ~EV | Score | Result |")
+        print("|---|---------|----------|------------|------|-----|-------|--------|")
 
     for i, (_, row) in enumerate(primary.iterrows(), 1):
         away_abbr = get_abbrev(row['away_team'])
@@ -167,7 +183,11 @@ def show_spread_bets(year: int, week: int):
         bet_line = format_bet_line(row)
         score = format_score(row)
         result = get_result(row)
-        print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | +{row['ev']*100:.1f}% | {score} | {result} |")
+        if has_dates:
+            date = format_date(row)
+            print(f"| {i} | {date} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | +{row['ev']*100:.1f}% | {score} | {result} |")
+        else:
+            print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | +{row['ev']*100:.1f}% | {score} | {result} |")
 
     # Calculate record (vs OPEN line)
     p_wins = (primary['ats_win_open'] == 1).sum()
@@ -182,8 +202,12 @@ def show_spread_bets(year: int, week: int):
 
     # Print 5+ Edge
     print(f"\n## 5+ Point Edge\n")
-    print("| # | Matchup | JP+ Line | Bet (Open) | Edge | Score | Result |")
-    print("|---|---------|----------|------------|------|-------|--------|")
+    if has_dates:
+        print("| # | Date | Matchup | JP+ Line | Bet (Open) | Edge | Score | Result |")
+        print("|---|------|---------|----------|------------|------|-------|--------|")
+    else:
+        print("| # | Matchup | JP+ Line | Bet (Open) | Edge | Score | Result |")
+        print("|---|---------|----------|------------|------|-------|--------|")
 
     for i, (_, row) in enumerate(edge5.iterrows(), 1):
         away_abbr = get_abbrev(row['away_team'])
@@ -193,7 +217,11 @@ def show_spread_bets(year: int, week: int):
         bet_line = format_bet_line(row)
         score = format_score(row)
         result = get_result(row)
-        print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | {score} | {result} |")
+        if has_dates:
+            date = format_date(row)
+            print(f"| {i} | {date} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | {score} | {result} |")
+        else:
+            print(f"| {i} | {matchup} | {jp_line} | {bet_line} | {row['edge_abs']:.1f} | {score} | {result} |")
 
     # Calculate record (vs OPEN line)
     e_wins = (edge5['ats_win_open'] == 1).sum()

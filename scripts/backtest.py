@@ -1049,6 +1049,7 @@ def walk_forward_predict(
                     "game_id": game["id"],  # For reliable Vegas line matching
                     "year": game["year"],
                     "week": pred_week,
+                    "start_date": str(game.get("start_date", ""))[:10],
                     "home_team": game["home_team"],
                     "away_team": game["away_team"],
                     "predicted_spread": final_spread,
@@ -4345,7 +4346,7 @@ def main():
         if ats_df is not None and len(ats_df) > 0:
             # Ensure all required columns are present
             export_cols = [
-                "game_id", "year", "week", "home_team", "away_team",
+                "game_id", "year", "week", "start_date", "home_team", "away_team",
                 "predicted_spread", "actual_margin", "spread_open", "spread_close",
             ]
             # Add optional columns if present
