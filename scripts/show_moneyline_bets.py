@@ -198,7 +198,18 @@ def show_moneyline_bets(year: int, week: int):
             wins = (settled['covered'] == 'W').sum()
             losses = (settled['covered'] == 'L').sum()
             pct = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
-            print(f"\n**Record: {wins}-{losses} ({pct:.1f}%)**")
+            # Compute $100 flat-bet profit
+            profit = 0.0
+            for _, r in settled.iterrows():
+                if r['covered'] == 'W':
+                    odds = int(r['odds_american'])
+                    if odds < 0:
+                        profit += 100.0 * (100.0 / abs(odds))
+                    else:
+                        profit += 100.0 * (odds / 100.0)
+                elif r['covered'] == 'L':
+                    profit -= 100.0
+            print(f"\n**Record: {wins}-{losses} ({pct:.1f}%) | $100 Flat P/L: {profit:+,.0f}**")
         else:
             print(f"\n**{len(list_a)} bet(s) | Avg EV: +{list_a['ev'].mean()*100:.1f}%**")
 
