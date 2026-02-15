@@ -197,7 +197,7 @@ def main():
             cols.append("Conf")
         cols += ["JP+ Exp. Wins", "SP+ Exp. Wins"]
         if has_book_lines:
-            cols += ["Book Line", "Actual", "Result"]
+            cols += ["Book Line", "Actual", "JP+ Bet", "Result"]
         else:
             cols.append("Actual")
 
@@ -227,22 +227,64 @@ def main():
                 book_str = f"{book:.1f}" if pd.notna(book) else "—"
                 parts.append(book_str)
                 parts.append(actual_str)
-                # Result vs book line
+                # JP+ bet: only bet if edge > 1 win vs book line
                 if pd.notna(book) and pd.notna(actual):
+                    edge = ew - book
                     actual_int = int(actual)
-                    if actual_int > book:
-                        result = "Over"
-                    elif actual_int < book:
-                        result = "Under"
+                    if edge > 1.0:
+                        bet = "Over"
+                        if actual_int > book:
+                            result = "Win"
+                        elif actual_int < book:
+                            result = "Loss"
+                        else:
+                            result = "Push"
+                    elif edge < -1.0:
+                        bet = "Under"
+                        if actual_int < book:
+                            result = "Win"
+                        elif actual_int > book:
+                            result = "Loss"
+                        else:
+                            result = "Push"
                     else:
-                        result = "Push"
+                        bet = "—"
+                        result = "—"
                 else:
+                    bet = "—"
                     result = "—"
-                parts.append(result)
+                parts.append(bet)
+                if result == "Win":
+                    parts.append("Win ✅")
+                else:
+                    parts.append(result)
             else:
                 parts.append(actual_str)
 
             print("| " + " | ".join(parts) + " |")
+
+        # Print record summary if book lines exist
+        if has_book_lines:
+            wins = sum(1 for _, r in df.iterrows()
+                       if pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))
+                       and abs(r['expected_wins'] - r['book_line']) > 1.0
+                       and ((r['expected_wins'] > r['book_line'] and int(r['actual_wins']) > r['book_line'])
+                            or (r['expected_wins'] < r['book_line'] and int(r['actual_wins']) < r['book_line'])))
+            losses = sum(1 for _, r in df.iterrows()
+                         if pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))
+                         and abs(r['expected_wins'] - r['book_line']) > 1.0
+                         and ((r['expected_wins'] > r['book_line'] and int(r['actual_wins']) < r['book_line'])
+                              or (r['expected_wins'] < r['book_line'] and int(r['actual_wins']) > r['book_line'])))
+            pushes = sum(1 for _, r in df.iterrows()
+                         if pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))
+                         and abs(r['expected_wins'] - r['book_line']) > 1.0
+                         and int(r['actual_wins']) == r['book_line'])
+            total = wins + losses + pushes
+            label = f"{year}"
+            if conf_name:
+                label += f" {conf_name}"
+            pct = f" ({wins/total*100:.0f}%)" if total > 0 else ""
+            print(f"\n**{label} JP+ Record: {wins}-{losses}" + (f"-{pushes}" if pushes else "") + f"{pct}**")
     else:
         if show_conf_col:
             print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")
