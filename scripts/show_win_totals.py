@@ -18,12 +18,66 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import numpy as np
 import pandas as pd
 from config.teams import normalize_team_name
 from src.api.cfbd_client import CFBDClient
 
 # Max week for regular season (matches run_win_totals.py)
 MAX_REGULAR_SEASON_WEEK = 15
+# Probability threshold for betting (55% covers -110 vig)
+BET_PROB_THRESHOLD = 0.55
+
+
+def parse_win_probs(s: str) -> np.ndarray | None:
+    """Parse comma-separated PMF string into numpy array."""
+    if not isinstance(s, str) or not s.strip():
+        return None
+    return np.array([float(x) for x in s.split(',')])
+
+
+def odds_to_breakeven(odds: int | None) -> float:
+    """Convert American odds to breakeven probability. Returns default 55% if None."""
+    if odds is None:
+        return BET_PROB_THRESHOLD
+    if odds < 0:
+        return abs(odds) / (abs(odds) + 100)
+    else:
+        return 100 / (odds + 100)
+
+
+def compute_bet_from_pmf(
+    win_probs: np.ndarray | None,
+    book_line: float,
+    over_odds: int | None = None,
+    under_odds: int | None = None,
+) -> tuple[str, float]:
+    """Compute bet recommendation and probability from PMF.
+
+    Uses actual odds to compute breakeven when available, otherwise 55% default.
+    Returns (side, probability) where side is 'Over', 'Under', or '—'.
+    """
+    if win_probs is None:
+        return '—', 0.0
+
+    line = book_line
+    # prob_over: P(wins > line)
+    prob_over = float(np.sum(win_probs[int(line) + 1:]))
+    # prob_under: P(wins < line)
+    if line != int(line):
+        prob_under = float(np.sum(win_probs[:int(line) + 1]))
+    else:
+        prob_under = float(np.sum(win_probs[:int(line)]))
+
+    over_threshold = odds_to_breakeven(over_odds)
+    under_threshold = odds_to_breakeven(under_odds)
+
+    if prob_over >= over_threshold:
+        return 'Over', prob_over
+    elif prob_under >= under_threshold:
+        return 'Under', prob_under
+    else:
+        return '—', max(prob_over, prob_under)
 
 # Conference alias mapping
 CONF_ALIASES = {
@@ -100,8 +154,11 @@ def get_sp_expected_wins(year: int) -> dict[str, float]:
             for _, row in sp_df.iterrows()}
 
 
-def get_book_lines(year: int) -> dict[str, float]:
-    """Load book lines from manually-sourced CSV."""
+def get_book_lines(year: int) -> dict[str, dict]:
+    """Load book lines from manually-sourced CSV.
+
+    Returns dict of {team: {'line': float, 'over_odds': int|None, 'under_odds': int|None}}.
+    """
     csv_path = Path(f"data/win_totals/book_lines_{year}.csv")
     if not csv_path.exists():
         return {}
@@ -109,7 +166,10 @@ def get_book_lines(year: int) -> dict[str, float]:
     result = {}
     for _, row in bl_df.iterrows():
         if pd.notna(row.get('book_line')):
-            result[normalize_team_name(row['team'])] = row['book_line']
+            entry = {'line': row['book_line']}
+            entry['over_odds'] = int(row['over_odds']) if 'over_odds' in row and pd.notna(row.get('over_odds')) else None
+            entry['under_odds'] = int(row['under_odds']) if 'under_odds' in row and pd.notna(row.get('under_odds')) else None
+            result[normalize_team_name(row['team'])] = entry
     return result
 
 
@@ -148,7 +208,9 @@ def main():
 
     # Load book lines (if available)
     book_lines_map = get_book_lines(year)
-    df['book_line'] = df['team'].map(book_lines_map)
+    df['book_line'] = df['team'].map(lambda t: book_lines_map[t]['line'] if t in book_lines_map else None)
+    df['over_odds'] = df['team'].map(lambda t: book_lines_map[t].get('over_odds') if t in book_lines_map else None)
+    df['under_odds'] = df['team'].map(lambda t: book_lines_map[t].get('under_odds') if t in book_lines_map else None)
     has_book_lines = df['book_line'].notna().any()
 
     # Check if season is complete — fetch actual wins if so
@@ -227,20 +289,28 @@ def main():
                 book_str = f"{book:.1f}" if pd.notna(book) else "—"
                 parts.append(book_str)
                 parts.append(actual_str)
-                # JP+ bet: only bet if edge > 1 win vs book line
-                if pd.notna(book) and pd.notna(actual):
-                    edge = ew - book
+                # JP+ bet: use PMF probability threshold
+                win_probs_str = row.get('win_probs')
+                pmf = parse_win_probs(win_probs_str) if isinstance(win_probs_str, str) else None
+                if pd.notna(book) and pd.notna(actual) and pmf is not None:
+                    over_o = row.get('over_odds')
+                    under_o = row.get('under_odds')
+                    side, prob = compute_bet_from_pmf(
+                        pmf, book,
+                        over_odds=int(over_o) if pd.notna(over_o) else None,
+                        under_odds=int(under_o) if pd.notna(under_o) else None,
+                    )
                     actual_int = int(actual)
-                    if edge > 1.0:
-                        bet = "Over"
+                    if side == 'Over':
+                        bet = f"Over {prob:.0%}"
                         if actual_int > book:
                             result = "Win"
                         elif actual_int < book:
                             result = "Loss"
                         else:
                             result = "Push"
-                    elif edge < -1.0:
-                        bet = "Under"
+                    elif side == 'Under':
+                        bet = f"Under {prob:.0%}"
                         if actual_int < book:
                             result = "Win"
                         elif actual_int > book:
@@ -265,27 +335,51 @@ def main():
 
         # Print record summary if book lines exist
         if has_book_lines:
-            wins = sum(1 for _, r in df.iterrows()
-                       if pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))
-                       and abs(r['expected_wins'] - r['book_line']) > 1.0
-                       and ((r['expected_wins'] > r['book_line'] and int(r['actual_wins']) > r['book_line'])
-                            or (r['expected_wins'] < r['book_line'] and int(r['actual_wins']) < r['book_line'])))
-            losses = sum(1 for _, r in df.iterrows()
-                         if pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))
-                         and abs(r['expected_wins'] - r['book_line']) > 1.0
-                         and ((r['expected_wins'] > r['book_line'] and int(r['actual_wins']) < r['book_line'])
-                              or (r['expected_wins'] < r['book_line'] and int(r['actual_wins']) > r['book_line'])))
-            pushes = sum(1 for _, r in df.iterrows()
-                         if pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))
-                         and abs(r['expected_wins'] - r['book_line']) > 1.0
-                         and int(r['actual_wins']) == r['book_line'])
+            wins = 0
+            losses = 0
+            pushes = 0
+            for _, r in df.iterrows():
+                if not (pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))):
+                    continue
+                pmf = parse_win_probs(r.get('win_probs')) if isinstance(r.get('win_probs'), str) else None
+                if pmf is None:
+                    continue
+                over_o = r.get('over_odds')
+                under_o = r.get('under_odds')
+                side, prob = compute_bet_from_pmf(
+                    pmf, r['book_line'],
+                    over_odds=int(over_o) if pd.notna(over_o) else None,
+                    under_odds=int(under_o) if pd.notna(under_o) else None,
+                )
+                if side == '—':
+                    continue
+                actual_int = int(r['actual_wins'])
+                book = r['book_line']
+                if side == 'Over':
+                    if actual_int > book:
+                        wins += 1
+                    elif actual_int < book:
+                        losses += 1
+                    else:
+                        pushes += 1
+                elif side == 'Under':
+                    if actual_int < book:
+                        wins += 1
+                    elif actual_int > book:
+                        losses += 1
+                    else:
+                        pushes += 1
             total = wins + losses + pushes
             label = f"{year}"
             if conf_name:
                 label += f" {conf_name}"
             pct = f" ({wins/total*100:.0f}%)" if total > 0 else ""
             print(f"\n**{label} JP+ Record: {wins}-{losses}" + (f"-{pushes}" if pushes else "") + f"{pct}**")
-            print(f"\n*JP+ Bet column shows Over/Under only when JP+ disagrees with the book line by 1+ win. No-bet games show \"—\".*")
+            has_odds = df['over_odds'].notna().any()
+            if has_odds:
+                print(f"\n*JP+ Bet column shows Over/Under when P(win bet) exceeds breakeven implied by book odds. Probability from Monte Carlo PMF.*")
+            else:
+                print(f"\n*JP+ Bet column shows Over/Under when P(win bet) > 55% (covers -110 vig). Probability from Monte Carlo PMF.*")
     else:
         if show_conf_col:
             print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")

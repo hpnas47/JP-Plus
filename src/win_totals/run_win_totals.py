@@ -238,6 +238,7 @@ def cmd_predict(args):
             'sp_plus': round(d.predicted_rating, 1),
             'expected_wins': round(d.expected_wins, 1),
             'n_games': d.n_games,
+            'win_probs': ','.join(f'{p:.6f}' for p in d.win_probs),
         })
     pd.DataFrame(rows).to_csv(pred_csv_path, index=False)
     print(f"\nSaved {len(rows)} predictions to {pred_csv_path}")
