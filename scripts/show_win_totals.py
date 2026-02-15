@@ -266,7 +266,7 @@ def main():
             cols.append("Conf")
         cols += ["JP+ Exp. Wins", "SP+ Exp. Wins"]
         if has_book_lines:
-            cols += ["Book Line", "Actual", "JP+ Bet", "Result"]
+            cols += ["Book Line", "Actual", "JP+ Bet", "Conf.", "Result"]
         else:
             cols.append("Actual")
 
@@ -328,11 +328,26 @@ def main():
                         bet = "—"
                         result = "—"
                 else:
+                    side = "—"
+                    prob = 0.0
                     bet = "—"
                     result = "—"
                 parts.append(bet)
+                # Star confidence rating based on probability
+                if side != '—':
+                    if prob >= 0.70:
+                        stars = "⭐⭐⭐"
+                    elif prob >= 0.60:
+                        stars = "⭐⭐"
+                    else:
+                        stars = "⭐"
+                else:
+                    stars = "—"
+                parts.append(stars)
                 if result == "Win":
                     parts.append("Win ✅")
+                elif result == "Loss":
+                    parts.append("Loss ❌")
                 else:
                     parts.append(result)
             else:
