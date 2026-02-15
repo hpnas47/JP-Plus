@@ -536,3 +536,170 @@ class TestPresets:
         config1 = SelectionPolicyConfig(ev_min=0.03)
         config2 = SelectionPolicyConfig(ev_min=0.05)
         assert not configs_match(config1, config2)
+
+
+# =============================================================================
+# NEW TESTS: Accounting accuracy, NaN handling, drawdown sort
+# =============================================================================
+
+from src.spread_selection.selection_policy import compute_max_drawdown
+
+
+class TestAccountingAccuracy:
+    """Verify n_phase1_skipped, n_filtered_by_ev, n_filtered_by_cap are exact."""
+
+    def _make_candidates(self):
+        """10 candidates: 2 phase1 (weeks 2,3), 8 phase2 (weeks 4,5)."""
+        return pd.DataFrame({
+            "game_id": [f"g{i}" for i in range(10)],
+            "year": [2024] * 10,
+            "week": [2, 3, 4, 4, 4, 4, 5, 5, 5, 5],
+            "ev": [0.10, 0.10, 0.08, 0.06, 0.04, 0.02, 0.09, 0.07, 0.03, 0.01],
+            "edge_abs": [10, 10, 8, 6, 4, 2, 9, 7, 3, 1],
+            "jp_side_covered": [True] * 10,
+            "push": [False] * 10,
+        })
+
+    def test_ev_threshold_accounting(self):
+        """EV_THRESHOLD: 10 cands, 2 phase1, ev_min=0.05 filters 3, cap=2 removes 1."""
+        df = self._make_candidates()
+        config = SelectionPolicyConfig(
+            selection_policy="EV_THRESHOLD",
+            ev_min=0.05,
+            max_bets_per_week=2,
+            phase1_policy="skip",
+        )
+        result = apply_selection_policy(df, config)
+
+        assert result.n_candidates == 10
+        assert result.n_phase1_skipped == 2
+        # After phase1: 8 candidates. ev>=0.05: g2(0.08), g3(0.06), g6(0.09), g7(0.07) = 4
+        assert result.n_filtered_by_ev == 4  # 8 - 4 = 4 below threshold
+        # 4 pass EV, cap=2/week: wk4 has 2 (g2,g3), wk5 has 2 (g6,g7) → 0 capped
+        assert result.n_filtered_by_cap == 0
+        assert result.n_selected == 4
+        # Verify: phase1 + ev + cap + selected = candidates
+        assert (result.n_phase1_skipped + result.n_filtered_by_ev +
+                result.n_filtered_by_cap + result.n_selected) == result.n_candidates
+
+    def test_ev_threshold_cap_fires(self):
+        """EV_THRESHOLD with tight cap: verify cap count is exact."""
+        df = self._make_candidates()
+        config = SelectionPolicyConfig(
+            selection_policy="EV_THRESHOLD",
+            ev_min=0.01,  # keep almost all
+            max_bets_per_week=1,
+            phase1_policy="skip",
+        )
+        result = apply_selection_policy(df, config)
+
+        assert result.n_candidates == 10
+        assert result.n_phase1_skipped == 2
+        assert result.n_filtered_by_ev == 0  # all 8 pass ev_min=0.01
+        assert result.n_filtered_by_cap == 6  # 8 - 2 (1 per week × 2 weeks)
+        assert result.n_selected == 2
+
+    def test_top_n_accounting(self):
+        """TOP_N_PER_WEEK: exact counts for top_n + floor + cap."""
+        df = self._make_candidates()
+        config = SelectionPolicyConfig(
+            selection_policy="TOP_N_PER_WEEK",
+            top_n_per_week=3,
+            ev_floor=0.05,
+            max_bets_per_week=10,
+            phase1_policy="skip",
+        )
+        result = apply_selection_policy(df, config)
+
+        assert result.n_candidates == 10
+        assert result.n_phase1_skipped == 2
+        # wk4: top3 = [0.08, 0.06, 0.04], floor=0.05 keeps [0.08, 0.06] → 1 ev-filtered
+        # wk5: top3 = [0.09, 0.07, 0.03], floor=0.05 keeps [0.09, 0.07] → 1 ev-filtered
+        assert result.n_filtered_by_ev == 2
+        # wk4: 4 candidates, top3 → 1 cap-filtered; wk5: same → 1 cap-filtered
+        assert result.n_filtered_by_cap == 2
+        assert result.n_selected == 4
+
+    def test_hybrid_accounting(self):
+        """HYBRID: exact counts for floor-first + top_n + cap."""
+        df = self._make_candidates()
+        config = SelectionPolicyConfig(
+            selection_policy="HYBRID",
+            top_n_per_week=2,
+            ev_floor=0.03,
+            max_bets_per_week=10,
+            phase1_policy="skip",
+        )
+        result = apply_selection_policy(df, config)
+
+        assert result.n_candidates == 10
+        assert result.n_phase1_skipped == 2
+        # wk4: floor filters 0.02 → 1 ev-filtered; wk5: floor filters 0.01 → 1 ev-filtered
+        assert result.n_filtered_by_ev == 2
+        # wk4: 3 pass floor, top2 → 1 cap; wk5: 3 pass floor, top2 → 1 cap
+        assert result.n_filtered_by_cap == 2
+        assert result.n_selected == 4
+
+    def test_accounting_sums_to_candidates(self):
+        """For all policies, phase1 + ev + cap + selected = candidates."""
+        df = self._make_candidates()
+        for policy in ["EV_THRESHOLD", "TOP_N_PER_WEEK", "HYBRID"]:
+            config = SelectionPolicyConfig(
+                selection_policy=policy,
+                ev_min=0.03,
+                ev_floor=0.03,
+                top_n_per_week=2,
+                max_bets_per_week=2,
+                phase1_policy="skip",
+            )
+            result = apply_selection_policy(df, config)
+            total = (result.n_phase1_skipped + result.n_filtered_by_ev +
+                     result.n_filtered_by_cap + result.n_selected)
+            assert total == result.n_candidates, (
+                f"{policy}: {result.n_phase1_skipped}+{result.n_filtered_by_ev}+"
+                f"{result.n_filtered_by_cap}+{result.n_selected} != {result.n_candidates}"
+            )
+
+
+class TestNaNOutcomes:
+    """Verify compute_selection_metrics handles NaN outcomes gracefully."""
+
+    def test_nan_outcomes_not_counted_as_losses(self):
+        """NaN in outcome_col should be dropped, not treated as a loss."""
+        df = pd.DataFrame({
+            "game_id": ["g1", "g2", "g3"],
+            "year": [2024, 2024, 2024],
+            "week": [4, 4, 4],
+            "ev": [0.05, 0.05, 0.05],
+            "edge_abs": [5.0, 5.0, 5.0],
+            "jp_side_covered": [True, False, np.nan],  # g3 unsettled
+            "push": [False, False, False],
+        })
+        metrics = compute_selection_metrics(df)
+        # g3 dropped → 2 bets: 1 win, 1 loss
+        assert metrics.n_bets == 2
+        assert metrics.n_wins == 1
+        assert metrics.n_losses == 1
+        assert metrics.ats_pct == 50.0
+
+
+class TestMaxDrawdownSort:
+    """Verify compute_max_drawdown is stable regardless of input order."""
+
+    def test_shuffled_input_same_drawdown(self):
+        """Shuffled input produces same drawdown as sorted input."""
+        df = pd.DataFrame({
+            "game_id": [f"g{i}" for i in range(10)],
+            "year": [2024] * 10,
+            "week": [4, 4, 4, 5, 5, 5, 6, 6, 6, 6],
+            "jp_side_covered": [True, True, False, False, False, True, True, False, True, True],
+            "push": [False] * 10,
+        })
+
+        dd_sorted = compute_max_drawdown(df)
+
+        # Shuffle and compute again
+        df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
+        dd_shuffled = compute_max_drawdown(df_shuffled)
+
+        assert dd_sorted == dd_shuffled

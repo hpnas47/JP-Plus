@@ -3,16 +3,22 @@
 This module provides configurable bet selection policies that determine which
 bets to recommend from the pool of EV-positive candidates.
 
-V1 Scope (2026-02-14):
-- Three selection policies: EV_THRESHOLD, TOP_N_PER_WEEK, HYBRID
-- Deterministic tie-breaking for reproducibility
-- Phase-aware routing (weeks 0-3 skip, weeks 4-15 phase2_only)
-- Configurable caps and floors
+EV Units Contract
+-----------------
+All ``ev`` / ``ev_col`` values consumed by this module MUST be **expected
+profit per unit staked** (ROI units), consistent with the engine formula::
+
+    EV = p_win * b - (1 - p_win)
+
+where *b* is the decimal payout minus 1 (e.g., +100 American → b = 1.0).
+A value of 0.03 means "+3% expected return per bet", NOT "3 percentage-point
+probability edge over breakeven."  All thresholds (``ev_min``, ``ev_floor``)
+are in these same ROI units.
 
 Policy Behavior:
-- EV_THRESHOLD: Keep all bets with EV >= ev_min, then cap per week
-- TOP_N_PER_WEEK: Keep top N by EV per week, optionally filter by ev_floor
-- HYBRID: Keep top N by EV per week but only if EV >= ev_floor; hard cap applies
+- EV_THRESHOLD: Keep all bets with EV >= ev_min (ROI units), then cap per week
+- TOP_N_PER_WEEK: Keep top N by EV per week, optionally filter by ev_floor (ROI units)
+- HYBRID: Keep candidates >= ev_floor (ROI units), top N per week, with hard cap
 
 All policies enforce:
 - One bet per game/event (already enforced upstream)
@@ -44,8 +50,8 @@ class SelectionPolicyConfig:
 
     Attributes:
         selection_policy: Which selection algorithm to use
-        ev_min: Minimum EV for EV_THRESHOLD policy (default 0.03 = 3%)
-        ev_floor: Minimum EV for TOP_N_PER_WEEK and HYBRID (default 0.0)
+        ev_min: Minimum EV (ROI units) for EV_THRESHOLD policy (default 0.03 = +3% ROI)
+        ev_floor: Minimum EV (ROI units) for TOP_N_PER_WEEK and HYBRID (default 0.0)
         top_n_per_week: Number of top bets per week (default 10)
         max_bets_per_week: Hard cap on bets per week (default 10)
         phase1_policy: How to handle weeks 0-3 ("skip", "apply", default "skip")
@@ -85,10 +91,11 @@ class SelectionResult:
 
     Attributes:
         selected_bets: DataFrame of selected bets
-        n_candidates: Number of candidates before selection
+        n_candidates: Number of candidates before any filtering
         n_selected: Number of bets selected
-        n_filtered_by_ev: Number filtered by EV threshold/floor
-        n_filtered_by_cap: Number filtered by weekly cap
+        n_phase1_skipped: Number excluded by phase1_policy="skip" (weeks 0-3)
+        n_filtered_by_ev: Number filtered by EV threshold/floor (after phase1 skip)
+        n_filtered_by_cap: Number removed by weekly cap (after EV filtering)
         bets_per_week: Dict of (year, week) -> bet count
         config: The config used for selection
     """
@@ -96,6 +103,7 @@ class SelectionResult:
     selected_bets: pd.DataFrame
     n_candidates: int
     n_selected: int
+    n_phase1_skipped: int
     n_filtered_by_ev: int
     n_filtered_by_cap: int
     bets_per_week: dict
@@ -150,15 +158,18 @@ def apply_selection_policy(
 ) -> SelectionResult:
     """Apply selection policy to candidate bets.
 
+    The ``ev_col`` column must contain EV in ROI units (expected profit per
+    unit staked), **not** probability edge vs breakeven.  See module docstring.
+
     Args:
         candidates: DataFrame with candidate bets (must have ev, year, week, game_id, edge_abs)
         config: SelectionPolicyConfig with policy parameters
-        ev_col: Name of EV column
+        ev_col: Name of EV column (must be ROI units)
         year_col: Name of year column
         week_col: Name of week column
 
     Returns:
-        SelectionResult with selected bets and metadata
+        SelectionResult with selected bets and accurate accounting
 
     Raises:
         ValueError: If required columns are missing
@@ -173,6 +184,7 @@ def apply_selection_policy(
             selected_bets=candidates.copy(),
             n_candidates=0,
             n_selected=0,
+            n_phase1_skipped=0,
             n_filtered_by_ev=0,
             n_filtered_by_cap=0,
             bets_per_week={},
@@ -183,28 +195,41 @@ def apply_selection_policy(
     df = candidates.copy()
     n_candidates = len(df)
 
+    # EV units sanity check: if thresholds are in typical ROI range but
+    # the EV distribution looks like probability-edge, warn the user.
+    ev_threshold = max(config.ev_min, config.ev_floor)
+    if ev_threshold <= 0.05 and len(df) > 10:
+        ev_vals = df[ev_col].dropna()
+        if len(ev_vals) > 0 and ev_vals.abs().max() < 0.005:
+            logger.warning(
+                "EV values appear very small (max |ev| < 0.005) while thresholds "
+                "are in ROI range (ev_min=%.4f, ev_floor=%.4f). Ensure ev_col "
+                "contains ROI units (p_win*b - p_lose), not probability edge "
+                "(p_win - p_breakeven).",
+                config.ev_min, config.ev_floor,
+            )
+
     # Phase 1 handling: optionally filter out weeks 0-3
+    n_phase1_skipped = 0
     if config.phase1_policy == "skip":
         phase1_mask = df[week_col] <= 3
-        n_phase1 = phase1_mask.sum()
-        if n_phase1 > 0:
-            logger.debug(f"Skipping {n_phase1} Phase 1 candidates (weeks 0-3)")
+        n_phase1_skipped = int(phase1_mask.sum())
+        if n_phase1_skipped > 0:
+            logger.debug(f"Skipping {n_phase1_skipped} Phase 1 candidates (weeks 0-3)")
             df = df[~phase1_mask].copy()
 
-    # Apply policy-specific selection
+    # Apply policy-specific selection; each returns (selected_df, n_ev_filtered, n_cap_filtered)
     policy = config.selection_policy
 
     if policy == "EV_THRESHOLD":
-        selected = _apply_ev_threshold(df, config, ev_col, year_col, week_col)
+        selected, n_filtered_by_ev, n_filtered_by_cap = _apply_ev_threshold(df, config, ev_col, year_col, week_col)
     elif policy == "TOP_N_PER_WEEK":
-        selected = _apply_top_n_per_week(df, config, ev_col, year_col, week_col)
+        selected, n_filtered_by_ev, n_filtered_by_cap = _apply_top_n_per_week(df, config, ev_col, year_col, week_col)
     elif policy == "HYBRID":
-        selected = _apply_hybrid(df, config, ev_col, year_col, week_col)
+        selected, n_filtered_by_ev, n_filtered_by_cap = _apply_hybrid(df, config, ev_col, year_col, week_col)
     else:
         raise ValueError(f"Unknown policy: {policy}")
 
-    # Count filters
-    n_after_ev = len(df)  # After phase1 skip but before policy
     n_selected = len(selected)
 
     # Compute bets per week
@@ -213,16 +238,13 @@ def apply_selection_policy(
     else:
         bets_per_week = {}
 
-    # Estimate filters (approximate - actual depends on policy)
-    n_filtered_by_ev = n_candidates - n_after_ev  # Phase 1 skips counted here
-    n_filtered_by_cap = n_after_ev - n_selected - (n_candidates - n_after_ev)
-
     return SelectionResult(
         selected_bets=selected,
         n_candidates=n_candidates,
         n_selected=n_selected,
-        n_filtered_by_ev=max(0, n_filtered_by_ev),
-        n_filtered_by_cap=max(0, n_filtered_by_cap),
+        n_phase1_skipped=n_phase1_skipped,
+        n_filtered_by_ev=n_filtered_by_ev,
+        n_filtered_by_cap=n_filtered_by_cap,
         bets_per_week=bets_per_week,
         config=config,
     )
@@ -234,39 +256,36 @@ def _apply_ev_threshold(
     ev_col: str,
     year_col: str,
     week_col: str,
-) -> pd.DataFrame:
-    """EV_THRESHOLD policy: keep EV >= ev_min, then cap per week.
-
-    Args:
-        df: Candidate bets
-        config: Policy config
-        ev_col, year_col, week_col: Column names
+) -> tuple[pd.DataFrame, int, int]:
+    """EV_THRESHOLD policy: keep EV >= ev_min (ROI units), then cap per week.
 
     Returns:
-        Selected bets DataFrame
+        (selected_df, n_filtered_by_ev, n_filtered_by_cap)
     """
     # Filter by ev_min
     mask = df[ev_col] >= config.ev_min
     filtered = df[mask].copy()
+    n_filtered_by_ev = int((~mask).sum())
 
     if len(filtered) == 0:
-        return filtered
+        return filtered, n_filtered_by_ev, 0
 
     # Sort deterministically
     filtered = _sort_deterministic(filtered, ev_col)
 
     # Apply max_bets_per_week cap
+    n_filtered_by_cap = 0
     result_rows = []
     for (year, week), group in filtered.groupby([year_col, week_col]):
-        # Sort again within group to ensure determinism
         group_sorted = _sort_deterministic(group, ev_col)
-        # Take up to max_bets_per_week
-        result_rows.append(group_sorted.head(config.max_bets_per_week))
+        capped = group_sorted.head(config.max_bets_per_week)
+        n_filtered_by_cap += len(group_sorted) - len(capped)
+        result_rows.append(capped)
 
     if result_rows:
         result = pd.concat(result_rows, ignore_index=True)
-        return _sort_deterministic(result, ev_col)
-    return pd.DataFrame(columns=filtered.columns)
+        return _sort_deterministic(result, ev_col), n_filtered_by_ev, n_filtered_by_cap
+    return pd.DataFrame(columns=filtered.columns), n_filtered_by_ev, n_filtered_by_cap
 
 
 def _apply_top_n_per_week(
@@ -275,43 +294,44 @@ def _apply_top_n_per_week(
     ev_col: str,
     year_col: str,
     week_col: str,
-) -> pd.DataFrame:
-    """TOP_N_PER_WEEK policy: top N by EV per week, optionally filtered by ev_floor.
-
-    Args:
-        df: Candidate bets
-        config: Policy config
-        ev_col, year_col, week_col: Column names
+) -> tuple[pd.DataFrame, int, int]:
+    """TOP_N_PER_WEEK policy: top N by EV per week, optionally filtered by ev_floor (ROI units).
 
     Returns:
-        Selected bets DataFrame
+        (selected_df, n_filtered_by_ev, n_filtered_by_cap)
     """
     if len(df) == 0:
-        return df.copy()
+        return df.copy(), 0, 0
 
+    n_filtered_by_ev = 0
+    n_filtered_by_cap = 0
     result_rows = []
 
     for (year, week), group in df.groupby([year_col, week_col]):
-        # Sort deterministically within week
         group_sorted = _sort_deterministic(group, ev_col)
 
-        # Take top N
+        # Take top N (excess beyond top_n is cap-filtered)
         top_n = group_sorted.head(config.top_n_per_week)
+        n_filtered_by_cap += len(group_sorted) - len(top_n)
 
         # Filter by ev_floor
         if config.ev_floor > 0:
+            before_floor = len(top_n)
             top_n = top_n[top_n[ev_col] >= config.ev_floor]
+            n_filtered_by_ev += before_floor - len(top_n)
 
-        # Apply max_bets_per_week (should be redundant if >= top_n_per_week)
+        # Apply max_bets_per_week (redundant if >= top_n_per_week)
+        before_cap = len(top_n)
         top_n = top_n.head(config.max_bets_per_week)
+        n_filtered_by_cap += before_cap - len(top_n)
 
         if len(top_n) > 0:
             result_rows.append(top_n)
 
     if result_rows:
         result = pd.concat(result_rows, ignore_index=True)
-        return _sort_deterministic(result, ev_col)
-    return pd.DataFrame(columns=df.columns)
+        return _sort_deterministic(result, ev_col), n_filtered_by_ev, n_filtered_by_cap
+    return pd.DataFrame(columns=df.columns), n_filtered_by_ev, n_filtered_by_cap
 
 
 def _apply_hybrid(
@@ -320,49 +340,45 @@ def _apply_hybrid(
     ev_col: str,
     year_col: str,
     week_col: str,
-) -> pd.DataFrame:
-    """HYBRID policy: take candidates >= ev_floor, top N per week, with hard cap.
+) -> tuple[pd.DataFrame, int, int]:
+    """HYBRID policy: take candidates >= ev_floor (ROI units), top N per week, with hard cap.
 
     Key difference from TOP_N: filters BEFORE taking top N (not after).
 
-    Args:
-        df: Candidate bets
-        config: Policy config
-        ev_col, year_col, week_col: Column names
-
     Returns:
-        Selected bets DataFrame
+        (selected_df, n_filtered_by_ev, n_filtered_by_cap)
     """
     if len(df) == 0:
-        return df.copy()
+        return df.copy(), 0, 0
 
+    n_filtered_by_ev = 0
+    n_filtered_by_cap = 0
     result_rows = []
 
     for (year, week), group in df.groupby([year_col, week_col]):
         # First filter by ev_floor
         if config.ev_floor > 0:
+            before_floor = len(group)
             group = group[group[ev_col] >= config.ev_floor]
+            n_filtered_by_ev += before_floor - len(group)
 
         if len(group) == 0:
             continue
 
-        # Sort deterministically
         group_sorted = _sort_deterministic(group, ev_col)
 
-        # Take top N
-        top_n = group_sorted.head(config.top_n_per_week)
-
-        # Apply hard cap (min of top_n_per_week and max_bets_per_week)
+        # Take top N, then apply hard cap
         effective_cap = min(config.top_n_per_week, config.max_bets_per_week)
-        top_n = top_n.head(effective_cap)
+        top_n = group_sorted.head(effective_cap)
+        n_filtered_by_cap += len(group_sorted) - len(top_n)
 
         if len(top_n) > 0:
             result_rows.append(top_n)
 
     if result_rows:
         result = pd.concat(result_rows, ignore_index=True)
-        return _sort_deterministic(result, ev_col)
-    return pd.DataFrame(columns=df.columns)
+        return _sort_deterministic(result, ev_col), n_filtered_by_ev, n_filtered_by_cap
+    return pd.DataFrame(columns=df.columns), n_filtered_by_ev, n_filtered_by_cap
 
 
 # =============================================================================
@@ -455,6 +471,18 @@ def compute_selection_metrics(
     # Ensure push column exists
     if push_col not in df.columns:
         df[push_col] = False
+
+    # Guard: filter out rows with NaN outcomes (unsettled bets)
+    n_total = len(df)
+    if outcome_col in df.columns:
+        settled_mask = df[outcome_col].notna() & df[push_col].notna()
+        n_unsettled = int((~settled_mask).sum())
+        if n_unsettled > 0:
+            logger.warning(
+                "Dropping %d rows with NaN in %s/%s (unsettled bets)",
+                n_unsettled, outcome_col, push_col,
+            )
+            df = df[settled_mask].copy()
 
     # Basic counts
     n_bets = len(df)
@@ -578,8 +606,11 @@ def compute_max_drawdown(
 ) -> float:
     """Compute maximum drawdown from peak cumulative return.
 
+    The DataFrame is sorted by (year, week, game_id) internally to ensure
+    deterministic results regardless of input order.
+
     Args:
-        selected_bets: DataFrame sorted by time (year, week, game_id)
+        selected_bets: DataFrame with year, week, game_id columns
         outcome_col: Win/loss outcome column
         push_col: Push indicator column
         juice: American odds
@@ -591,6 +622,11 @@ def compute_max_drawdown(
         return 0.0
 
     df = selected_bets.copy()
+
+    # Enforce chronological sort for meaningful drawdown
+    sort_cols = [c for c in ("year", "week", "game_id") if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols).reset_index(drop=True)
 
     # Ensure push column
     if push_col not in df.columns:
