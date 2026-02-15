@@ -4,6 +4,32 @@
 
 ---
 
+## Session: February 15, 2026 (Night)
+
+### Theme: Ratings Pipeline Unification — Single Source of Truth
+
+---
+
+#### Ratings Generation Unified into src/ratings/generate.py — COMMITTED
+**Commit**: `6a94830`
+
+Discord bot was showing Ohio State at 26.6 while MODEL_EXPLAINER.md showed 28.8. Root cause: rating generation logic was copy-pasted in 3 places (`show_ratings.py`, `generate_docs.py`, `MODEL_ARCHITECTURE.md`) that drifted apart. `show_ratings.py` was missing: home_team validation (P0.3), turnover building, and conference anchors. `generate_docs.py` was also missing conference anchors.
+
+**Fixes:**
+1. **New `src/ratings/generate.py`** — single canonical `generate_ratings(year, week)` function using full production pipeline (`fetch_all_season_data` + EFM with conference anchors + ST)
+2. **`show_ratings.py`** — now imports from `src.ratings.generate` (no more duplicate EFM/ST logic)
+3. **`generate_docs.py`** — same, via `generate_ratings_for_docs()` wrapper
+4. **`run_weekly.py`** — added `team_conferences` to `calculate_ratings()` call. Conference Strength Anchor was approved Feb 2026 but never wired into the weekly production spread pipeline.
+5. **MODEL_ARCHITECTURE.md + MODEL_EXPLAINER.md** — regenerated Top 25 with conference anchors
+
+**Rating changes** (conference anchors now applied everywhere):
+- Ohio State: 28.8 → 27.1 | Oregon: #6 → #4 | Texas A&M: #18 → #14 | USC: #25 → #18
+- Iowa and TCU entered Top 25 (replacing South Florida, James Madison, SMU)
+
+**Discord bot chain**: Sunday pipeline → `show_ratings.py --refresh` → `src.ratings.generate` → CSV cache → `/ratings` command reads cache. All links now use the same canonical function.
+
+---
+
 ## Session: February 15, 2026 (Evening)
 
 ### Theme: Win Totals Feature Engineering + TotalsModel Correctness + EV Engine Bugfixes
