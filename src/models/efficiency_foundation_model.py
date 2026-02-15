@@ -1198,9 +1198,12 @@ class EfficiencyFoundationModel:
         # After centering: G_centered = G - n * X_offset @ X_offset^T
         G -= n_plays * np.outer(X_offset, X_offset)
 
-        # --- Regularization (DO NOT regularize intercept) ---
-        # Add alpha * I to the centered Gram matrix
-        np.fill_diagonal(G, G.diagonal() + alpha)
+        # --- Regularization (DO NOT regularize intercept or HFA) ---
+        # Add alpha to team coefficient diagonals only (offense + defense blocks).
+        # HFA is an intercept-like nuisance term and should not be shrunk toward 0.
+        diag = G.diagonal().copy()
+        diag[:2 * n_teams] += alpha
+        np.fill_diagonal(G, diag)
 
         # --- Right-hand side: X^T W y_c ---
         Xty = np.empty(n_cols)
@@ -1400,6 +1403,15 @@ class EfficiencyFoundationModel:
         # Apply time decay dynamically (varies per eval_week)
         if self.time_decay < 1.0 and "week" in plays_df.columns:
             decay_ref = eval_week if eval_week is not None else plays_df["week"].max()
+            # Guard: future plays would get negative exponents, silently upweighted
+            if eval_week is not None:
+                actual_max_week = plays_df["week"].max()
+                if actual_max_week > eval_week:
+                    raise ValueError(
+                        f"DATA LEAKAGE in time decay: plays contain week {actual_max_week} "
+                        f"but eval_week={eval_week}. Future plays would be upweighted by "
+                        f"negative decay exponents. Filter plays before calling."
+                    )
             time_weights = self.time_decay ** (decay_ref - plays_df["week"].values)
             weights = base_weights * time_weights
         else:
