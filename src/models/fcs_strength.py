@@ -16,7 +16,7 @@ Key features:
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 import polars as pl
 
@@ -82,6 +82,12 @@ class FCSStrengthEstimator:
     slope: float = 0.8  # Penalty increase per point of avg loss to FBS
     intercept: float = 10.0  # Base penalty (elite FCS with 0 avg loss)
 
+    # Optional team name normalization (e.g., "Florida St." -> "Florida State")
+    normalize_team_name: Optional[Callable[[str], str]] = field(default=None, repr=False)
+
+    # Walk-forward safety: maximum regular-season week (games beyond this excluded)
+    max_regular_season_week: int = 15
+
     # Internal state
     _team_strengths: dict[str, FCSTeamStrength] = field(default_factory=dict)
     _team_margins: dict[str, list[float]] = field(default_factory=dict)
@@ -124,18 +130,55 @@ class FCSStrengthEstimator:
         self._team_margins.clear()
         self._team_strengths.clear()
 
+        # Validate required columns
+        required_cols = {"week", "home_team", "away_team", "home_points", "away_points"}
+        missing = required_cols - set(games_df.columns)
+        if missing:
+            raise ValueError(f"games_df missing required columns: {missing}")
+
         # Filter to completed games up to through_week
-        filtered = games_df.filter(
-            (pl.col("week") <= through_week)
-            & pl.col("home_points").is_not_null()
-            & pl.col("away_points").is_not_null()
-        )
+        week_filter = (pl.col("week") <= through_week) & pl.col("home_points").is_not_null() & pl.col("away_points").is_not_null()
+
+        # Walk-forward safety: exclude postseason games
+        if "season_type" in games_df.columns:
+            week_filter = week_filter & (pl.col("season_type") == "regular")
+        else:
+            # Defensive guardrail: cap at max_regular_season_week
+            effective_max = min(through_week, self.max_regular_season_week)
+            if through_week > self.max_regular_season_week:
+                n_beyond = games_df.filter(
+                    (pl.col("week") > self.max_regular_season_week)
+                    & (pl.col("week") <= through_week)
+                ).height
+                if n_beyond > 0:
+                    logger.warning(
+                        "FCS estimator: %d games with week > %d would be included by "
+                        "through_week=%d but no season_type column available. "
+                        "Capping at week %d to prevent postseason leakage.",
+                        n_beyond, self.max_regular_season_week, through_week,
+                        self.max_regular_season_week,
+                    )
+            week_filter = (pl.col("week") <= effective_max) & pl.col("home_points").is_not_null() & pl.col("away_points").is_not_null()
+
+        filtered = games_df.filter(week_filter)
 
         if filtered.height == 0:
             return
 
+        # Apply team name normalization if provided
+        if self.normalize_team_name is not None:
+            norm_fn = self.normalize_team_name
+            filtered = filtered.with_columns([
+                pl.col("home_team").map_elements(norm_fn, return_dtype=pl.Utf8).alias("home_team"),
+                pl.col("away_team").map_elements(norm_fn, return_dtype=pl.Utf8).alias("away_team"),
+            ])
+
         # Convert fbs_teams to pl.Series once (avoids rebuilding hashset on each is_in call)
-        fbs_series = pl.Series("fbs", list(fbs_teams))
+        # Apply normalization to fbs_teams as well for consistency
+        if self.normalize_team_name is not None:
+            fbs_series = pl.Series("fbs", [self.normalize_team_name(t) for t in fbs_teams])
+        else:
+            fbs_series = pl.Series("fbs", list(fbs_teams))
 
         # Vectorized pipeline: identify FBS-vs-FCS games and calculate HFA-neutralized margins
         fcs_games = (
@@ -170,6 +213,21 @@ class FCSStrengthEstimator:
                 ]
             )
         )
+
+        # Diagnostic: count games where neither team matched FBS (possible name mismatches)
+        neither_fbs = filtered.with_columns([
+            pl.col("home_team").is_in(fbs_series).alias("home_is_fbs"),
+            pl.col("away_team").is_in(fbs_series).alias("away_is_fbs"),
+        ]).filter(~pl.col("home_is_fbs") & ~pl.col("away_is_fbs"))
+        if neither_fbs.height > 0:
+            sample_teams = set()
+            for col in ["home_team", "away_team"]:
+                sample_teams.update(neither_fbs[col].unique().to_list()[:5])
+            logger.warning(
+                "FCS estimator: %d games had neither team in fbs_teams (possible name "
+                "mismatches). Sample unmatched: %s",
+                neither_fbs.height, sorted(sample_teams)[:5],
+            )
 
         if fcs_games.height == 0:
             return
