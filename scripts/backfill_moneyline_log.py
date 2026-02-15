@@ -180,7 +180,8 @@ def main():
                     "home_team": row["home_team"],
                     "away_team": row["away_team"],
                     "model_spread": float(row["predicted_spread"]),
-                    "market_spread": float(row["spread_open"]) if pd.notna(row["spread_open"]) else 0.0,
+                    # spread_open is Vegas convention (neg=home fav); engine expects internal (pos=home fav)
+                    "market_spread": -float(row["spread_open"]) if pd.notna(row["spread_open"]) else 0.0,
                     "ml_odds_home": home_ml,
                     "ml_odds_away": away_ml,
                 })
