@@ -4,6 +4,51 @@
 
 ---
 
+## Session: February 15, 2026 (Evening)
+
+### Theme: Win Totals Feature Engineering + TotalsModel Correctness + EV Engine Bugfixes
+
+---
+
+#### Portal Adjustment Feature for Win Totals — COMMITTED
+**Commit**: `277eed1`
+
+Added `portal_adjustment` as 18th feature in win totals model, sourced from spreads model's `PreseasonPriors` (walk-forward-safe, position-weighted, level-up discounted, ±1.4 pts max). Replaces the previously excluded raw CFBD portal features (which lacked reliable transfer dates).
+
+- **Walk-forward MAE**: 6.695 (vs 6.686 baseline) — neutral (+0.009, within noise for N=270)
+- **Rationale**: Portal volume growing rapidly (1.7K→4.3K transfers 2021-2025); feature will gain value
+- Updated `EXCLUDED_FEATURES` (now empty), module docstring, and `FEATURE_METADATA`
+
+---
+
+#### TotalsModel Correctness Fixes — COMMITTED
+**Commit**: `8e33f61`
+
+Three critical fixes to `src/models/totals_model.py`:
+
+1. **Walk-forward semantics (Fix #1)**: Renamed `max_week` → `through_week` (inclusive) to eliminate ambiguity. Deprecated `max_week` alias preserved for backward compat. Updated `backtest_totals.py` leakage guard.
+2. **Multi-year universe warning (Fix #2)**: `valid_mask` now logs WARNING with team names when dropping games due to universe mismatch, instead of silently dropping.
+3. **Zero-game team predictions (Fix #3)**: `team_ratings` now includes ALL universe teams (0-game teams get baseline adjustments via Ridge shrinkage). `predict_total()` works for bye-week teams early season.
+
+- **10 regression tests** added in `tests/test_totals_model.py`
+- Updated portal compliance tests for new `portal_adjustment` feature
+- All 141 tests passing
+
+---
+
+#### Win Totals EV Engine Bugfixes — COMMITTED
+**Commit**: `5543dd2`
+
+Five bugs fixed in `src/win_totals/edge.py`:
+
+1. **Push-adjusted breakeven (Bug #1)**: `breakeven_prob()` now accepts `push_prob`, making `edge` consistent with `EV` on whole-number lines. Previously showed negative edge despite positive EV for ~30-40% of lines.
+2. **Prob sum tolerance (Bug #2)**: Relaxed hard-skip from 0.001→0.01, normalize floating-point noise instead of silently dropping profitable bets from convolution rounding.
+3. **Leakage API rename (Bug #3)**: `leakage_risk_fraction` → `leakage_feature_count_fraction` to distinguish from magnitude-weighted `compute_leakage_contribution()`. Backward-compatible alias preserved.
+4. **Both-sides conflict (Bug #4)**: Drops lower-EV side instead of returning contradictory bets (impossible state with standard -110/-110 juice).
+5. **Docstring fix (Bug #5)**: Removed misleading "no-vig implied" language from `breakeven_prob()`.
+
+---
+
 ## Session: February 15, 2026
 
 ### Theme: Preseason Win Total Projection Module — Implementation, Audit, Display Refinements
