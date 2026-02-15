@@ -285,6 +285,7 @@ def main():
                 label += f" {conf_name}"
             pct = f" ({wins/total*100:.0f}%)" if total > 0 else ""
             print(f"\n**{label} JP+ Record: {wins}-{losses}" + (f"-{pushes}" if pushes else "") + f"{pct}**")
+            print(f"\n*JP+ Bet column shows Over/Under only when JP+ disagrees with the book line by 1+ win. No-bet games show \"—\".*")
     else:
         if show_conf_col:
             print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")
