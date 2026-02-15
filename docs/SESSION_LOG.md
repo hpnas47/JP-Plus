@@ -4,6 +4,61 @@
 
 ---
 
+## Session: February 14, 2026 (Evening)
+
+### Theme: FBS Filtering, Moneyline Bugfixes, Selection Policy Hardening
+
+---
+
+#### FBS vs FCS Filtering in Bet Display Scripts — COMMITTED
+**Commits**: `8945f37`, `5fbbe70`
+
+Both `show_spread_bets.py` and `show_totals_bets.py` were showing FBS vs FCS games in betting recommendations. Added dynamic FBS team filtering using `CFBDClient.get_fbs_teams(year)` with module-level caching.
+
+- **Impact**: Week 1 2025 spreads went from 46 bets → 21 (FBS-only). Record improved from 56.2% to 64.3% (Primary EV) and 57.1% to 71.4% (5+ Edge) — FCS games were adding noise.
+- **Design choice**: API-based lookup (not hard-coded list) to handle year-by-year FBS membership changes (Delaware & Missouri State joined FBS in 2025).
+
+---
+
+#### 2025 P&L Analysis — RESEARCH
+**Status**: Analysis only, no code changes
+
+Generated full 2025 season P&L for FBS-only spread bets:
+- **Primary EV Engine**: 89-67-2 (57.1%), +8.8% ROI, +$1,391 at $100/bet
+- **5+ Point Edge**: 138-111-2 (55.4%), +5.8% ROI, +$1,445 at $100/bet
+- EV Engine outperforms 5+ Edge by 3% ROI despite fewer bets (quality > quantity)
+- Worst week: Week 5 (-$755 at $100); Best: Week 1 (+$573)
+
+---
+
+#### Moneyline Weekly Bugfixes — COMMITTED
+**Commit**: `036ede7` (included in earlier hardening commit)
+
+Fixed 3 bugs in `src/spread_selection/moneyline_weekly.py`:
+1. **dry_run dedup (MODERATE)**: `append_to_log` in dry_run mode now runs dedup against existing log for accurate preview counts
+2. **Missing settlement columns (MODERATE)**: `settle_week` now creates missing `SETTLEMENT_COLS` with `None` before accessing, protecting against old/manually-created logs
+3. **Silent skip warning (MINOR)**: Prints warning with game_id and team names when score lookup fails during settlement
+
+---
+
+#### Selection Policy Hardening — COMMITTED
+**Commit**: `2c2a4e6`
+
+Patched `src/spread_selection/selection_policy.py` for EV semantics, accounting accuracy, and robustness:
+
+**CRITICAL fixes:**
+- **EV units contract**: Module docstring now explicitly documents EV = ROI units (`p_win*b - p_lose`), not probability edge. All threshold docstrings updated.
+- **Heuristic warning**: `apply_selection_policy()` warns when EV values look like probability-edge (max |ev| < 0.005) while thresholds are in ROI range.
+- **Accounting fix**: `n_filtered_by_ev` and `n_filtered_by_cap` were wrong — phase1 skips mislabeled as EV filtering, cap formula was algebraically incorrect. All three policy helpers now return exact `(selected_df, n_ev_filtered, n_cap_filtered)` tuples. Added `n_phase1_skipped` to `SelectionResult`. Invariant enforced: `phase1 + ev + cap + selected = candidates`.
+
+**MINOR fixes:**
+- **NaN outcomes**: `compute_selection_metrics()` filters out NaN in outcome_col before computing wins/losses (prevents misclassifying unsettled bets as losses).
+- **Drawdown sort**: `compute_max_drawdown()` now sorts by `(year, week, game_id)` internally for deterministic results regardless of input order.
+
+**Tests**: 7 new tests added (45 total, all passing): accounting accuracy for all 3 policies, sum invariant, NaN handling, drawdown stability.
+
+---
+
 ## Session: February 14, 2026
 
 ### Theme: Totals EV Engine Weather Integration
@@ -6148,6 +6203,132 @@ Deleted:
 2. **Kill-Switch**: Required manual result tracking that didn't exist in production
 
 **New Phase 1 guidance**: Simple and honest — bet cautiously at half stakes, ~51% ATS expected.
+
+---
+
+*End of session*
+
+---
+
+## Session: February 14, 2026 (Evening)
+
+### Theme: Totals Display Script Overhaul & Statistical Validation
+
+---
+
+#### show_totals_bets.py: Switch from EV to 5+ Edge Filter — COMMITTED
+**Status**: Committed (`b06c0a1`)
+**Files**: `scripts/show_totals_bets.py`, `.claude/skills/show-totals-bets/SKILL.md`
+
+**Problem**: At 3% EV threshold (matching spreads), totals produced 35-46 games/week — "46 games is crazy."
+
+**Analysis** (2023-2025 backtest):
+| Filter | Games/Wk | ATS% | ROI |
+|--------|----------|------|-----|
+| 3% EV | 34.8 | 53.3% | +1.7% |
+| 5% EV | 32.2 | 53.2% | +1.6% |
+| 10% EV | 24.6 | 52.8% | +0.8% |
+| **5+ Edge** | **15.8** | **53.7%** | **+2.4%** |
+
+**Root cause**: EV highly correlated with edge — raising EV threshold barely reduces volume.
+
+**Changes**:
+- Primary filter: 5+ edge (not EV-based)
+- EV shown as `~EV` column for reference only
+- Volume: 35 → 15 games/week (-57%)
+- Default sigma updated to 16.4 (calibrated from residuals)
+
+---
+
+#### show_totals_bets.py: Fix CLOSE→OPEN Line Bug — COMMITTED
+**Status**: Included in same commit (`b06c0a1`)
+
+**Problem**: CSV `result` column computed vs CLOSE line, but we filter by `edge_open` and bet on OPEN lines.
+
+**Evidence**:
+- CSV `result`: 96-92 (51.1%)
+- Recalc vs OPEN: 98-90 (52.1%)
+
+**Fix**: Added `calc_result_vs_open()` and `calc_play_vs_open()` functions to recalculate results at display time.
+
+---
+
+#### 2025 Totals Performance Degradation: Strategic Analysis
+**Status**: Research complete, no action required
+
+Invoked model-strategist to analyze why 2025 (53.1% ATS) underperformed 2023-2024 (56-59% ATS).
+
+**Root cause**: 2024 was the anomaly, not 2025.
+- JP+ has systematic OVER bias (55-61% of picks)
+- 2024 had elevated OVER base rate (+9.1pp selection lift)
+- 2025 OVER lift = 0.0pp (normal reversion)
+
+**UNDER vs OVER performance** (2023-2025 pooled):
+| Side | ATS% |
+|------|------|
+| OVER | 53.6% |
+| UNDER | 55.2% |
+
+Model's edge is stronger on UNDERs (identifying overpriced totals).
+
+---
+
+#### Statistical Validation: OVER vs UNDER Asymmetry
+**Status**: Validated as NOT statistically significant
+
+Rigorous 6-step validation protocol:
+
+| Step | Test | Result |
+|------|------|--------|
+| 1 | Bias (JP+ - Vegas) | +0.46 pts (sig, but small) |
+| 2 | OVER vs UNDER ATS (5+ edge) | +2.9pp, **p=0.39 (NOT SIG)** |
+| 3 | Season consistency | 3/4 seasons (reversed in 2024) |
+| 4 | Walk-forward | 1/2 folds (does not persist) |
+| 5 | Residual asymmetry | Selection artifact (explained) |
+
+**Conclusion**: UNDER outperformance is NOT statistically significant, does not persist out-of-sample, and is explained by selection mechanics. **No adjustment justified.**
+
+---
+
+#### 5+ vs 6+ Edge Threshold Validation
+**Status**: Validated, keep 5+ edge
+
+Full statistical comparison:
+
+**Season-by-Season**:
+| Season | 5+ ATS | 6+ ATS | Winner |
+|--------|--------|--------|--------|
+| 2023 | 52.6% | 51.6% | **5+** |
+| 2024 | 57.8% | 61.4% | 6+ |
+| 2025 | 52.1% | 49.6% | **5+** |
+
+**Statistical Significance**: None (all p > 0.05, pooled p=0.94)
+
+**Walk-Forward**:
+- Test 2024: 6+ wins
+- Test 2025: 5+ wins
+- Does NOT persist
+
+**Risk-Adjusted**:
+- 5+ ROI variance: 24.1
+- 6+ ROI variance: 97.9 (4x more unstable)
+
+**Classification**: C) No meaningful difference → Keep 5+
+
+**Key finding**: 6+ advantage ENTIRELY driven by 2024 (anomaly OVER tailwind year).
+
+---
+
+#### Summary: Totals Model Status
+
+| Metric | 2023-2025 Backtest |
+|--------|-------------------|
+| Filter | 5+ edge vs OPEN |
+| Volume | ~15 games/week |
+| ATS | 54.3% |
+| ROI | +3.6% |
+
+**No changes to model**. Display script fixed. Statistical rigor confirms current approach is sound.
 
 ---
 
