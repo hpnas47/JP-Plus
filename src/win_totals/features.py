@@ -10,10 +10,9 @@ Leakage audit status per feature:
 - LEAKAGE_RISK: Known or suspected in-season data contamination
 - EXCLUDED: Deliberately excluded from V1 (e.g., portal features)
 
-Portal features are EXCLUDED in V1. CFBD's transfer portal endpoint does
-NOT provide reliable transfer dates for filtering to pre-August transfers.
-Without date filtering, portal data may include transfers that occur after
-preseason projections would be published, creating leakage risk.
+Portal: The portal_adjustment feature is sourced from PreseasonPriors (spreads
+model), which handles walk-forward-safe cutoff logic internally. This avoids
+direct use of CFBD's portal endpoint (which lacks reliable transfer dates).
 """
 
 import logging
@@ -25,6 +24,7 @@ import pandas as pd
 from config.teams import normalize_team_name
 from src.api.cfbd_client import CFBDClient
 from src.data.priors_cache import PriorsDataCache
+from src.models.preseason_priors import PreseasonPriors
 
 logger = logging.getLogger(__name__)
 
@@ -152,31 +152,20 @@ FEATURE_METADATA = {
         'status': SAFE,
         'leakage_risk': False,
     },
+    'portal_adjustment': {
+        'description': 'Transfer portal net rating adjustment from spreads model PreseasonPriors',
+        'timing': 'Preseason — computed by PreseasonPriors pipeline (same cutoff as spreads model)',
+        'status': ASSUMED,
+        'leakage_risk': False,
+    },
 }
 
 # EXCLUDED features — documented for transparency
-EXCLUDED_FEATURES = {
-    'portal_impact': {
-        'description': 'Transfer portal net talent change',
-        'reason': 'CFBD portal endpoint lacks reliable transfer dates. '
-                  'Cannot filter to pre-August transfers without date field. '
-                  'Risk of including transfers that occur after preseason projections.',
-        'status': EXCLUDED,
-        'reactivation_condition': 'CFBD adds transfer_date field with reliable dates',
-    },
-    'portal_ppa_gained': {
-        'description': 'PPA gained from incoming transfers',
-        'reason': 'Same as portal_impact — no date filtering available',
-        'status': EXCLUDED,
-        'reactivation_condition': 'CFBD adds transfer_date field with reliable dates',
-    },
-    'portal_ppa_lost': {
-        'description': 'PPA lost to outgoing transfers',
-        'reason': 'Same as portal_impact — no date filtering available',
-        'status': EXCLUDED,
-        'reactivation_condition': 'CFBD adds transfer_date field with reliable dates',
-    },
-}
+# NOTE: portal_impact, portal_ppa_gained, portal_ppa_lost were previously excluded
+# due to CFBD portal endpoint lacking reliable transfer dates. These are now
+# superseded by portal_adjustment (sourced from PreseasonPriors, which handles
+# its own walk-forward-safe cutoff logic).
+EXCLUDED_FEATURES = {}
 
 
 def feature_status_counts() -> dict[str, int]:
@@ -309,6 +298,15 @@ class PreseasonFeatureBuilder:
 
         return records
 
+    def _get_portal_adjustments(self, year: int) -> dict[str, float]:
+        """Get portal_adjustment per team from spreads model's PreseasonPriors."""
+        priors = PreseasonPriors(client=self.client)
+        priors.calculate_preseason_ratings(year=year, use_portal=True, portal_scale=0.15)
+        return {
+            team: rating.portal_adjustment
+            for team, rating in priors.preseason_ratings.items()
+        }
+
     def _get_fbs_teams(self, year: int) -> set[str]:
         """Get set of FBS teams for a given year."""
         raw = self.client.get_fbs_teams(year=year)
@@ -348,6 +346,7 @@ class PreseasonFeatureBuilder:
         conf_avg = {c: np.mean(vals) for c, vals in conf_sp.items()}
 
         prior_sos = self._compute_prior_sos_from_games(prior_games, sp_prior)
+        portal_adj = self._get_portal_adjustments(year)
 
         coaching_years_list = [v['years'] for v in coaching.values()]
         median_tenure = int(np.median(coaching_years_list)) if coaching_years_list else 3
@@ -388,6 +387,7 @@ class PreseasonFeatureBuilder:
                 'conf_strength': conf_avg.get(conf, 0.0),
                 'prior_win_pct': rec['win_pct'],
                 'prior_sos': prior_sos.get(team, 0.0),
+                'portal_adjustment': portal_adj.get(team, 0.0),
             }
             rows.append(row)
 
