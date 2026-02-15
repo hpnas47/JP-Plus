@@ -282,6 +282,29 @@ def append_to_log(
 
     log_p = Path(log_path)
 
+    # Warn if config differs from previous run for the same (year, week)
+    if log_p.exists() and not new_rows.empty:
+        existing = pd.read_csv(log_p)
+        sample_row = new_rows.iloc[0]
+        yr, wk = sample_row.get("year"), sample_row.get("week")
+        prev = existing[(existing["year"] == yr) & (existing["week"] == wk)]
+        if not prev.empty:
+            for col, curr_val in [
+                ("margin_sigma", config.margin_sigma),
+                ("ev_min", config.ev_min),
+                ("gate_logic", config.listA_gate_logic),
+            ]:
+                if col in prev.columns:
+                    prev_val = prev[col].iloc[0]
+                    if pd.notna(prev_val) and prev_val != curr_val:
+                        print(
+                            f"  WARNING: Config differs from previous run for year={yr} week={wk}. "
+                            f"{col}: previous={prev_val}, current={curr_val}. "
+                            f"New bets matching existing (game_id, side, list_type) will be deduped. "
+                            f"Use --log-path to write to a separate file if this is intentional."
+                        )
+                        break
+
     if dry_run:
         # Run dedup logic to give accurate preview, but don't write
         if log_p.exists():
@@ -364,41 +387,59 @@ def settle_week(
     for idx in target_idx:
         row = log.loc[idx]
         gid = _norm_gid(row["game_id"])
-        if gid not in scores_map:
-            print(f"  WARNING: game_id={gid} ({row.get('home_team', '?')} vs {row.get('away_team', '?')}) not found in scores file — skipping")
-            continue
+        try:
+            if gid not in scores_map:
+                print(f"  WARNING: game_id={gid} ({row.get('home_team', '?')} vs {row.get('away_team', '?')}) not found in scores file — skipping")
+                warn_count += 1
+                continue
 
-        hp, ap = scores_map[gid]
-        actual_margin = hp - ap
+            hp, ap = scores_map[gid]
+            actual_margin = hp - ap
 
-        # In FBS, margin == 0 should not occur
-        if actual_margin == 0:
-            warnings.warn(
-                f"actual_margin==0 for game_id={gid} (year={year} week={week}). "
-                "Treating as data error; row left unsettled."
-            )
+            # In FBS, margin == 0 should not occur
+            if actual_margin == 0:
+                warnings.warn(
+                    f"actual_margin==0 for game_id={gid} (year={year} week={week}). "
+                    "Treating as data error; row left unsettled."
+                )
+                warn_count += 1
+                continue
+
+            side = row["side"]
+            if side == "HOME":
+                covered = "W" if actual_margin > 0 else "L"
+            elif side == "AWAY":
+                covered = "W" if actual_margin < 0 else "L"
+            else:
+                print(f"  WARNING: game_id={gid} has invalid side='{side}' — skipping")
+                warn_count += 1
+                continue
+
+            odds_am = row["odds_american"]
+            if pd.isna(odds_am):
+                print(f"  WARNING: game_id={gid} has NaN odds_american — skipping")
+                warn_count += 1
+                continue
+            d = american_to_decimal(int(odds_am))
+
+            stake_val = row["stake"]
+            if pd.isna(stake_val):
+                print(f"  WARNING: game_id={gid} has NaN stake — skipping")
+                warn_count += 1
+                continue
+            stake = float(stake_val)
+
+            profit = (d - 1.0) * stake if covered == "W" else -stake
+
+            log.at[idx, "actual_margin"] = actual_margin
+            log.at[idx, "covered"] = covered
+            log.at[idx, "profit_units"] = round(profit, 2)
+            log.at[idx, "settled_timestamp"] = ts
+            settled += 1
+        except Exception as e:
+            print(f"  WARNING: game_id={gid} settlement failed: {e} — skipping")
             warn_count += 1
             continue
-
-        side = row["side"]
-        if side == "HOME":
-            covered = "W" if actual_margin > 0 else "L"
-        elif side == "AWAY":
-            covered = "W" if actual_margin < 0 else "L"
-        else:
-            warn_count += 1
-            continue
-
-        odds_am = row["odds_american"]
-        d = american_to_decimal(int(odds_am))
-        stake = float(row["stake"])
-        profit = (d - 1.0) * stake if covered == "W" else -stake
-
-        log.at[idx, "actual_margin"] = actual_margin
-        log.at[idx, "covered"] = covered
-        log.at[idx, "profit_units"] = round(profit, 2)
-        log.at[idx, "settled_timestamp"] = ts
-        settled += 1
 
     log.to_csv(log_path, index=False)
     return settled, warn_count, int(already_settled)
@@ -491,6 +532,8 @@ def print_settle_summary(
         print(f"  Total stake:      ${total_stake:.0f}")
         print(f"  Total profit:     ${total_profit:.2f}")
         print(f"  ROI:              {roi:.1f}%")
+        if already_settled > 0 and settled > 0:
+            print(f"  Note: W-L and ROI above are cumulative for the week (includes {already_settled} previously settled bets).")
 
     unsettled = log[
         (log["year"] == year)
