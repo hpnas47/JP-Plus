@@ -194,6 +194,23 @@ def show_moneyline_bets(year: int, week: int):
                 elif r['covered'] == 'L':
                     profit -= 100.0
             print(f"\n**Record: {wins}-{losses} ({pct:.1f}%) | $100 Flat P/L: {profit:+,.0f}**")
+
+            # Season cumulative (all List A bets for this year through this week)
+            season_a = df[(df['year'] == year) & (df['week'] <= week) & (df['list_type'] == 'A')]
+            season_a = season_a[season_a['home_team'].isin(fbs_teams) & season_a['away_team'].isin(fbs_teams)]
+            s_settled = season_a[season_a['covered'].notna()]
+            if len(s_settled) > 0:
+                s_wins = (s_settled['covered'] == 'W').sum()
+                s_losses = (s_settled['covered'] == 'L').sum()
+                s_pct = s_wins / (s_wins + s_losses) * 100 if (s_wins + s_losses) > 0 else 0
+                s_profit = 0.0
+                for _, r in s_settled.iterrows():
+                    if r['covered'] == 'W':
+                        o = int(r['odds_american'])
+                        s_profit += 100.0 * (100.0 / abs(o)) if o < 0 else 100.0 * (o / 100.0)
+                    elif r['covered'] == 'L':
+                        s_profit -= 100.0
+                print(f"**Season (Wk 1-{week}): {s_wins}-{s_losses} ({s_pct:.1f}%) | $100 Flat P/L: {s_profit:+,.0f}**")
         else:
             print(f"\n**{len(list_a)} bet(s) | Avg EV: +{list_a['ev'].mean()*100:.1f}%**")
 
