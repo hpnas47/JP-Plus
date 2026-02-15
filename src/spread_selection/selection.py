@@ -53,7 +53,7 @@ class BetRecommendation:
         p_push: P(push) from push rate lookup
         p_cover: Unconditional P(cover) = p_cover_no_push * (1 - p_push)
         p_breakeven: Breakeven probability for juice (e.g., 0.5238 at -110)
-        edge_prob: p_cover - p_breakeven (probability edge)
+        edge_prob: Unconditional probability edge accounting for push: (p_cover_no_push - p_breakeven) * (1 - p_push)
         ev: Expected value as fraction of stake
 
         juice: American odds (e.g., -110)
@@ -303,8 +303,10 @@ def evaluate_game(
     # Compute unconditional P(cover)
     p_cover = p_cover_no_push * (1 - p_push)
 
-    # Compute probability edge
-    edge_prob = p_cover - p_breakeven
+    # Unconditional probability edge: both p_cover and breakeven scaled to
+    # account for push probability. When p_push=0 (half-point spreads or V1
+    # mode), this reduces to p_cover_no_push - p_breakeven.
+    edge_prob = (p_cover_no_push - p_breakeven) * (1 - p_push)
 
     # Compute EV
     ev = calculate_ev_with_push(p_cover_no_push, p_push, juice)
