@@ -4,6 +4,41 @@
 
 ---
 
+## Session: February 15, 2026
+
+### Theme: Preseason Win Total Projection Module — Implementation + Compliance Audit
+
+---
+
+#### Preseason Win Totals Module — COMMITTED
+**Commit**: `0e12a37`
+
+New standalone module (`src/win_totals/`) for preseason win total projections. Trains Ridge regression on historical CFBD data to predict end-of-season SP+ ratings, converts predictions to win total distributions via Monte Carlo simulation with latent team shocks, and evaluates betting edge against book lines.
+
+**6 source files + 1 test file (3,104 lines):**
+- `schedule.py` — Poisson binomial PMF (DP), logistic win prob, Monte Carlo with correlated team shocks, walk-forward calibration
+- `edge.py` — EV calculation, American odds conversion, push handling, leakage contribution tracking
+- `features.py` — 17 preseason features from CFBD API with honest leakage audit (11 SAFE, 6 ASSUMED)
+- `model.py` — Ridge regression with manual walk-forward alpha selection over [0.1, 1.0, 10.0, 50.0, 100.0, 200.0]
+- `run_win_totals.py` — CLI with train/predict/backtest/calibrate commands
+- `tests/test_win_totals.py` — 85 unit tests, all passing
+
+**Key design decisions:**
+- **Target**: End-of-season SP+ (not raw wins) — strips schedule effects
+- **Alpha selection**: Manual walk-forward sweep (NOT RidgeCV/LOOCV) — train years < Y, test year Y
+- **Calibration**: Out-of-fold predictions only, years < Y for fold Y. min_games=1500 guardrail with naive fallback (30% regression toward mean)
+- **Portal features**: Excluded in V1 — CFBD lacks reliable transfer dates for pre-August filtering
+- **Win counting**: Regular season only (season_type='regular' AND week <= 15)
+- **Win prob clamp**: [0.01, 0.99] in both scalar (`game_win_probability`) and vectorized (Monte Carlo) paths
+- **Push handling**: Integer lines account for push probability in EV calculation
+- **Leakage tracking**: End-to-end from Ridge coefficients × standardized features → per-team leakage % → BetRecommendation warning flag (>25% threshold)
+
+**Compliance audit performed (A–G checklist):**
+- 4 non-compliant items found and patched: prob clamp on scalar path, push handling, leakage e2e wiring in CLI, `years` field on WinProbCalibration
+- Post-patch consistency audit confirmed all 85 tests pass with correct numerical behavior
+
+---
+
 ## Session: February 14, 2026 (Evening)
 
 ### Theme: FBS Filtering, Moneyline Bugfixes, Selection Policy Hardening
