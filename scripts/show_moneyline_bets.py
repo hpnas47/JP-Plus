@@ -150,9 +150,7 @@ def show_moneyline_bets(year: int, week: int):
             print("|---|---------|-----|------|------|-----|------|")
 
         for i, (_, row) in enumerate(list_a.iterrows(), 1):
-            away_abbr = get_abbrev(row['away_team'])
-            home_abbr = get_abbrev(row['home_team'])
-            matchup = f"{away_abbr} @ {home_abbr}"
+            matchup = f"{row['away_team']} @ {row['home_team']}"
             bet_abbr = get_abbrev(format_bet_team(row))
             odds = format_odds(row['odds_american'])
             p_win = f"{row['p_win']:.0%}"
@@ -163,7 +161,7 @@ def show_moneyline_bets(year: int, week: int):
             if has_results:
                 result = format_result(row)
                 if has_scores and pd.notna(row.get('home_points')):
-                    score = f"{away_abbr} {int(row['away_points'])}, {home_abbr} {int(row['home_points'])}"
+                    score = f"{get_abbrev(row['away_team'])} {int(row['away_points'])}, {get_abbrev(row['home_team'])} {int(row['home_points'])}"
                     if has_dates:
                         print(f"| {i} | {date} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {score} | {result} |")
                     else:
@@ -205,13 +203,11 @@ def show_moneyline_bets(year: int, week: int):
     if list_b.empty:
         print("*No watchlist games this week.*\n")
     else:
-        print("| # | Matchup | Side | Odds | EV | Disagree | Reason |")
-        print("|---|---------|------|------|----|----------|--------|")
+        print("| # | Matchup | Side | Odds | EV | Disagree |")
+        print("|---|---------|------|------|----|----------|")
 
         for i, (_, row) in enumerate(list_b.iterrows(), 1):
-            away_abbr = get_abbrev(row['away_team'])
-            home_abbr = get_abbrev(row['home_team'])
-            matchup = f"{away_abbr} @ {home_abbr}"
+            matchup = f"{row['away_team']} @ {row['home_team']}"
 
             if pd.notna(row.get('side')):
                 side_team = format_bet_team(row)
@@ -222,18 +218,30 @@ def show_moneyline_bets(year: int, week: int):
             odds = format_odds(row['odds_american']) if pd.notna(row.get('odds_american')) else "—"
             ev = f"{row['ev']*100:+.1f}%" if pd.notna(row.get('ev')) else "—"
             disagree = f"{row['disagreement_pts']:.1f}" if pd.notna(row.get('disagreement_pts')) else "—"
-            reason = row['reason_code']
-            print(f"| {i} | {matchup} | {side} | {odds} | {ev} | {disagree} | {reason} |")
+            print(f"| {i} | {matchup} | {side} | {odds} | {ev} | {disagree} |")
 
-        # Reason code summary
-        reasons = list_b['reason_code'].value_counts().to_dict()
-        reason_parts = [f"{rc}: {ct}" for rc, ct in reasons.items()]
-        print(f"\n*Reasons: {", ".join(reason_parts)}*")
+        # Watchlist record
+        if 'covered' in list_b.columns and list_b['covered'].notna().any():
+            b_settled = list_b[list_b['covered'].notna()]
+            b_wins = (b_settled['covered'] == 'W').sum()
+            b_losses = (b_settled['covered'] == 'L').sum()
+            b_pct = b_wins / (b_wins + b_losses) * 100 if (b_wins + b_losses) > 0 else 0
+            print(f"\n**Watchlist Record: {b_wins}-{b_losses} ({b_pct:.1f}%)**")
+
+            # Combined record
+            a_settled = list_a[list_a['covered'].notna()] if 'covered' in list_a.columns else pd.DataFrame()
+            a_wins = (a_settled['covered'] == 'W').sum() if len(a_settled) > 0 else 0
+            a_losses = (a_settled['covered'] == 'L').sum() if len(a_settled) > 0 else 0
+            c_wins = a_wins + b_wins
+            c_losses = a_losses + b_losses
+            c_pct = c_wins / (c_wins + c_losses) * 100 if (c_wins + c_losses) > 0 else 0
+            print(f"\n**Combined Record: {c_wins}-{c_losses} ({c_pct:.1f}%)**")
 
     # Footnotes
     print("\n---")
     print(f"*Config: sigma={sigma}, ev_min={ev_min}, min_disagree={min_disagree}*")
     print("*ML EV = p(win) × (decimal_odds - 1) - p(loss). Sizing via quarter-Kelly.*")
+    print("*Actionable bets capped at top 10 by EV.*")
 
     # Phase 1 warning
     if week <= 3:
