@@ -484,6 +484,12 @@ def compute_selection_metrics(
             )
             df = df[settled_mask].copy()
 
+    # Ensure boolean dtype for outcome/push columns (prevents bool(NaN) traps)
+    if outcome_col in df.columns and not pd.api.types.is_bool_dtype(df[outcome_col]):
+        df[outcome_col] = df[outcome_col].astype(bool)
+    if push_col in df.columns and not pd.api.types.is_bool_dtype(df[push_col]):
+        df[push_col] = df[push_col].astype(bool)
+
     # Basic counts
     n_bets = len(df)
     n_pushes = int(df[push_col].sum()) if push_col in df.columns else 0

@@ -716,6 +716,9 @@ def calculate_totals_probabilities(
     Returns:
         Tuple of (p_win, p_loss, p_push) for the specified side
     """
+    if sigma <= 0:
+        raise ValueError(f"sigma must be positive, got {sigma}")
+
     # Detect half-point line (no push possible)
     is_half_point = (line % 1.0) != 0.0
 
@@ -737,7 +740,10 @@ def calculate_totals_probabilities(
     # Sanity check: probabilities should sum to 1
     total_prob = p_over + p_under + p_push
     if not (0.99 < total_prob < 1.01):
-        logger.warning(f"Probabilities sum to {total_prob:.4f}, expected ~1.0")
+        raise ValueError(
+            f"Probabilities sum to {total_prob:.4f} (expected ~1.0). "
+            f"Check sigma={sigma}, line={line}, mu={model_total}"
+        )
 
     # Return based on side
     if side.upper() == "OVER":
@@ -814,6 +820,10 @@ def calculate_kelly_stake(
         Tuple of (kelly_fraction, stake_amount)
     """
     b = odds_decimal - 1.0
+
+    if b <= 0:
+        # No profit possible at these odds
+        return (0.0, 0.0)
 
     # Three-outcome Kelly formula
     numerator = p_win * b - p_loss

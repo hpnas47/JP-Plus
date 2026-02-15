@@ -106,13 +106,17 @@ class MoneylineEVConfig:
 # ---------------------------------------------------------------------------
 # Odds helpers
 # ---------------------------------------------------------------------------
-def american_to_decimal(odds: int) -> float:
-    """Convert American odds to decimal.  Raises on odds == 0."""
+def american_to_decimal(odds: int | float) -> float:
+    """Convert American odds to decimal.  Raises on odds == 0 or invalid result."""
     if odds == 0:
         raise ValueError("American odds of 0 are undefined")
     if odds < 0:
-        return 1.0 + 100.0 / abs(odds)
-    return 1.0 + odds / 100.0
+        result = 1.0 + 100.0 / abs(odds)
+    else:
+        result = 1.0 + odds / 100.0
+    if result <= 1.0:
+        raise ValueError(f"Invalid decimal odds {result} from American odds {odds}")
+    return result
 
 
 def implied_prob(decimal_odds: float) -> float:

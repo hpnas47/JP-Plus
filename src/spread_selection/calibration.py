@@ -14,6 +14,7 @@ Sign Convention (Single Convention Throughout):
     | jp_spread (after)  | Negative = home favored                | -7 = home by 7               |
     | vegas_spread       | Negative = home favored                | -7 = home by 7               |
     | edge_pts           | Negative = JP+ likes HOME more         | -3 = JP+ likes home 3 pts    |
+    |                    | Formula: jp_spread - vegas_spread       | JP+=-10, Vegas=-7 → edge=-3  |
     | actual_margin      | Positive = home won                    | +10 = home won by 10         |
     | cover_margin       | Positive = home covered                | +3 = home beat spread by 3   |
 
@@ -21,9 +22,7 @@ V1 Assumptions:
     - Constant juice: -110
     - No push modeling: p_push = 0
     - Pure selection layer: does NOT modify JP+ predictions
-    - Positive American odds (e.g., +100, -105 reduced juice) are not supported.
-      calculate_ev will raise ValueError. V2 will add support for variable juice
-      including alternate spread pricing.
+    - Both negative and positive American odds are supported in EV/breakeven calculations.
 """
 
 import logging
@@ -736,23 +735,24 @@ def walk_forward_validate(
 def breakeven_prob(juice: float = -110) -> float:
     """Breakeven probability for given juice.
 
-    At -110: Need to risk 110 to win 100
-    Breakeven = risk / (risk + win) = 110 / 210 = 52.38%
+    At -110 (negative): risk 110 to win 100 → 110/210 = 52.38%
+    At +150 (positive): risk 100 to win 150 → 100/250 = 40.00%
 
     Args:
-        juice: American odds (negative, e.g., -110)
+        juice: American odds (e.g., -110 or +150). Zero is invalid.
 
     Returns:
         Breakeven probability as decimal (e.g., 0.5238)
     """
-    if juice >= 0:
-        raise ValueError(
-            f"V1 only supports negative American odds (e.g., -110). Got {juice}. "
-            "Positive odds support planned for V2."
-        )
-    risk = abs(juice)
-    win = 100
-    return risk / (risk + win)
+    if juice == 0:
+        raise ValueError("American odds of 0 are undefined")
+    if juice < 0:
+        risk = abs(juice)
+        win = 100
+        return risk / (risk + win)
+    else:
+        # Positive odds: risk 100 to win juice
+        return 100 / (100 + juice)
 
 
 def calculate_ev(
@@ -772,16 +772,13 @@ def calculate_ev(
     Args:
         p_cover_no_push: P(cover | no push), from calibration
         p_push: P(push) - V1 always 0
-        juice: American odds (negative, e.g., -110)
+        juice: American odds (e.g., -110 or +150). Zero is invalid.
 
     Returns:
         EV as fraction of stake (e.g., 0.03 = +3% EV)
     """
-    if juice >= 0:
-        raise ValueError(
-            f"V1 only supports negative American odds (e.g., -110). Got {juice}. "
-            "Positive odds support planned for V2."
-        )
+    if juice == 0:
+        raise ValueError("American odds of 0 are undefined")
 
     # Adjust for push probability
     # P(win) = P(cover | no push) * (1 - p_push)
@@ -790,9 +787,11 @@ def calculate_ev(
     p_win = p_cover_no_push * (1 - p_push)
     p_lose = (1 - p_cover_no_push) * (1 - p_push)
 
-    # Payout and stake
-    risk = abs(juice)
-    payout = 100 / risk  # Win per dollar risked
+    # Payout per unit risked
+    if juice < 0:
+        payout = 100 / abs(juice)
+    else:
+        payout = juice / 100
 
     ev = p_win * payout - p_lose * 1.0
     return ev
@@ -809,22 +808,21 @@ def calculate_ev_vectorized(
         p_cover_no_push: Array of P(cover | no push)
         p_push: P(push) as scalar or per-game array. NumPy broadcasting
             handles both cases correctly.
-        juice: American odds
+        juice: American odds (e.g., -110 or +150). Zero is invalid.
 
     Returns:
         Array of EV values
     """
-    if juice >= 0:
-        raise ValueError(
-            f"V1 only supports negative American odds (e.g., -110). Got {juice}. "
-            "Positive odds support planned for V2."
-        )
+    if juice == 0:
+        raise ValueError("American odds of 0 are undefined")
 
     p_win = p_cover_no_push * (1 - p_push)
     p_lose = (1 - p_cover_no_push) * (1 - p_push)
 
-    risk = abs(juice)
-    payout = 100 / risk
+    if juice < 0:
+        payout = 100 / abs(juice)
+    else:
+        payout = juice / 100
 
     return p_win * payout - p_lose
 

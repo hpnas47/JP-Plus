@@ -23,6 +23,10 @@ def wilson_ci(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     because it handles edge cases (k=0, k=n) gracefully and has better
     coverage properties for small samples.
 
+    Note: Assumes independent binary outcomes. CFB bets are not truly
+    independent (correlated outcomes within weeks), so CIs may be slightly
+    too narrow in practice.
+
     Args:
         k: Number of successes (wins)
         n: Total trials (bets)
@@ -126,7 +130,8 @@ def bootstrap_mean_ci(
         values: Array of per-bet returns
         n_boot: Number of bootstrap resamples
         alpha: Significance level (default 0.05 for 95% CI)
-        seed: Random seed for reproducibility
+        seed: Random seed for reproducibility. Fixed default (123) ensures
+            identical CIs across runs for audit consistency.
 
     Returns:
         (lower, upper) bounds of confidence interval

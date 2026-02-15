@@ -22,6 +22,7 @@ from .calibration import (
     CalibrationResult,
     PushRates,
     breakeven_prob,
+    calculate_ev,
     predict_cover_probability,
     get_push_probability,
 )
@@ -131,26 +132,7 @@ def calculate_ev_with_push(
 ) -> float:
     """Calculate EV with explicit push probability.
 
-    Formula:
-        p_win = p_cover_no_push * (1 - p_push)
-        p_lose = (1 - p_cover_no_push) * (1 - p_push)
-        p_push = p_push (stake returned, 0 profit)
-
-        EV = p_win * payout - p_lose * stake + p_push * 0
-           = p_win * payout - p_lose * 1
-
-    Example (from spec):
-        p_cover_no_push = 0.55
-        p_push = 0.05
-        juice = -110
-
-        p_win = 0.55 * 0.95 = 0.5225
-        p_lose = 0.45 * 0.95 = 0.4275
-        p_push = 0.05
-
-        EV = 0.5225 * (100/110) - 0.4275 * 1 + 0.05 * 0
-           = 0.475 - 0.4275
-           = 0.0475
+    Delegates to the canonical calculate_ev in calibration.py.
 
     Args:
         p_cover_no_push: P(cover | no push) from calibration
@@ -159,26 +141,8 @@ def calculate_ev_with_push(
 
     Returns:
         EV as fraction of stake
-
-    Raises:
-        ValueError: If juice is zero (invalid American odds)
     """
-    if juice == 0:
-        raise ValueError("American odds cannot be zero")
-
-    # American to payout conversion (profit per unit risked):
-    # Negative odds (e.g., -110): risk 110 to win 100 -> payout = 100/110 = 0.909
-    # Positive odds (e.g., +150): risk 100 to win 150 -> payout = 150/100 = 1.5
-    if juice < 0:
-        payout = 100 / abs(juice)
-    else:
-        payout = juice / 100
-
-    p_win = p_cover_no_push * (1 - p_push)
-    p_lose = (1 - p_cover_no_push) * (1 - p_push)
-
-    ev = p_win * payout - p_lose * 1.0
-    return ev
+    return calculate_ev(p_cover_no_push, p_push=p_push, juice=float(juice))
 
 
 def evaluate_game(
