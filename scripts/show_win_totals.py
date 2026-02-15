@@ -90,6 +90,16 @@ def get_actual_wins(year: int) -> dict[str, int]:
     return wins
 
 
+def get_sp_expected_wins(year: int) -> dict[str, float]:
+    """Load SP+ preseason expected wins from manually-sourced CSV."""
+    csv_path = Path(f"data/win_totals/sp_expected_wins_{year}.csv")
+    if not csv_path.exists():
+        return {}
+    sp_df = pd.read_csv(csv_path)
+    return {normalize_team_name(row['team']): row['sp_expected_wins']
+            for _, row in sp_df.iterrows()}
+
+
 def is_season_complete(year: int) -> bool:
     """A season is complete if we're past January of the following year."""
     return date.today() >= date(year + 1, 1, 15)
@@ -118,6 +128,10 @@ def main():
     df = pd.read_csv(csv_path)
     conf_map = get_team_conferences(year)
     df['conference'] = df['team'].map(conf_map).fillna('Unknown')
+
+    # Load SP+ preseason expected wins (if available)
+    sp_ew_map = get_sp_expected_wins(year)
+    df['sp_expected_wins'] = df['team'].map(sp_ew_map)
 
     # Check if season is complete — fetch actual wins if so
     historical = is_season_complete(year)
@@ -159,20 +173,20 @@ def main():
     show_conf_col = conf_name is None
 
     if historical:
-        # Historical: Team (Conf) | E[W] | Actual | Result
         if show_conf_col:
-            print("| Rank | Team | Conf | E[W] | Actual | Result |")
-            print("|------|------|------|------|--------|--------|")
+            print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins | Actual | Result |")
+            print("|------|------|------|:---:|:---:|:---:|--------|")
         else:
-            print("| Rank | Team | E[W] | Actual | Result |")
-            print("|------|------|------|--------|--------|")
+            print("| Rank | Team | JP+ Exp. Wins | SP+ Exp. Wins | Actual | Result |")
+            print("|------|------|:---:|:---:|:---:|--------|")
 
         for _, row in df.iterrows():
             ew = row['expected_wins']
+            sp_ew = row.get('sp_expected_wins')
+            sp_str = f"{sp_ew:.1f}" if pd.notna(sp_ew) else "—"
             actual = row.get('actual_wins')
             if pd.notna(actual):
                 actual_int = int(actual)
-                # Compare against expected wins rounded to nearest 0.5
                 if actual_int > round(ew):
                     result = "Over"
                 elif actual_int < round(ew):
@@ -185,21 +199,24 @@ def main():
                 result = "—"
 
             if show_conf_col:
-                print(f"| {int(row['rank'])} | **{row['team']}** | {row['conference']} | {ew:.1f} | {actual_str} | {result} |")
+                print(f"| {int(row['rank'])} | **{row['team']}** | {row['conference']} | {ew:.1f} | {sp_str} | {actual_str} | {result} |")
             else:
-                print(f"| {int(row['rank'])} | **{row['team']}** | {ew:.1f} | {actual_str} | {result} |")
+                print(f"| {int(row['rank'])} | **{row['team']}** | {ew:.1f} | {sp_str} | {actual_str} | {result} |")
     else:
-        # Future: Team (Conf) | E[W]
         if show_conf_col:
-            print("| Rank | Team | Conf | E[W] |")
-            print("|------|------|------|------|")
+            print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")
+            print("|------|------|------|:---:|:---:|")
             for _, row in df.iterrows():
-                print(f"| {int(row['rank'])} | **{row['team']}** | {row['conference']} | {row['expected_wins']:.1f} |")
+                sp_ew = row.get('sp_expected_wins')
+                sp_str = f"{sp_ew:.1f}" if pd.notna(sp_ew) else "—"
+                print(f"| {int(row['rank'])} | **{row['team']}** | {row['conference']} | {row['expected_wins']:.1f} | {sp_str} |")
         else:
-            print("| Rank | Team | E[W] |")
-            print("|------|------|------|")
+            print("| Rank | Team | JP+ Exp. Wins | SP+ Exp. Wins |")
+            print("|------|------|:---:|:---:|")
             for _, row in df.iterrows():
-                print(f"| {int(row['rank'])} | **{row['team']}** | {row['expected_wins']:.1f} |")
+                sp_ew = row.get('sp_expected_wins')
+                sp_str = f"{sp_ew:.1f}" if pd.notna(sp_ew) else "—"
+                print(f"| {int(row['rank'])} | **{row['team']}** | {row['expected_wins']:.1f} | {sp_str} |")
 
 
 if __name__ == '__main__':
