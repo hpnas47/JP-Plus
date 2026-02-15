@@ -313,6 +313,7 @@ class LearnedSituationalModel:
         self._y_train: list[float] = []  # Residuals (post-turnover-adjustment)
         self._sample_weights: list[float] = []  # Sample weights for weighted Ridge
         self._vegas_spreads: list[Optional[float]] = []  # For filtering at train time
+        self._weeks: list[Optional[int]] = []  # Week per sample (None = prior-year pooled)
 
         # Diagnostic counters (reset each season)
         self._n_games_total: int = 0
@@ -351,6 +352,7 @@ class LearnedSituationalModel:
         self._y_train.clear()
         self._sample_weights.clear()
         self._vegas_spreads.clear()
+        self._weeks.clear()
         # Reset diagnostic counters
         self._n_games_total = 0
         self._n_games_turnover_adjusted = 0
@@ -376,9 +378,11 @@ class LearnedSituationalModel:
         to prevent duplicate data accumulation.
 
         Args:
-            prior_training_data: List of tuples. Supports two formats:
+            prior_training_data: List of tuples. Supports formats:
                 - Legacy: (features_array, residual)
                 - Extended: (features_array, residual, weight, vegas_spread)
+                - V2 extended: (features_array, residual, weight, vegas_spread, week)
+                Prior-season data should use week=None (always included in training).
 
         Raises:
             RuntimeError: If called multiple times without reset()
@@ -394,6 +398,7 @@ class LearnedSituationalModel:
         prior_y = []
         prior_weights = []
         prior_vegas = []
+        prior_weeks = []
 
         for t in prior_training_data:
             prior_X.append(t[0])
@@ -407,11 +412,16 @@ class LearnedSituationalModel:
                 prior_vegas.append(t[3])
             else:
                 prior_vegas.append(None)  # Unknown vegas spread
+            if len(t) >= 5:
+                prior_weeks.append(t[4])
+            else:
+                prior_weeks.append(None)  # Prior-year pooled data (always included)
 
         self._X_train = prior_X + self._X_train
         self._y_train = prior_y + self._y_train
         self._sample_weights = prior_weights + self._sample_weights
         self._vegas_spreads = prior_vegas + self._vegas_spreads
+        self._weeks = prior_weeks + self._weeks
         self._seeded = True
         logger.debug(
             "LSA seeded with %d prior games (%d total)",
@@ -425,6 +435,7 @@ class LearnedSituationalModel:
         residual: float,
         turnover_margin: Optional[float] = None,
         vegas_spread: Optional[float] = None,
+        week: Optional[int] = None,
     ) -> None:
         """Add a completed game to training data.
 
@@ -435,6 +446,7 @@ class LearnedSituationalModel:
                             If None and adjust_for_turnovers=True, uses 0 and logs warning.
             vegas_spread: Vegas closing spread for the game (for filtering/weighting).
                           Convention: negative = home favored (Vegas standard).
+            week: Game week (for walk-forward filtering in train()). If None, always included.
         """
         self._n_games_total += 1
 
@@ -463,6 +475,7 @@ class LearnedSituationalModel:
         self._y_train.append(adjusted_residual)
         self._sample_weights.append(weight)
         self._vegas_spreads.append(vegas_spread)
+        self._weeks.append(week)
 
     def _compute_sample_weight(self, vegas_spread: Optional[float]) -> float:
         """Compute sample weight using Cauchy-style decay for large spreads.
@@ -504,19 +517,36 @@ class LearnedSituationalModel:
         """
         self._max_week = max_week
 
-        n_games_total = len(self._X_train)
+        # Walk-forward safety: filter samples by week
+        # Prior-year pooled data (week=None) is always included.
+        # Current-season samples are only included if week <= max_week.
+        n_excluded_future = 0
+        walk_forward_mask = []
+        for w in self._weeks:
+            if w is None or w <= max_week:
+                walk_forward_mask.append(True)
+            else:
+                walk_forward_mask.append(False)
+                n_excluded_future += 1
+
+        if n_excluded_future > 0:
+            logger.debug(
+                "LSA: excluded %d current-season games with week > %d",
+                n_excluded_future, max_week,
+            )
+
+        X_list = [x for x, m in zip(self._X_train, walk_forward_mask) if m]
+        y_list = [y for y, m in zip(self._y_train, walk_forward_mask) if m]
+        weights_list = [w for w, m in zip(self._sample_weights, walk_forward_mask) if m]
+        vegas_list = [v for v, m in zip(self._vegas_spreads, walk_forward_mask) if m]
+
+        n_games_total = len(X_list)
         if n_games_total < self.min_games:
             logger.debug(
                 "LSA: %d games < min %d, skipping training", n_games_total, self.min_games
             )
             self._is_trained = False
             return None
-
-        # Determine which samples to use and their weights
-        X_list = self._X_train
-        y_list = self._y_train
-        weights_list = self._sample_weights
-        vegas_list = self._vegas_spreads
 
         n_filtered_vegas = 0
         use_filter = False
@@ -704,10 +734,10 @@ class LearnedSituationalModel:
     def get_training_data(self) -> list[tuple]:
         """Get accumulated training data (for passing to next season).
 
-        Returns extended tuple format: (features_array, residual, weight, vegas_spread)
-        Compatible with seed_with_prior_data() which handles both legacy and extended formats.
+        Returns V2 extended tuple format: (features_array, residual, weight, vegas_spread, week)
+        Compatible with seed_with_prior_data() which handles legacy, extended, and V2 formats.
         """
-        return list(zip(self._X_train, self._y_train, self._sample_weights, self._vegas_spreads))
+        return list(zip(self._X_train, self._y_train, self._sample_weights, self._vegas_spreads, self._weeks))
 
     def _check_sign_flips(self) -> None:
         """Check for coefficient sign flips vs expected and log warnings."""
@@ -749,6 +779,7 @@ def compute_situational_residual(
     actual_margin: float,
     predicted_spread: float,
     fixed_situational: float,
+    predicted_spread_includes_situational: bool = True,
 ) -> float:
     """Compute the residual for LSA training.
 
@@ -761,18 +792,24 @@ def compute_situational_residual(
         fixed_situational = positive means situational favored home
 
     The residual captures what the base model (without situational) missed:
-        residual = actual_margin - (predicted_spread - fixed_situational)
+        residual = actual_margin - base_margin_no_situ
 
     If residual is positive, the actual margin exceeded the base prediction,
     suggesting situational factors helped the home team more than expected.
 
     Args:
         actual_margin: Actual home margin (home_points - away_points)
-        predicted_spread: Full predicted spread including situational
+        predicted_spread: Full predicted spread (includes or excludes situational per flag)
         fixed_situational: Fixed situational adjustment that was applied
+        predicted_spread_includes_situational: If True (default), predicted_spread includes
+            the fixed situational adjustment and it will be subtracted to recover the base.
+            If False, predicted_spread is already the base (no subtraction needed).
 
     Returns:
         Residual = actual_margin - base_margin_no_situ
     """
-    base_margin_no_situ = predicted_spread - fixed_situational
+    if predicted_spread_includes_situational:
+        base_margin_no_situ = predicted_spread - fixed_situational
+    else:
+        base_margin_no_situ = predicted_spread
     return actual_margin - base_margin_no_situ
