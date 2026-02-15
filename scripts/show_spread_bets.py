@@ -89,14 +89,34 @@ def format_bet_line(row) -> str:
 
 
 def show_spread_bets(year: int, week: int):
-    # Load pre-computed data
-    data_path = Path(__file__).parent.parent / 'data/spread_selection/outputs/backtest_primary_2022-2025_with_scores.csv'
-    if not data_path.exists():
-        print(f"Error: {data_path} not found")
-        return
+    # Load data from appropriate source
+    if year <= 2025:
+        # Historical data (2022-2025)
+        data_path = Path(__file__).parent.parent / 'data/spread_selection/outputs/backtest_primary_2022-2025_with_scores.csv'
+        if not data_path.exists():
+            print(f"Error: Historical data not found at {data_path}")
+            return
+        df = pd.read_csv(data_path)
+        week_data = df[(df['year'] == year) & (df['week'] == week)]
+    else:
+        # Production data (2026+)
+        data_path = Path(__file__).parent.parent / f'data/spread_selection/logs/spread_bets_{year}.csv'
+        if not data_path.exists():
+            print(f"No production data found for {year}. Run `python scripts/run_spread_weekly.py --year {year} --week {week}` first.")
+            return
+        df = pd.read_csv(data_path)
+        week_data = df[df['week'] == week]
 
-    df = pd.read_csv(data_path)
-    week_data = df[(df['year'] == year) & (df['week'] == week)]
+        # Map production columns to display columns
+        if 'market_spread' in week_data.columns and 'spread_open' not in week_data.columns:
+            week_data = week_data.copy()
+            week_data['spread_open'] = week_data['market_spread']
+        if 'edge_abs' not in week_data.columns and 'edge_pts' in week_data.columns:
+            week_data = week_data.copy()
+            week_data['edge_abs'] = week_data['edge_pts'].abs()
+        if 'jp_favored_side' not in week_data.columns and 'side' in week_data.columns:
+            week_data = week_data.copy()
+            week_data['jp_favored_side'] = week_data['side'].str.upper()
 
     if len(week_data) == 0:
         print(f"No data found for {year} Week {week}")
