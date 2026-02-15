@@ -168,11 +168,11 @@ def show_moneyline_bets(year: int, week: int):
         has_results = 'covered' in list_a.columns and list_a['covered'].notna().any()
 
         if has_results:
-            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Flip | Conf | Result |")
-            print("|---|---------|-----|------|--------|-----|----------|------|------|--------|")
+            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence | Result |")
+            print("|---|---------|-----|------|--------|-----|----------|------------|--------|")
         else:
-            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Flip | Conf |")
-            print("|---|---------|-----|------|--------|-----|----------|------|------|")
+            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence |")
+            print("|---|---------|-----|------|--------|-----|----------|------------|")
 
         for i, (_, row) in enumerate(list_a.iterrows(), 1):
             away_abbr = get_abbrev(row['away_team'])
@@ -183,14 +183,13 @@ def show_moneyline_bets(year: int, week: int):
             p_win = f"{row['p_win']:.1%}"
             ev = f"+{row['ev']*100:.1f}%"
             disagree = f"{row['disagreement_pts']:.1f}"
-            flip = "FLIP" if row['flip_flag'] else ""
             conf = format_confidence(row)
 
             if has_results:
                 result = format_result(row)
-                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {flip} | {conf} | {result} |")
+                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | {result} |")
             else:
-                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {flip} | {conf} |")
+                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} |")
 
         # Record
         if has_results:
@@ -219,8 +218,8 @@ def show_moneyline_bets(year: int, week: int):
     if list_b.empty:
         print("*No near-miss games this week.*\n")
     else:
-        print("| # | Matchup | Side | Odds | EV | Disagree | Flip | Reason |")
-        print("|---|---------|------|------|----|----------|------|--------|")
+        print("| # | Matchup | Side | Odds | EV | Disagree | Reason |")
+        print("|---|---------|------|------|----|----------|--------|")
 
         for i, (_, row) in enumerate(list_b.iterrows(), 1):
             away_abbr = get_abbrev(row['away_team'])
@@ -236,9 +235,8 @@ def show_moneyline_bets(year: int, week: int):
             odds = format_odds(row['odds_american']) if pd.notna(row.get('odds_american')) else "—"
             ev = f"{row['ev']*100:+.1f}%" if pd.notna(row.get('ev')) else "—"
             disagree = f"{row['disagreement_pts']:.1f}" if pd.notna(row.get('disagreement_pts')) else "—"
-            flip = "FLIP" if row.get('flip_flag') else ""
             reason = row['reason_code']
-            print(f"| {i} | {matchup} | {side} | {odds} | {ev} | {disagree} | {flip} | {reason} |")
+            print(f"| {i} | {matchup} | {side} | {odds} | {ev} | {disagree} | {reason} |")
 
         # Reason code summary
         reasons = list_b['reason_code'].value_counts().to_dict()
