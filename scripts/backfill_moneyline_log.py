@@ -263,6 +263,21 @@ def main():
         total_list_b += year_b
         print(f"\n  {year} totals: List A={year_a}, List B={year_b}")
 
+    # --- Consolidate per-year logs into a single backtest artifact ---
+    output_dir = Path("data/moneyline_selection/outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    consolidated_path = output_dir / "backtest_moneyline_2022-2025.csv"
+
+    year_dfs = []
+    for year in YEARS:
+        log_path = DEFAULT_LOG_DIR / f"moneyline_bets_{year}.csv"
+        if log_path.exists():
+            year_dfs.append(pd.read_csv(log_path))
+    if year_dfs:
+        consolidated = pd.concat(year_dfs, ignore_index=True)
+        consolidated.to_csv(consolidated_path, index=False)
+        print(f"\n  Consolidated artifact: {consolidated_path} ({len(consolidated)} rows)")
+
     print(f"\n{'='*60}")
     print(f"  BACKFILL COMPLETE")
     print(f"  Total games: {total_games} ({total_with_odds} with ML odds)")

@@ -125,15 +125,25 @@ def format_confidence(row) -> str:
 
 
 def show_moneyline_bets(year: int, week: int):
-    # Load from log file (same path for historical and production)
-    log_path = Path(__file__).parent.parent / f'data/moneyline_selection/logs/moneyline_bets_{year}.csv'
-    if not log_path.exists():
-        print(f"No moneyline data found for {year}.")
-        print(f"Run: python3 scripts/run_moneyline_weekly.py --year {year} --week {week} --inputs-path <path>")
-        return
-
-    df = pd.read_csv(log_path)
-    week_data = df[(df['year'] == year) & (df['week'] == week)]
+    # Load data from appropriate source
+    if year <= 2025:
+        # Historical data (2022-2025) from stable backtest artifact
+        data_path = Path(__file__).parent.parent / 'data/moneyline_selection/outputs/backtest_moneyline_2022-2025.csv'
+        if not data_path.exists():
+            print(f"No historical moneyline data found at {data_path}")
+            print("Run: python3 scripts/backfill_moneyline_log.py")
+            return
+        df = pd.read_csv(data_path)
+        week_data = df[(df['year'] == year) & (df['week'] == week)]
+    else:
+        # Production data (2026+)
+        data_path = Path(__file__).parent.parent / f'data/moneyline_selection/logs/moneyline_bets_{year}.csv'
+        if not data_path.exists():
+            print(f"No moneyline data found for {year}.")
+            print(f"Run: python3 scripts/run_moneyline_weekly.py --year {year} --week {week} --inputs-path <path>")
+            return
+        df = pd.read_csv(data_path)
+        week_data = df[(df['year'] == year) & (df['week'] == week)]
 
     if len(week_data) == 0:
         print(f"No moneyline data found for {year} Week {week}")
