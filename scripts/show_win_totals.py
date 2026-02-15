@@ -29,7 +29,7 @@ MAX_REGULAR_SEASON_WEEK = 15
 # Conservative default threshold for betting when actual odds are unavailable.
 # Approximates typical win total juice (~-120 to -125 range).
 # When book odds are present in the CSV, the actual breakeven is used instead.
-BET_PROB_THRESHOLD = 0.60
+BET_PROB_THRESHOLD = 0.65
 
 
 def parse_win_probs(s: str) -> np.ndarray | None:
@@ -417,7 +417,7 @@ def main():
             if has_odds:
                 print(f"\n*JP+ Bet column shows Over/Under when P(win bet) exceeds breakeven implied by book odds. Probability from Monte Carlo PMF.*")
             else:
-                print(f"\n*JP+ Bet column shows Over/Under when P(win bet) > 60%. Probability from Monte Carlo PMF.*")
+                print(f"\n*JP+ Bet column shows Over/Under when P(win bet) > 65%. Probability from Monte Carlo PMF.*")
     else:
         if show_conf_col:
             print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")
