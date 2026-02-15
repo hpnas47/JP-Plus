@@ -46,24 +46,37 @@ class BetRecommendation:
     ev: float  # Expected value per $1 risked
     confidence: str  # "Strong", "Moderate", "Lean"
     expected_wins: float
-    edge: float  # model_prob - breakeven_prob (display only; does not adjust for push. EV is authoritative)
+    edge: float  # model_prob - breakeven_prob (push-adjusted; consistent with EV)
     leakage_contribution_pct: float = 0.0  # fraction of signal from LEAKAGE_RISK features
     leakage_warning: bool = False  # True if leakage_contribution_pct > 0.25
 
 
-def breakeven_prob(odds: int) -> float:
-    """Convert American odds to breakeven probability (no-vig implied).
+def breakeven_prob(odds: int, push_prob: float = 0.0) -> float:
+    """Convert American odds to breakeven win probability.
+
+    This is the minimum win probability needed to break even at these odds.
+    With push_prob=0, this equals the raw implied probability (including vig).
+    It is NOT the no-vig fair probability; for that, normalize both sides of
+    a market to sum to 1.0.
+
+    When push_prob > 0, returns the push-adjusted breakeven: the win probability
+    needed to break even given that pushes return the stake.
 
     Args:
         odds: American odds (e.g., -110, +150)
+        push_prob: Probability of a push (refund). Default 0.0.
 
     Returns:
         Breakeven probability in [0, 1]
     """
     if odds < 0:
-        return abs(odds) / (abs(odds) + 100.0)
+        payout = 100.0 / abs(odds)
     else:
-        return 100.0 / (odds + 100.0)
+        payout = odds / 100.0
+
+    # Solve: p * payout - (1 - p - push_prob) = 0
+    # p * (payout + 1) = 1 - push_prob
+    return (1.0 - push_prob) / (payout + 1.0)
 
 
 def calculate_ev(
@@ -104,11 +117,17 @@ def prob_over_under(dist: WinTotalDistribution, line: float) -> tuple[float, flo
     return p_over, p_under
 
 
-def leakage_risk_fraction(
+def leakage_feature_count_fraction(
     feature_names: list[str],
     feature_metadata: dict[str, dict],
 ) -> float:
-    """Compute fraction of features that have LEAKAGE_RISK status.
+    """Compute unweighted fraction of features with LEAKAGE_RISK status.
+
+    This counts features, NOT signal magnitude. A model with 1/20 leakage
+    features returns 0.05 even if that feature dominates the prediction.
+
+    For the authoritative magnitude-weighted metric that drives the
+    leakage_warning flag in BetRecommendation, use compute_leakage_contribution().
 
     Args:
         feature_names: List of feature names used in model
@@ -116,22 +135,20 @@ def leakage_risk_fraction(
                           or legacy 'leakage_risk' boolean
 
     Returns:
-        Fraction of features flagged as leakage risk
-
-    Note:
-        This is an unweighted count-based fraction for quick screening only.
-        Use compute_leakage_contribution() for the authoritative magnitude-weighted
-        metric that drives the leakage_warning flag in BetRecommendation.
+        Fraction of features flagged as leakage risk (count-based)
     """
     if not feature_names:
         return 0.0
     flagged = 0
     for f in feature_names:
         meta = feature_metadata.get(f, {})
-        # Support both new 'status' field and legacy 'leakage_risk' boolean
         if meta.get('status') == 'LEAKAGE_RISK' or meta.get('leakage_risk', False):
             flagged += 1
     return flagged / len(feature_names)
+
+
+# Backward-compatible alias (deprecated)
+leakage_risk_fraction = leakage_feature_count_fraction
 
 
 def compute_feature_contributions(
@@ -223,19 +240,29 @@ def evaluate_all(
         # Guard against PMF normalization errors or over/under boundary
         # mismatches on whole-number lines (e.g., push double-counted)
         prob_sum = p_over + p_under + p_push
-        if abs(prob_sum - 1.0) >= 0.001:
-            logger.warning(
-                f"Prob sum != 1.0 for {bl.team}: "
-                f"p_over={p_over:.6f}, p_under={p_under:.6f}, p_push={p_push:.6f}"
+        if abs(prob_sum - 1.0) >= 0.01:
+            # True error: PMF is badly broken (>1% off). Skip.
+            logger.error(
+                f"PMF severely broken for {bl.team}: "
+                f"p_over={p_over:.6f}, p_under={p_under:.6f}, p_push={p_push:.6f}, "
+                f"sum={prob_sum:.6f}. Skipping."
             )
             continue
+        elif abs(prob_sum - 1.0) >= 1e-9:
+            # Normal floating-point noise from convolution. Normalize and proceed.
+            p_over /= prob_sum
+            p_under /= prob_sum
+            p_push /= prob_sum
+            logger.debug(
+                f"Normalized probabilities for {bl.team}: sum was {prob_sum:.8f}"
+            )
 
         team_leakage = leakage_pcts.get(bl.team, 0.0)
         leakage_warning = team_leakage > LEAKAGE_WARNING_THRESHOLD
 
-        # Evaluate over
+        # Evaluate over (push-adjusted breakeven for correct edge display)
         over_ev = calculate_ev(p_over, bl.over_odds, push_prob=p_push)
-        over_be = breakeven_prob(bl.over_odds)
+        over_be = breakeven_prob(bl.over_odds, push_prob=p_push)
 
         if over_ev >= min_ev:
             confidence = _classify_confidence(over_ev)
@@ -256,9 +283,9 @@ def evaluate_all(
             )
             recommendations.append(rec)
 
-        # Evaluate under
+        # Evaluate under (push-adjusted breakeven for correct edge display)
         under_ev = calculate_ev(p_under, bl.under_odds, push_prob=p_push)
-        under_be = breakeven_prob(bl.under_odds)
+        under_be = breakeven_prob(bl.under_odds, push_prob=p_push)
 
         if under_ev >= min_ev:
             confidence = _classify_confidence(under_ev)
@@ -279,17 +306,27 @@ def evaluate_all(
             )
             recommendations.append(rec)
 
-    # Warn if any team has both Over and Under recommendations
+    # Resolve contradictory both-sides recommendations.
+    # With standard -110/-110 juice, both sides CANNOT have positive EV
+    # (proven: over_ev + under_ev = -0.0909 + 0.0909*p_push < 0 for p_push < 1).
+    # If both trigger, it indicates a probability normalization bug or data error.
+    # Keep only the higher-EV side.
     teams_by_side: dict[str, dict[str, float]] = {}
     for rec in recommendations:
         teams_by_side.setdefault(rec.team, {})[rec.side] = rec.ev
     for team, sides in teams_by_side.items():
         if "Over" in sides and "Under" in sides:
-            logger.warning(
-                f"Both Over and Under passed EV threshold for {team} "
+            lower_side = "Over" if sides["Over"] < sides["Under"] else "Under"
+            logger.error(
+                f"Both Over and Under have positive EV for {team} "
                 f"(Over EV={sides['Over']:.4f}, Under EV={sides['Under']:.4f}). "
-                f"Possible book line data error."
+                f"This indicates a probability normalization bug or non-standard odds. "
+                f"Dropping {lower_side} (lower EV)."
             )
+            recommendations = [
+                r for r in recommendations
+                if not (r.team == team and r.side == lower_side)
+            ]
 
     # Sort by EV descending
     recommendations.sort(key=lambda r: r.ev, reverse=True)
@@ -337,7 +374,6 @@ def generate_report(
         )
 
     lines.append("")
-    lines.append("Note: Edge column does not adjust for push probability. EV is the authoritative metric.")
 
     report = "\n".join(lines)
 
