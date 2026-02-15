@@ -555,6 +555,37 @@ python scripts/run_spread_weekly.py --year 2026 --week 5 --settle
 
 ---
 
+## Preseason Win Total Projections
+
+Beyond weekly game spreads, JP+ projects preseason win totals for all 136 FBS teams. This answers: "How many games should Team X win this season?"
+
+### How It Works
+
+1. **Predict team strength:** Ridge regression uses 17 preseason features (prior SP+ rating, recruiting talent, returning production, coaching tenure, conference strength) to predict each team's end-of-season SP+ rating
+2. **Simulate seasons:** Monte Carlo simulation (10,000 iterations) plays out each team's full schedule, using predicted ratings to compute game-by-game win probabilities with correlated team-level shocks
+3. **Generate win distributions:** The output is a full probability mass function (PMF) — not just "8.3 expected wins" but "12% chance of 7 wins, 22% chance of 8 wins, 18% chance of 9 wins..."
+4. **Find betting edges:** Compare the PMF against book lines. If JP+ gives a team a 72% chance of going over 5.5 wins and the book needs ~52.4% to break even, that's a bet
+
+### Betting Threshold
+
+JP+ only recommends win total bets when P(win bet) > 65%. This conservative threshold accounts for the typical juice on win totals (~-120 to -135).
+
+**5-year backtest (2021-2025): 109-70 (61%)**
+
+| Confidence | Probability | 5-Year Record | Win % |
+|------------|-------------|---------------|-------|
+| ⭐⭐⭐ | 75%+ | 33-20 | 62% |
+| ⭐⭐ | 65-75% | 76-50 | 60% |
+
+### Key Design Decisions
+
+- **Target is SP+ rating, not raw wins** — strips schedule effects so a 9-win Sun Belt team and 9-win SEC team get different ratings
+- **Walk-forward validation** — alpha selected using only prior years' data (never peeking at the test year)
+- **Calibration from out-of-fold predictions only** — win probabilities are calibrated using historical predictions the model hadn't seen during training
+- **Regular season wins only** — bowl/CFP games excluded for consistency with book lines
+
+---
+
 ## Reality Check
 
 Vegas lines are set by professionals with decades of experience and access to information we don't have (injury reports, locker room intel, sharp money). Beating them consistently is hard. The goal is to find spots where JP+ has an edge, not to win every bet.

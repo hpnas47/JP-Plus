@@ -16,6 +16,22 @@ Reference map of every file in the JP+ CFB Power Ratings Model.
 
 ---
 
+## Win Totals (`src/win_totals/`)
+
+| File | Purpose |
+|------|---------|
+| `model.py` | Ridge regression on preseason features → predicted SP+ rating. Walk-forward alpha selection, production MAE tracking. |
+| `schedule.py` | Monte Carlo win total simulation. Poisson binomial PMF via DP, logistic win probability, correlated team shocks. |
+| `features.py` | 17 preseason features from CFBD API (prior SP+, talent, returning production, coaching tenure, conference strength). |
+| `edge.py` | EV calculation, American odds conversion, push handling, leakage contribution tracking. |
+| `run_win_totals.py` | CLI entry point with train/predict/backtest/calibrate commands. Saves predictions + PMF to CSV. |
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/show_win_totals.py` | Display script for win total projections with book lines, actual results, PMF-based betting, and star confidence ratings. |
+
+---
+
 ## Adjustments (`src/adjustments/`)
 
 | File | Purpose |

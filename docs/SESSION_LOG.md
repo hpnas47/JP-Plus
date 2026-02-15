@@ -6,7 +6,7 @@
 
 ## Session: February 15, 2026
 
-### Theme: Preseason Win Total Projection Module — Implementation + Compliance Audit
+### Theme: Preseason Win Total Projection Module — Implementation, Audit, Display Refinements
 
 ---
 
@@ -36,6 +36,67 @@ New standalone module (`src/win_totals/`) for preseason win total projections. T
 **Compliance audit performed (A–G checklist):**
 - 4 non-compliant items found and patched: prob clamp on scalar path, push handling, leakage e2e wiring in CLI, `years` field on WinProbCalibration
 - Post-patch consistency audit confirmed all 85 tests pass with correct numerical behavior
+
+---
+
+#### PMF Probability-Based Betting — COMMITTED
+**Commit**: `c9cf394`
+
+Replaced crude 1-win edge threshold with Monte Carlo PMF probability-based betting. Instead of betting whenever JP+ expected wins differ from book line by 1+ win, now computes P(over) and P(under) from the full win distribution and only bets when probability exceeds threshold.
+
+- Added `win_probs` column to predictions CSV (comma-separated PMF values)
+- Display shows "Over 72%" or "Under 63%" instead of just "Over"/"Under"
+- Future-proofed for 2026: when book odds are available, uses actual breakeven instead of flat threshold
+- Regenerated predictions for 2021-2025 with PMF data
+
+---
+
+#### Win Totals Comprehensive Audit — COMMITTED
+**Commit**: `26322cf`
+
+Fixed 12 bugs across `model.py`, `run_win_totals.py`, and `show_win_totals.py`:
+
+**CRITICAL fixes:**
+- Honest production MAE: renamed `overall_mae` → `per_fold_optimized_mae`, added `production_mae` using consistent production alpha
+- Calibration scale mismatch: `_build_calibration_data_prior_folds` now uses `production_predictions` instead of per-fold-optimized predictions
+- Extracted `_fit_and_predict_fold()` to eliminate preprocessing duplication between alpha sweep and production re-run
+
+**MODERATE fixes:**
+- Backtest ROI uses actual per-bet odds from `rec.odds` instead of hardcoded -110
+- Win% computed as wins/(wins+losses), excluding pushes
+- Tied game skipping in calibration data with warning log
+
+**MINOR fixes:**
+- `_col_means` safety guard with `getattr()`, baseline labels, redundant `train()` removal, PMF dedup via `WinTotalDistribution`, single CFBD client instance
+
+---
+
+#### Visual Indicators + Confidence Stars — COMMITTED
+**Commit**: `313adcb`
+
+Added to `show_win_totals.py`:
+- "Win ✅" / "Loss ❌" result formatting
+- Star confidence column: ⭐ (60-65%), ⭐⭐ (65-75%), ⭐⭐⭐ (75%+)
+
+---
+
+#### Bet Threshold Optimization — COMMITTED
+**Commits**: `882a55a`, `c73298e`
+
+Analyzed JP+ win total betting record by probability tier across 2021-2025 (all 136 FBS teams):
+
+| Threshold | Record | Win % |
+|-----------|--------|-------|
+| 55% (original) | 160+ bets | 56% |
+| 60% | 160-117 | 58% |
+| **65% (final)** | **109-70** | **61%** |
+
+1-star bets (55-60%) were 14-17 (45%) in 2025 — actively losing money. Raised threshold to 60%, then to 65% after confirming 2+ star bets (65%+) hit at 61% across all 5 years with no losing year. Star tiers adjusted: ⭐ 65-75%, ⭐⭐ 65-75%, ⭐⭐⭐ 75%+.
+
+---
+
+#### Documentation Update — COMMITTED
+Updated `MODEL_EXPLAINER.md` with win totals section (methodology, PMF, threshold, 5-year backtest). Updated `PROJECT_MAP.md` with `src/win_totals/` file map.
 
 ---
 
