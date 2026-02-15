@@ -46,7 +46,7 @@ class BetRecommendation:
     ev: float  # Expected value per $1 risked
     confidence: str  # "Strong", "Moderate", "Lean"
     expected_wins: float
-    edge: float  # model_prob - breakeven_prob
+    edge: float  # model_prob - breakeven_prob (display only; does not adjust for push. EV is authoritative)
     leakage_contribution_pct: float = 0.0  # fraction of signal from LEAKAGE_RISK features
     leakage_warning: bool = False  # True if leakage_contribution_pct > 0.25
 
@@ -117,6 +117,11 @@ def leakage_risk_fraction(
 
     Returns:
         Fraction of features flagged as leakage risk
+
+    Note:
+        This is an unweighted count-based fraction for quick screening only.
+        Use compute_leakage_contribution() for the authoritative magnitude-weighted
+        metric that drives the leakage_warning flag in BetRecommendation.
     """
     if not feature_names:
         return 0.0
@@ -214,6 +219,17 @@ def evaluate_all(
 
         p_over, p_under = prob_over_under(dist, bl.line)
         p_push = dist.prob_push(bl.line)
+
+        # Guard against PMF normalization errors or over/under boundary
+        # mismatches on whole-number lines (e.g., push double-counted)
+        prob_sum = p_over + p_under + p_push
+        if abs(prob_sum - 1.0) >= 0.001:
+            logger.warning(
+                f"Prob sum != 1.0 for {bl.team}: "
+                f"p_over={p_over:.6f}, p_under={p_under:.6f}, p_push={p_push:.6f}"
+            )
+            continue
+
         team_leakage = leakage_pcts.get(bl.team, 0.0)
         leakage_warning = team_leakage > LEAKAGE_WARNING_THRESHOLD
 
@@ -263,6 +279,18 @@ def evaluate_all(
             )
             recommendations.append(rec)
 
+    # Warn if any team has both Over and Under recommendations
+    teams_by_side: dict[str, dict[str, float]] = {}
+    for rec in recommendations:
+        teams_by_side.setdefault(rec.team, {})[rec.side] = rec.ev
+    for team, sides in teams_by_side.items():
+        if "Over" in sides and "Under" in sides:
+            logger.warning(
+                f"Both Over and Under passed EV threshold for {team} "
+                f"(Over EV={sides['Over']:.4f}, Under EV={sides['Under']:.4f}). "
+                f"Possible book line data error."
+            )
+
     # Sort by EV descending
     recommendations.sort(key=lambda r: r.ev, reverse=True)
     return recommendations
@@ -307,6 +335,9 @@ def generate_report(
             f"{rec.ev:>+5.1%} {rec.edge:>+5.1%} {rec.expected_wins:>5.1f} "
             f"{rec.confidence:<8} {rec.leakage_contribution_pct:>4.0%}{warn}"
         )
+
+    lines.append("")
+    lines.append("Note: Edge column does not adjust for push probability. EV is the authoritative metric.")
 
     report = "\n".join(lines)
 
