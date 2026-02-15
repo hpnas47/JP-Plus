@@ -18,7 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 from src.api.cfbd_client import CFBDClient
 from src.spread_selection.moneyline_ev_engine import (
@@ -106,6 +108,37 @@ def fetch_and_cache_ml_odds(backtest_df: pd.DataFrame) -> pd.DataFrame:
     return cache_df
 
 
+def synthesize_ml_odds_from_spread(spread_internal: float, sigma: float = 13.5) -> tuple[int, int]:
+    """Synthesize American ML odds from an opening spread using Normal CDF.
+
+    Converts spread to win probability, then to vigorous American odds
+    (standard -110/-110 vig structure applied proportionally).
+
+    Args:
+        spread_internal: Opening spread in internal convention (positive = home favored)
+        sigma: Margin sigma for CDF conversion
+
+    Returns:
+        (home_ml_american, away_ml_american)
+    """
+    p_home = norm.cdf(spread_internal / sigma)
+    p_away = 1.0 - p_home
+
+    def _prob_to_american_with_vig(p: float) -> int:
+        """Convert fair probability to American odds with ~4.5% total vig."""
+        # Apply vig: multiply fair prob by ~1.045 (standard -110/-110 overround)
+        p_vig = min(p * 1.045, 0.99)  # cap to avoid extreme odds
+        p_vig = max(p_vig, 0.01)
+        if p_vig >= 0.5:
+            return int(round(-p_vig / (1.0 - p_vig) * 100))
+        else:
+            return int(round((1.0 - p_vig) / p_vig * 100))
+
+    home_ml = _prob_to_american_with_vig(p_home)
+    away_ml = _prob_to_american_with_vig(p_away)
+    return home_ml, away_ml
+
+
 def load_cached_odds() -> pd.DataFrame:
     """Load cached ML odds."""
     return pd.read_csv(CACHE_PATH, dtype={"game_id": str})
@@ -124,23 +157,18 @@ def main():
 
     df = pd.read_csv(backtest_path, dtype={"game_id": str})
 
-    # --- Cache ML odds ---
-    if args.refresh_cache or not CACHE_PATH.exists():
-        print("Fetching ML odds from CFBD API...")
-        odds_df = fetch_and_cache_ml_odds(df)
-    else:
-        print(f"Using cached ML odds from {CACHE_PATH}")
-        odds_df = load_cached_odds()
-        print(f"  {len(odds_df)} cached odds rows")
-
-    # Build lookup: game_id -> (home_ml, away_ml)
-    odds_map = {
-        str(row["game_id"]): (int(row["ml_odds_home"]), int(row["ml_odds_away"]))
-        for _, row in odds_df.iterrows()
-    }
+    # --- ML odds: synthesize from opening spread ---
+    # CFBD only provides closing ML odds, but we need opening ML odds
+    # to be consistent with opening spread disagreement. Synthesize from
+    # the opening spread using Normal CDF + standard vig.
+    # Use MARKET sigma (15.4) not model sigma (13.5) — we're estimating
+    # what the market would price, not our model's win probability.
+    MARKET_SIGMA = 15.4
+    MODEL_SIGMA = 13.5
+    print(f"Synthesizing ML odds from opening spreads (market_sigma={MARKET_SIGMA})")
 
     # --- Run engine + populate logs ---
-    config = MoneylineEVConfig(margin_sigma=13.5)
+    config = MoneylineEVConfig(margin_sigma=MODEL_SIGMA)
 
     total_list_a = 0
     total_list_b = 0
@@ -171,7 +199,13 @@ def main():
             events = []
             for _, row in week_df.iterrows():
                 gid = str(row["game_id"])
-                home_ml, away_ml = odds_map.get(gid, (None, None))
+
+                # Synthesize opening ML odds from opening spread
+                if pd.notna(row["spread_open"]):
+                    spread_open_internal = -float(row["spread_open"])  # Vegas→internal
+                    home_ml, away_ml = synthesize_ml_odds_from_spread(spread_open_internal, MARKET_SIGMA)
+                else:
+                    home_ml, away_ml = None, None
 
                 events.append({
                     "year": year,
@@ -180,8 +214,7 @@ def main():
                     "home_team": row["home_team"],
                     "away_team": row["away_team"],
                     "model_spread": float(row["predicted_spread"]),
-                    # spread_open is Vegas convention (neg=home fav); engine expects internal (pos=home fav)
-                    "market_spread": -float(row["spread_open"]) if pd.notna(row["spread_open"]) else 0.0,
+                    "market_spread": spread_open_internal if pd.notna(row["spread_open"]) else 0.0,
                     "ml_odds_home": home_ml,
                     "ml_odds_away": away_ml,
                 })
