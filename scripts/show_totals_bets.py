@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast totals bet display script - no API calls, pre-computed data.
+"""Totals bet display script - uses cached FBS team data.
 
 Selection criteria: 5+ point edge (2023-2025 backtest: 55.5% ATS, +6.0% ROI)
 EV shown for reference but not used for filtering.
@@ -9,7 +9,24 @@ import math
 import sys
 from pathlib import Path
 
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
+
+from src.api.cfbd_client import CFBDClient
+
+# Cache FBS teams at module level (fetched once per session)
+_fbs_teams_cache: dict[int, set[str]] = {}
+
+
+def get_fbs_teams(year: int) -> set[str]:
+    """Get FBS teams for a given year (cached)."""
+    if year not in _fbs_teams_cache:
+        client = CFBDClient()
+        teams = client.get_fbs_teams(year=year)
+        _fbs_teams_cache[year] = {t.school for t in teams}
+    return _fbs_teams_cache[year]
 
 
 # Normal CDF for EV calculation (matches totals_ev_engine.py)
@@ -144,6 +161,15 @@ def show_totals_bets(year: int, week: int):
 
     if len(week_data) == 0:
         print(f"No data found for {year} Week {week}")
+        return
+
+    # Filter to FBS vs FBS games only
+    fbs_teams = get_fbs_teams(year)
+    fbs_mask = week_data['home_team'].isin(fbs_teams) & week_data['away_team'].isin(fbs_teams)
+    week_data = week_data[fbs_mask]
+
+    if len(week_data) == 0:
+        print(f"No FBS vs FBS games found for {year} Week {week}")
         return
 
     # Filter to games with lines
