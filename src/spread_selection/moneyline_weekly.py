@@ -347,10 +347,13 @@ def settle_week(
     if len(target_idx) == 0:
         return 0, 0, int(already_settled)
 
-    # Merge scores
+    # Merge scores — normalize game_id to string without float suffix
     scores_week = scores[(scores["year"] == year) & (scores["week"] == week)]
+    def _norm_gid(gid) -> str:
+        s = str(gid)
+        return s.split(".")[0] if "." in s else s
     scores_map = {
-        str(row["game_id"]): (row["home_points"], row["away_points"])
+        _norm_gid(row["game_id"]): (row["home_points"], row["away_points"])
         for _, row in scores_week.iterrows()
     }
 
@@ -360,7 +363,7 @@ def settle_week(
 
     for idx in target_idx:
         row = log.loc[idx]
-        gid = str(row["game_id"])
+        gid = _norm_gid(row["game_id"])
         if gid not in scores_map:
             print(f"  WARNING: game_id={gid} ({row.get('home_team', '?')} vs {row.get('away_team', '?')}) not found in scores file — skipping")
             continue
