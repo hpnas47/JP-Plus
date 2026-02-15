@@ -329,21 +329,26 @@ def evaluate_moneylines(
     list_a_df = pd.DataFrame(list_a_rows, columns=COLUMNS) if list_a_rows else _empty_df()
     list_b_df = pd.DataFrame(list_b_rows, columns=COLUMNS) if list_b_rows else _empty_df()
 
-    # --- Weekly cap (rank by Kelly fraction, not raw EV) ---
-    if config.max_bets_per_week is not None and len(list_a_df) > config.max_bets_per_week:
-        list_a_df = list_a_df.sort_values(
-            by=["kelly_f", "ev", "game_id", "side"],
-            ascending=[False, False, True, True],
-        ).reset_index(drop=True)
+    # --- Weekly cap (per-week, rank by Kelly fraction, not raw EV) ---
+    if config.max_bets_per_week is not None and not list_a_df.empty:
+        sort_cols = ["kelly_f", "ev", "game_id", "side"]
+        sort_asc = [False, False, True, True]
 
-        keep = list_a_df.iloc[: config.max_bets_per_week].copy()
-        overflow = list_a_df.iloc[config.max_bets_per_week :].copy()
+        keep_parts = []
+        overflow_parts = []
 
-        if config.weekly_cap_to_listB:
+        for (yr, wk), grp in list_a_df.groupby(["year", "week"]):
+            grp_sorted = grp.sort_values(by=sort_cols, ascending=sort_asc)
+            keep_parts.append(grp_sorted.head(config.max_bets_per_week))
+            if len(grp_sorted) > config.max_bets_per_week:
+                overflow_parts.append(grp_sorted.iloc[config.max_bets_per_week:])
+
+        list_a_df = pd.concat(keep_parts, ignore_index=True) if keep_parts else _empty_df()
+
+        if config.weekly_cap_to_listB and overflow_parts:
+            overflow = pd.concat(overflow_parts, ignore_index=True)
             overflow["reason_code"] = "WEEKLY_CAP_EXCEEDED"
             list_b_df = pd.concat([list_b_df, overflow], ignore_index=True)
-
-        list_a_df = keep.reset_index(drop=True)
 
     # --- Deterministic sort (display by Kelly fraction) ---
     if not list_a_df.empty:

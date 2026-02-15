@@ -133,6 +133,34 @@ def test_weekly_cap_moves_to_listB():
     assert len(cap_rows) == 3
 
 
+def test_weekly_cap_per_week_independent():
+    """Cap applies per-week, not globally across weeks."""
+    def _make_events(week, count):
+        return [
+            {
+                "year": 2025, "week": week, "game_id": f"g_w{week}_{i}",
+                "home_team": f"H{week}_{i}", "away_team": f"A{week}_{i}",
+                "model_spread": 10.0, "market_spread": -3.0,
+                "ml_odds_home": -130, "ml_odds_away": 110,
+            }
+            for i in range(count)
+        ]
+
+    # Week 5: 4 bets, Week 6: 3 bets. Cap=3 => week 5 capped to 3, week 6 keeps all 3.
+    events = _make_events(5, 4) + _make_events(6, 3)
+    cfg = _cfg(max_bets_per_week=3, weekly_cap_to_listB=True)
+    a, b = evaluate_moneylines(events, cfg)
+
+    a_w5 = a[a["week"] == 5]
+    a_w6 = a[a["week"] == 6]
+    assert len(a_w5) == 3, f"Week 5 should have 3, got {len(a_w5)}"
+    assert len(a_w6) == 3, f"Week 6 should have 3, got {len(a_w6)}"
+    assert len(a) == 6
+
+    cap_rows = b[b["reason_code"] == "WEEKLY_CAP_EXCEEDED"]
+    assert len(cap_rows) == 1  # 1 overflow from week 5
+
+
 def test_weekly_cap_silent_drop():
     events = [
         {
