@@ -286,27 +286,12 @@ class TestFeatureEngineering:
         assert counts.get(SAFE, 0) > 0, "No SAFE features"
         assert counts.get(ASSUMED, 0) > 0, "No ASSUMED features — dishonest audit"
 
-    def test_portal_features_excluded(self):
-        """Portal features must NOT appear in active feature columns."""
-        from src.win_totals.features import (
-            FEATURE_METADATA, EXCLUDED_FEATURES, PreseasonFeatureBuilder
-        )
-        active_cols = PreseasonFeatureBuilder.feature_columns()
-        for portal_feat in EXCLUDED_FEATURES:
-            assert portal_feat not in active_cols, (
-                f"Portal feature '{portal_feat}' found in active features"
-            )
-            assert portal_feat not in FEATURE_METADATA, (
-                f"Portal feature '{portal_feat}' found in active FEATURE_METADATA"
-            )
-
-    def test_excluded_features_documented(self):
-        """EXCLUDED_FEATURES must have reason and reactivation_condition."""
+    def test_excluded_features_is_empty(self):
+        """EXCLUDED_FEATURES should be empty (portal features now sourced from PreseasonPriors)."""
         from src.win_totals.features import EXCLUDED_FEATURES
-        assert len(EXCLUDED_FEATURES) >= 1, "No excluded features documented"
-        for name, meta in EXCLUDED_FEATURES.items():
-            assert 'reason' in meta, f"EXCLUDED feature '{name}' missing reason"
-            assert 'reactivation_condition' in meta
+        assert len(EXCLUDED_FEATURES) == 0, (
+            f"EXCLUDED_FEATURES should be empty, has: {list(EXCLUDED_FEATURES.keys())}"
+        )
 
     def test_feature_columns_sorted(self):
         from src.win_totals.features import PreseasonFeatureBuilder
@@ -847,17 +832,19 @@ class TestComplianceCalibrationLeakage:
         assert 2022 not in prior_preds['year'].values
 
 
-class TestCompliancePortalExclusion:
-    """Verify portal features are excluded from the model."""
+class TestPortalFeatureIntegration:
+    """Verify portal_adjustment is sourced from PreseasonPriors (not raw CFBD portal)."""
 
-    def test_no_portal_in_active_features(self):
+    def test_portal_adjustment_in_active_features(self):
+        from src.win_totals.features import FEATURE_METADATA
+        assert 'portal_adjustment' in FEATURE_METADATA, (
+            "portal_adjustment should be in active FEATURE_METADATA"
+        )
+
+    def test_no_raw_portal_features(self):
+        """Raw CFBD portal features (portal_impact, portal_ppa_*) must NOT be active."""
         from src.win_totals.features import FEATURE_METADATA
         for name in FEATURE_METADATA:
-            assert 'portal' not in name.lower(), (
-                f"Portal feature '{name}' found in active FEATURE_METADATA"
+            assert name not in ('portal_impact', 'portal_ppa_gained', 'portal_ppa_lost'), (
+                f"Raw portal feature '{name}' found in active FEATURE_METADATA"
             )
-
-    def test_excluded_features_has_portal(self):
-        from src.win_totals.features import EXCLUDED_FEATURES
-        portal_names = [k for k in EXCLUDED_FEATURES if 'portal' in k.lower()]
-        assert len(portal_names) >= 1, "No portal features in EXCLUDED_FEATURES"

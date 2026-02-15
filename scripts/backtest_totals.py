@@ -116,14 +116,14 @@ def backtest_totals_season(
             continue
 
         # Train on weeks <= pred_week - 1 (model handles filtering internally)
-        model.train(games, fbs_set, max_week=pred_week - 1)
+        model.train(games, fbs_set, through_week=pred_week - 1)
 
         # DATA LEAKAGE GUARD: Verify model only trained on valid weeks
-        if model._trained and hasattr(model, '_last_train_max_week'):
-            if model._last_train_max_week > pred_week - 1:
+        if model._trained and hasattr(model, '_last_train_through_week'):
+            if model._last_train_through_week > pred_week - 1:
                 raise ValueError(
-                    f"DATA LEAKAGE in totals model: trained on week {model._last_train_max_week} "
-                    f"but max_week should be {pred_week - 1}"
+                    f"DATA LEAKAGE in totals model: trained on week {model._last_train_through_week} "
+                    f"but through_week should be {pred_week - 1}"
                 )
 
         if not model._trained:

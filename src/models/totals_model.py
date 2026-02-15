@@ -168,6 +168,8 @@ class TotalsModel:
         self,
         games_df: pd.DataFrame | pl.DataFrame,
         fbs_teams: set[str],
+        through_week: Optional[int] = None,
+        *,
         max_week: Optional[int] = None,
     ) -> None:
         """Train the model on historical games.
@@ -176,9 +178,17 @@ class TotalsModel:
             games_df: DataFrame with columns: home_team, away_team, home_points,
                       away_points, week
             fbs_teams: Set of FBS team names to include
-            max_week: Only use games from weeks <= max_week (for walk-forward).
-                      If None, uses all games.
+            through_week: Train on games from weeks <= through_week (inclusive).
+                          For walk-forward predicting week W, pass W-1.
+                          If None, uses all games.
+            max_week: Deprecated alias for through_week. Will be removed in a
+                      future version.
         """
+        # Handle deprecated max_week alias
+        if max_week is not None and through_week is None:
+            through_week = max_week
+        elif max_week is not None and through_week is not None:
+            raise ValueError("Cannot specify both through_week and max_week")
         # Convert to pandas if needed (Polars for ingest, pandas for sklearn is the project pattern)
         if isinstance(games_df, pl.DataFrame):
             games = games_df.to_pandas()
@@ -197,20 +207,20 @@ class TotalsModel:
             games['away_points'].notna()
         ]
 
-        # Walk-forward filter
-        if max_week is not None:
-            games = games[games['week'] <= max_week]
+        # Walk-forward filter (through_week is INCLUSIVE)
+        if through_week is not None:
+            games = games[games['week'] <= through_week]
             # Track for external leakage verification
-            self._last_train_max_week = max_week
+            self._last_train_through_week = through_week
             # DATA LEAKAGE GUARD: Verify no future weeks slipped through
             actual_max = int(games['week'].max()) if len(games) > 0 else 0
-            if actual_max > max_week:
+            if actual_max > through_week:
                 raise ValueError(
                     f"DATA LEAKAGE in TotalsModel: games include week {actual_max} "
-                    f"but max_week={max_week}. Check filtering logic."
+                    f"but through_week={through_week}. Check filtering logic."
                 )
         else:
-            self._last_train_max_week = int(games['week'].max()) if len(games) > 0 else 0
+            self._last_train_through_week = int(games['week'].max()) if len(games) > 0 else 0
 
         if len(games) < 50:
             logger.warning(f"Only {len(games)} games for training - ratings may be unstable")
@@ -223,18 +233,27 @@ class TotalsModel:
             self.set_team_universe(fbs_teams)
         n_teams = self._n_teams
 
-        logger.info(f"Training totals model: {len(games)} games, {n_teams} teams, max_week={max_week}")
+        logger.info(f"Training totals model: {len(games)} games, {n_teams} teams, through_week={through_week}")
 
         # Build design matrix using sparse COO construction (vectorized)
         # Each game contributes two rows:
         # Row 1: home_team scores home_points against away_team defense
         # Row 2: away_team scores away_points against home_team defense
 
-        # Filter out games where either team is not in index (shouldn't happen after FBS filter)
+        # Filter out games where either team is not in index
         valid_mask = (
             games['home_team'].isin(self._team_to_idx) &
             games['away_team'].isin(self._team_to_idx)
         )
+        n_dropped = int((~valid_mask).sum())
+        if n_dropped > 0:
+            all_teams = set(games['home_team']) | set(games['away_team'])
+            missing = sorted(all_teams - set(self._team_to_idx))
+            logger.warning(
+                f"Dropping {n_dropped} games with {len(missing)} teams not in universe: "
+                f"{missing[:10]}{'...' if len(missing) > 10 else ''}. "
+                f"For multi-year training, build fbs_teams as the union across years."
+            )
         games = games[valid_mask].reset_index(drop=True)
 
         # Map team names to indices AFTER filter/reset for robust alignment
@@ -357,7 +376,7 @@ class TotalsModel:
             weeks[0::2] = game_weeks
             weeks[1::2] = game_weeks
             # pred_week = max_week + 1 (we predict the week after training data)
-            pred_week = (max_week or int(weeks.max())) + 1
+            pred_week = (through_week or int(weeks.max())) + 1
             weeks_ago = pred_week - weeks
             sample_weights = self.decay_factor ** weeks_ago
 
@@ -391,18 +410,20 @@ class TotalsModel:
         logger.info(f"Defensive adjustments: [{def_coefs.min():.1f}, {def_coefs.max():.1f}]")
         logger.info(f"Learned HFA: {self.hfa_coef:+.1f} pts")
 
-        # Build ratings dict (only for teams with games - preserves prediction behavior)
+        # Build ratings dict for ALL teams in universe.
+        # Teams with 0 games get adjustment=0.0 (Ridge default), so their
+        # adj_off_ppg/adj_def_ppg equal baseline. This ensures predict_total
+        # works for bye-week teams early in the season.
         self.team_ratings = {}
         for team, idx in self._team_to_idx.items():
-            if games_per_team[team] > 0:  # Only include teams that have played
-                self.team_ratings[team] = TotalsRating(
-                    team=team,
-                    adj_off_ppg=self.baseline + off_coefs[idx],
-                    adj_def_ppg=self.baseline + def_coefs[idx],
-                    off_adjustment=off_coefs[idx],
-                    def_adjustment=def_coefs[idx],
-                    games_played=games_per_team[team],
-                )
+            self.team_ratings[team] = TotalsRating(
+                team=team,
+                adj_off_ppg=self.baseline + off_coefs[idx],
+                adj_def_ppg=self.baseline + def_coefs[idx],
+                off_adjustment=off_coefs[idx],
+                def_adjustment=def_coefs[idx],
+                games_played=games_per_team[team],
+            )
 
         self._trained = True
 
@@ -494,7 +515,7 @@ class TotalsModel:
         """Get ratings as a sorted DataFrame.
 
         Args:
-            min_games: Minimum games played to include (0 = all teams with any games).
+            min_games: Minimum games played to include (0 = all teams including 0-game).
                        Use 3-4 to filter out teams with unreliable early-season ratings.
 
         Returns:
@@ -574,8 +595,8 @@ def walk_forward_totals_backtest(
     model.set_team_universe(fbs_teams)
 
     for pred_week in range(start_week, max_week + 1):
-        # Retrain on weeks < pred_week (model state is properly reset in train())
-        model.train(games, fbs_teams, max_week=pred_week - 1)
+        # Retrain on weeks <= pred_week-1 (model state is properly reset in train())
+        model.train(games, fbs_teams, through_week=pred_week - 1)
 
         if not model._trained:
             continue
