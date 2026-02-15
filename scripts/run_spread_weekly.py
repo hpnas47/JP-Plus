@@ -57,6 +57,7 @@ import numpy as np
 import pandas as pd
 
 # Add project root to path
+# NOTE: EV helpers defined after imports block (see american_to_b, ev_units)
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -76,6 +77,49 @@ from src.spread_selection import (
     ALLOWED_PRESETS,
 )
 from src.api.cfbd_client import CFBDClient
+
+# =============================================================================
+# EV / ODDS HELPERS
+# =============================================================================
+
+def american_to_b(odds_american: float) -> float:
+    """Convert American odds to net win multiple per 1 unit staked.
+
+    Examples:
+        -110 -> 100/110 = 0.90909...
+        +150 -> 1.5
+    """
+    if odds_american < 0:
+        return 100.0 / abs(odds_american)
+    else:
+        return odds_american / 100.0
+
+
+def implied_prob_from_american(odds_american: float) -> float:
+    """Convert American odds to implied probability (no-vig single side).
+
+    Examples:
+        -110 -> 110/210 = 0.52381
+        +150 -> 100/250 = 0.40
+    """
+    if odds_american < 0:
+        return abs(odds_american) / (abs(odds_american) + 100.0)
+    else:
+        return 100.0 / (odds_american + 100.0)
+
+
+def ev_units(p_win: float, odds_american: float) -> float:
+    """Compute expected value in betting units (ROI per 1 unit staked).
+
+    EV = p_win * b - (1 - p_win)
+
+    Examples:
+        p=0.55, -110: 0.55 * (100/110) - 0.45 = 0.05
+        p=0.60, -110: 0.60 * (100/110) - 0.40 = 0.14545
+    """
+    b = american_to_b(odds_american)
+    return p_win * b - (1.0 - p_win)
+
 
 # Cache FBS teams to avoid repeated API calls
 _fbs_teams_cache: dict[int, set[str]] = {}
@@ -541,22 +585,24 @@ def build_candidates(
                     phase1_policy="skip",  # Skip Phase 1 logic (we're in Phase 2/3)
                 )
 
+            # Odds for EV computation (placeholder -110 until real odds wired)
+            odds_col = -110
             if calibration_result is None:
                 logger.warning("Could not load calibration, using default EV estimation")
                 # Fallback: Simple edge-based EV proxy
                 df["p_cover"] = 0.5 + (df["edge_abs"] / 100)  # Rough approximation
-                df["ev"] = (df["p_cover"] - 0.524) * 0.909  # 52.4% breakeven at -110
             else:
-                # Use calibration to compute p_cover and EV
+                # Use calibration to compute p_cover
                 # edge_abs is always positive, calibration gives P(cover)
                 df["p_cover"] = predict_cover_probability(
                     df["edge_abs"].values, calibration_result
                 )
-                df["ev"] = df["p_cover"] - 0.524  # Simplified EV (p_cover - breakeven)
+            # Compute EV consistently using correct ROI formula for both paths
+            df["ev"] = df["p_cover"].apply(lambda p: ev_units(p, odds_col))
         except Exception as e:
             logger.warning(f"Error computing calibration: {e}, using fallback")
             df["p_cover"] = 0.5 + (df["edge_abs"] / 100)
-            df["ev"] = (df["p_cover"] - 0.524) * 0.909
+            df["ev"] = df["p_cover"].apply(lambda p: ev_units(p, -110))
 
         # List A candidates: EV > 0 (will be filtered by selection policy)
         list_a_candidates = df[df["ev"] > 0].copy()
@@ -727,9 +773,15 @@ def generate_recommendations(
 
     # Create phase-adjusted selection config
     # Phase 1 uses EV_THRESHOLD (all above 2%), Phase 2 uses TOP_N_PER_WEEK
+    # For EV_THRESHOLD policy (Phase 1), ev_min IS the threshold — wire from phase ev_floor
+    effective_ev_min = (
+        phase_config.ev_floor
+        if phase_config.selection_policy == "EV_THRESHOLD"
+        else config.ev_min
+    )
     phase_adjusted_config = SelectionPolicyConfig(
         selection_policy=phase_config.selection_policy,  # Use phase policy
-        ev_min=config.ev_min,
+        ev_min=effective_ev_min,
         ev_floor=phase_config.ev_floor,  # Use phase ev_floor
         top_n_per_week=phase_config.top_n_per_week,  # Use phase top_n
         max_bets_per_week=phase_config.max_bets_per_week,  # Use phase max_bets
@@ -761,7 +813,7 @@ def generate_recommendations(
             # Odds (placeholder for now)
             odds_american = -110
             odds_placeholder = True
-            implied_prob = 110 / 210  # 52.38%
+            implied_prob = implied_prob_from_american(odds_american)
 
             # Apply phase stake multiplier
             base_stake = 1.0
@@ -1020,6 +1072,7 @@ def settle_bets(year: int, week: int) -> dict:
         side = log_df.loc[idx, "side"]
         bet_spread = log_df.loc[idx, "bet_spread"]
         stake = log_df.loc[idx, "stake"]
+        odds_am = log_df.loc[idx, "odds_american"]
 
         # Find game result
         game_result = results[results["game_id"].astype(str) == game_id]
@@ -1038,17 +1091,19 @@ def settle_bets(year: int, week: int) -> dict:
             cover_margin = actual_margin + bet_spread  # bet_spread is negative for home favorite
             covered = cover_margin > 0
         else:
-            # Away bet: we need actual away margin > -bet_spread
-            cover_margin = -actual_margin - bet_spread
+            # Away bet: bet_spread is +vegas_spread (positive when home favored)
+            # Away covers when: away_margin > -bet_spread, i.e. bet_spread - actual_margin > 0
+            cover_margin = bet_spread - actual_margin
             covered = cover_margin > 0
 
         # Handle push
+        b = american_to_b(odds_am)
         if abs(cover_margin) < 0.01:
             covered_str = "P"
             profit = 0.0
         elif covered:
             covered_str = "W"
-            profit = stake * (100 / 110)  # Win at -110
+            profit = stake * b
         else:
             covered_str = "L"
             profit = -stake
@@ -1128,7 +1183,7 @@ def print_weekly_summary(
     if summary["list_a_count"] > 0:
         print(f"    Total stake:       {summary['total_stake']:.2f} units")
         print(f"    Avg edge:          {summary['avg_edge']:.1f} pts")
-        print(f"    Avg EV:            {summary['avg_ev']*100:.1f}%")
+        print(f"    Avg ROI:           {summary['avg_ev']*100:.1f}%")
         print(f"    Home/Away split:   {summary['home_count']} / {summary['away_count']}")
 
     # List B
@@ -1140,7 +1195,7 @@ def print_weekly_summary(
     # Detail tables
     if list_a_bets:
         print("\nLIST A - EV Qualified Bets:")
-        print(f"{'#':<3} {'Matchup':<30} {'Edge':>6} {'EV':>7} {'Stake':>6} {'Bet':<18}")
+        print(f"{'#':<3} {'Matchup':<30} {'Edge':>6} {'ROI':>7} {'Stake':>6} {'Bet':<18}")
         print("-" * 70)
         for i, bet in enumerate(list_a_bets, 1):
             matchup = f"{bet.away_team[:12]} @ {bet.home_team[:12]}"
