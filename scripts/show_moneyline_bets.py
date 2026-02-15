@@ -106,6 +106,24 @@ def format_profit(row) -> str:
     return f"{p:+.0f}" if p != 0 else "0"
 
 
+# Confidence tiers based on Kelly fraction (composite of edge + odds quality).
+# Tercile-based from 2022-2025 backtest distribution (N=1,794).
+KELLY_HIGH = 0.06    # top ~34%
+KELLY_MEDIUM = 0.025  # middle ~33%
+
+
+def format_confidence(row) -> str:
+    """Map kelly_f to High/Medium/Low confidence label."""
+    kf = row.get('kelly_f')
+    if pd.isna(kf):
+        return '—'
+    if kf >= KELLY_HIGH:
+        return 'HIGH'
+    if kf >= KELLY_MEDIUM:
+        return 'MED'
+    return 'LOW'
+
+
 def show_moneyline_bets(year: int, week: int):
     # Load from log file (same path for historical and production)
     log_path = Path(__file__).parent.parent / f'data/moneyline_selection/logs/moneyline_bets_{year}.csv'
@@ -150,11 +168,11 @@ def show_moneyline_bets(year: int, week: int):
         has_results = 'covered' in list_a.columns and list_a['covered'].notna().any()
 
         if has_results:
-            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Flip | Stake | Result | P/L |")
-            print("|---|---------|-----|------|--------|-----|----------|------|-------|--------|-----|")
+            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Flip | Conf | Result |")
+            print("|---|---------|-----|------|--------|-----|----------|------|------|--------|")
         else:
-            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Flip | Stake |")
-            print("|---|---------|-----|------|--------|-----|----------|------|-------|")
+            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Flip | Conf |")
+            print("|---|---------|-----|------|--------|-----|----------|------|------|")
 
         for i, (_, row) in enumerate(list_a.iterrows(), 1):
             away_abbr = get_abbrev(row['away_team'])
@@ -166,27 +184,23 @@ def show_moneyline_bets(year: int, week: int):
             ev = f"+{row['ev']*100:.1f}%"
             disagree = f"{row['disagreement_pts']:.1f}"
             flip = "FLIP" if row['flip_flag'] else ""
-            stake = f"${row['stake']:.0f}"
+            conf = format_confidence(row)
 
             if has_results:
                 result = format_result(row)
-                profit = format_profit(row)
-                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {flip} | {stake} | {result} | {profit} |")
+                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {flip} | {conf} | {result} |")
             else:
-                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {flip} | {stake} |")
+                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {flip} | {conf} |")
 
         # Record
         if has_results:
             settled = list_a[list_a['covered'].notna()]
             wins = (settled['covered'] == 'W').sum()
             losses = (settled['covered'] == 'L').sum()
-            total_stake = settled['stake'].sum()
-            total_profit = settled['profit_units'].sum() if 'profit_units' in settled.columns else 0
-            roi = (total_profit / total_stake * 100) if total_stake > 0 else 0
             pct = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
-            print(f"\n**Record: {wins}-{losses} ({pct:.1f}%) | Stake: ${total_stake:.0f} | Profit: ${total_profit:+.0f} | ROI: {roi:+.1f}%**")
+            print(f"\n**Record: {wins}-{losses} ({pct:.1f}%)**")
         else:
-            print(f"\n**{len(list_a)} bet(s) | Total stake: ${list_a['stake'].sum():.0f} | Avg EV: +{list_a['ev'].mean()*100:.1f}%**")
+            print(f"\n**{len(list_a)} bet(s) | Avg EV: +{list_a['ev'].mean()*100:.1f}%**")
 
     # --- List B: Near-Misses ---
     print(f"\n## List B — Near-Misses / Diagnostics\n")
