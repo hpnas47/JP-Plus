@@ -706,6 +706,52 @@ def main():
         all_df.to_csv(export_path, index=False)
         print(f"\n  Exported {len(all_df)} recommendations to: {export_path}")
 
+    # Auto-log to standard CSV for show_totals_bets.py consumption
+    log_dir = project_root / 'data' / 'spread_selection' / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f'totals_bets_{year}.csv'
+
+    all_recs = pd.concat([primary_df, edge5_df], ignore_index=True)
+    if not all_recs.empty:
+        # Build log rows matching backtest CSV format
+        log_rows = []
+        for _, r in all_recs.iterrows():
+            game_id = r.get('event_id', '')
+            # Look up start_date and actual score from games_df
+            game_row = games_df[games_df['id'].astype(str) == str(game_id)]
+            start_date = game_row['start_date'].iloc[0] if len(game_row) > 0 and 'start_date' in game_row.columns else None
+            actual_total = None
+            if len(game_row) > 0 and pd.notna(game_row['home_points'].iloc[0]):
+                actual_total = int(game_row['home_points'].iloc[0]) + int(game_row['away_points'].iloc[0])
+
+            log_rows.append({
+                'year': year,
+                'week': week,
+                'start_date': start_date,
+                'game_id': game_id,
+                'home_team': r['home_team'],
+                'away_team': r['away_team'],
+                'adjusted_total': r.get('mu_used', r.get('adjusted_total', '')),
+                'vegas_total_open': r['line'],
+                'actual_total': actual_total,
+                'edge_open': r['edge_pts'],
+                'side': r['side'],
+                'ev': r['ev'],
+                'list_type': 'A' if r.get('ev', 0) >= config.ev_min else 'B',
+            })
+
+        log_df = pd.DataFrame(log_rows)
+
+        # Append or create
+        if log_path.exists():
+            existing = pd.read_csv(log_path)
+            # Remove any existing rows for this week (re-run safe)
+            existing = existing[~((existing['year'] == year) & (existing['week'] == week))]
+            log_df = pd.concat([existing, log_df], ignore_index=True)
+
+        log_df.to_csv(log_path, index=False)
+        print(f"  Logged {len(log_rows)} bets to: {log_path}")
+
     print()
 
 

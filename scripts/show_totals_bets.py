@@ -103,15 +103,29 @@ def format_score(row) -> str:
 
 
 def show_totals_bets(year: int, week: int):
-    # Load pre-computed data (2023-2025 only, excludes 2022 transition year)
-    data_path = Path(__file__).parent.parent / 'data/spread_selection/outputs/backtest_totals_2023-2025.csv'
-    if not data_path.exists():
-        print(f"Error: {data_path} not found")
-        print("Run: python3 scripts/backtest_totals.py --output data/spread_selection/outputs/backtest_totals_2023-2025.csv")
-        return
+    SIGMA = 16.4  # Default from 2023-2025 backtest
 
-    df = pd.read_csv(data_path)
-    week_data = df[(df['year'] == year) & (df['week'] == week)]
+    if year <= 2025:
+        # Historical: load backtest CSV
+        data_path = Path(__file__).parent.parent / 'data/spread_selection/outputs/backtest_totals_2023-2025.csv'
+        if not data_path.exists():
+            print(f"Error: {data_path} not found")
+            print("Run: python3 scripts/backtest_totals.py --output data/spread_selection/outputs/backtest_totals_2023-2025.csv")
+            return
+
+        df = pd.read_csv(data_path)
+        SIGMA = df['jp_error'].std()  # Calibrated from backtest
+        week_data = df[(df['year'] == year) & (df['week'] == week)]
+    else:
+        # Production (2026+): load from logged CSV
+        data_path = Path(__file__).parent.parent / f'data/spread_selection/logs/totals_bets_{year}.csv'
+        if not data_path.exists():
+            print(f"No totals data found for {year}.")
+            print(f"Run: python3 scripts/run_weekly_totals.py --year {year} --week {week}")
+            return
+
+        df = pd.read_csv(data_path)
+        week_data = df[(df['year'] == year) & (df['week'] == week)]
 
     if len(week_data) == 0:
         print(f"No data found for {year} Week {week}")
@@ -129,17 +143,23 @@ def show_totals_bets(year: int, week: int):
     # Filter to games with lines
     week_data = week_data[week_data['vegas_total_open'].notna()].copy()
 
-    # Calculate calibrated sigma from actual prediction errors
-    SIGMA = df['jp_error'].std()  # ~16.4 from 2023-2025 backtest
-
     # Calculate EV using Normal CDF model (for display, not filtering)
     ev_data = week_data['edge_open'].apply(lambda e: calculate_totals_ev(e, SIGMA))
     week_data['ev'] = ev_data.apply(lambda x: x[0])
     week_data['p_win'] = ev_data.apply(lambda x: x[1])
 
-    # Recalculate play and result vs OPEN line (CSV uses CLOSE, we bet on OPEN)
-    week_data['play_open'] = week_data.apply(calc_play_vs_open, axis=1)
-    week_data['result_open'] = week_data.apply(calc_result_vs_open, axis=1)
+    # For backtest data, recalculate play and result vs OPEN line
+    if 'play_open' not in week_data.columns:
+        week_data['play_open'] = week_data.apply(calc_play_vs_open, axis=1)
+    else:
+        week_data['play_open'] = week_data.apply(calc_play_vs_open, axis=1)
+
+    if 'result_open' not in week_data.columns or year <= 2025:
+        week_data['result_open'] = week_data.apply(calc_result_vs_open, axis=1)
+
+    # For production data, use 'side' column if available
+    if 'side' in week_data.columns and year > 2025:
+        week_data['play_open'] = week_data['side']
 
     # Primary: 5+ point edge (2023-2025 backtest: 55.5% ATS, +6.0% ROI)
     EDGE_MIN = 5.0
