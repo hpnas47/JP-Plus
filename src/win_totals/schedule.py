@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 # Default HFA in points (conservative, used when no calibration available)
 DEFAULT_HFA = 3.0
 
-# Default logistic calibration (intercept=0, slope from historical ~0.04)
-DEFAULT_CALIBRATION_SLOPE = 0.04
+# Default logistic calibration slope. Historical CFB spread std ≈ 14 pts,
+# logistic scale = 1/slope ≈ 8.3, consistent with implied_sigma range [5, 20].
+DEFAULT_CALIBRATION_SLOPE = 0.12
 
 # Naive fallback regression factor (regress toward mean by 30%)
 NAIVE_FALLBACK_REGRESSION = 0.30
@@ -178,6 +179,11 @@ def poisson_binomial_pmf(probs: list[float] | np.ndarray) -> np.ndarray:
     Computes P(X = k) for k = 0, 1, ..., n where X is the sum of n
     independent Bernoulli trials with potentially different probabilities.
 
+    Note: This is the zero-tau (independent games) special case. For
+    production EV calculations, use simulate_season_with_shocks() which
+    adds correlated team-level uncertainty and produces wider distributions.
+    Using this function directly will underestimate distribution width.
+
     Args:
         probs: Win probabilities for each game (length n)
 
@@ -216,6 +222,14 @@ def simulate_season_with_shocks(
     Each simulation draws a single team-level shock delta ~ N(0, tau^2),
     which shifts ALL game spreads for that team. This creates correlated
     uncertainty (a team is consistently better/worse than predicted).
+
+    Note on calibration interaction: The logistic calibration slope is fitted
+    on out-of-fold predicted spreads, which already embed prediction error.
+    This means the fitted slope is slightly flatter than the true-spread slope.
+    When tau-shifted spreads are evaluated through this logistic, there is mild
+    double-counting of uncertainty. This is accepted as conservative: it widens
+    the distribution slightly, making extreme win totals marginally more likely,
+    which errs toward underconfidence rather than overconfidence in EV estimates.
 
     Args:
         game_spreads: Projected spreads for each game (positive = favored)
@@ -418,6 +432,8 @@ def calibrate_tau(residuals: np.ndarray) -> float:
         tau (std dev of residuals)
     """
     residuals = np.asarray(residuals, dtype=np.float64)
+    # ddof=1 (Bessel's correction): ~0.2-0.4% overestimate at N=130-260,
+    # negligible at typical N=400-600. Accepted as mildly conservative.
     tau = float(np.std(residuals, ddof=1))
     logger.info(f"Calibrated tau = {tau:.3f} from {len(residuals)} residuals")
     return tau

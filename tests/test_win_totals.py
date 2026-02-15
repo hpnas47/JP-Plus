@@ -470,7 +470,7 @@ class TestCalibration:
         spreads = np.array([1.0, -1.0, 2.0])
         outcomes = np.array([1.0, 0.0, 1.0])
         cal = calibrate_win_probability(spreads, outcomes, min_games=100)
-        assert cal.slope == pytest.approx(0.04)
+        assert cal.slope == pytest.approx(0.12)
         assert cal.intercept == pytest.approx(0.0)
         assert cal.n_games == 3
         assert cal.calibration_source == 'naive_default'
