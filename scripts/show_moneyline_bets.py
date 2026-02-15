@@ -181,37 +181,36 @@ def show_moneyline_bets(year: int, week: int):
 
         if has_results:
             if has_scores:
-                print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence | Score | Result |")
-                print("|---|---------|-----|------|--------|-----|----------|------------|-------|--------|")
+                print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Score | Result |")
+                print("|---|---------|-----|------|------|-----|------|-------|--------|")
             else:
-                print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence | Result |")
-                print("|---|---------|-----|------|--------|-----|----------|------------|--------|")
+                print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Result |")
+                print("|---|---------|-----|------|------|-----|------|--------|")
         else:
-            print("| # | Matchup | Bet | Odds | p(Win) | EV | Disagree | Confidence |")
-            print("|---|---------|-----|------|--------|-----|----------|------------|")
+            print("| # | Matchup | Bet | Odds | p(W) | EV | Conf |")
+            print("|---|---------|-----|------|------|-----|------|")
 
         for i, (_, row) in enumerate(list_a.iterrows(), 1):
             away_abbr = get_abbrev(row['away_team'])
             home_abbr = get_abbrev(row['home_team'])
             matchup = f"{away_abbr} @ {home_abbr}"
-            bet_team = format_bet_team(row)
+            bet_abbr = get_abbrev(format_bet_team(row))
             odds = format_odds(row['odds_american'])
-            p_win = f"{row['p_win']:.1%}"
-            ev = f"+{row['ev']*100:.1f}%"
-            disagree = f"{row['disagreement_pts']:.1f}"
+            p_win = f"{row['p_win']:.0%}"
+            ev = f"+{row['ev']*100:.0f}%"
             conf = format_confidence(row)
 
             if has_results:
                 result = format_result(row)
                 if has_scores and pd.notna(row.get('home_points')):
-                    score = f"{int(row['away_points'])}-{int(row['home_points'])}"
-                    print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | {score} | {result} |")
+                    score = f"{away_abbr} {int(row['away_points'])}, {home_abbr} {int(row['home_points'])}"
+                    print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {score} | {result} |")
                 elif has_scores:
-                    print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | — | {result} |")
+                    print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | — | {result} |")
                 else:
-                    print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} | {result} |")
+                    print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} | {result} |")
             else:
-                print(f"| {i} | {matchup} | {bet_team} ML | {odds} | {p_win} | {ev} | {disagree} | {conf} |")
+                print(f"| {i} | {matchup} | {bet_abbr} ML | {odds} | {p_win} | {ev} | {conf} |")
 
         # Record
         if has_results:
