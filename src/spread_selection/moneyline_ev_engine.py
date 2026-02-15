@@ -79,7 +79,8 @@ class MoneylineEVConfig:
     round_to: float = 1.0
     rounding_mode: Literal["floor", "nearest"] = "floor"
     one_bet_per_game: bool = True
-    max_bets_per_week: int | None = None
+    max_bets_per_week: int | None = 10
+    max_favorite_odds: int = -250  # Reject favorites beyond this (e.g., -600). 0 = no limit.
     require_flip: bool = False
     min_disagreement_pts: float = 5.0
     listA_gate_logic: Literal["OR", "AND"] = "AND"
@@ -293,6 +294,18 @@ def evaluate_moneylines(
             row = {c: None for c in COLUMNS}
             row.update(base_row)
             row.update(cand)
+
+            # Reject heavy favorites (e.g., -600 when limit is -250)
+            cand_odds = cand.get("odds_american", 0)
+            if (
+                config.max_favorite_odds < 0
+                and cand_odds is not None
+                and cand_odds < 0
+                and cand_odds < config.max_favorite_odds
+            ):
+                row["reason_code"] = "HEAVY_FAVORITE"
+                list_b_rows.append(row)
+                continue
 
             if cand["ev"] >= config.ev_min and cand["stake"] > 0:
                 row["reason_code"] = "OK"

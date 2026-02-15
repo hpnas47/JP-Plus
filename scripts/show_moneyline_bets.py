@@ -159,8 +159,8 @@ def show_moneyline_bets(year: int, week: int):
     ev_min = week_data['ev_min'].iloc[0] if 'ev_min' in week_data.columns else '?'
     min_disagree = week_data['min_disagreement_pts'].iloc[0] if 'min_disagreement_pts' in week_data.columns else '?'
 
-    # --- List A: Actionable ML Bets ---
-    print(f"\n## {year} Week {week} — Moneyline Bets (List A)\n")
+    # --- Actionable Bets ---
+    print(f"\n## {year} Week {week} — Actionable Moneyline Bets\n")
 
     if list_a.empty:
         print("*No actionable moneyline bets this week.*\n")
@@ -212,11 +212,11 @@ def show_moneyline_bets(year: int, week: int):
         else:
             print(f"\n**{len(list_a)} bet(s) | Avg EV: +{list_a['ev'].mean()*100:.1f}%**")
 
-    # --- List B: Near-Misses ---
-    print(f"\n## List B — Near-Misses / Diagnostics\n")
+    # --- Watchlist ---
+    print(f"\n## Watchlist\n")
 
     if list_b.empty:
-        print("*No near-miss games this week.*\n")
+        print("*No watchlist games this week.*\n")
     else:
         print("| # | Matchup | Side | Odds | EV | Disagree | Reason |")
         print("|---|---------|------|------|----|----------|--------|")
