@@ -22,10 +22,13 @@ import numpy as np
 import pandas as pd
 from config.teams import normalize_team_name
 from src.api.cfbd_client import CFBDClient
+from src.win_totals.schedule import WinTotalDistribution
 
 # Max week for regular season (matches run_win_totals.py)
 MAX_REGULAR_SEASON_WEEK = 15
-# Probability threshold for betting (55% covers -110 vig)
+# Conservative default threshold for betting when actual odds are unavailable.
+# Approximates typical win total juice (~-120 to -125 range).
+# When book odds are present in the CSV, the actual breakeven is used instead.
 BET_PROB_THRESHOLD = 0.55
 
 
@@ -37,7 +40,7 @@ def parse_win_probs(s: str) -> np.ndarray | None:
 
 
 def odds_to_breakeven(odds: int | None) -> float:
-    """Convert American odds to breakeven probability. Returns default 55% if None."""
+    """Convert American odds to breakeven probability. Returns default threshold if None."""
     if odds is None:
         return BET_PROB_THRESHOLD
     if odds < 0:
@@ -54,20 +57,23 @@ def compute_bet_from_pmf(
 ) -> tuple[str, float]:
     """Compute bet recommendation and probability from PMF.
 
-    Uses actual odds to compute breakeven when available, otherwise 55% default.
+    Uses actual odds to compute breakeven when available, otherwise
+    BET_PROB_THRESHOLD default. Reuses WinTotalDistribution's prob methods
+    to avoid duplicating slicing logic.
+
     Returns (side, probability) where side is 'Over', 'Under', or '—'.
     """
     if win_probs is None:
         return '—', 0.0
 
-    line = book_line
-    # prob_over: P(wins > line)
-    prob_over = float(np.sum(win_probs[int(line) + 1:]))
-    # prob_under: P(wins < line)
-    if line != int(line):
-        prob_under = float(np.sum(win_probs[:int(line) + 1]))
-    else:
-        prob_under = float(np.sum(win_probs[:int(line)]))
+    # Use WinTotalDistribution for consistent prob_over/prob_under logic
+    dist = WinTotalDistribution(
+        team='', year=0, predicted_rating=0.0,
+        expected_wins=0.0, win_probs=win_probs,
+    )
+
+    prob_over = dist.prob_over(book_line)
+    prob_under = dist.prob_under(book_line)
 
     over_threshold = odds_to_breakeven(over_odds)
     under_threshold = odds_to_breakeven(under_odds)
@@ -115,16 +121,14 @@ def resolve_conference(raw: str) -> str | None:
     return None
 
 
-def get_team_conferences(year: int) -> dict[str, str]:
+def get_team_conferences(client: CFBDClient, year: int) -> dict[str, str]:
     """Get team -> conference mapping."""
-    client = CFBDClient()
     teams = client.get_fbs_teams(year=year)
     return {normalize_team_name(t.school): t.conference for t in teams}
 
 
-def get_actual_wins(year: int) -> dict[str, int]:
+def get_actual_wins(client: CFBDClient, year: int) -> dict[str, int]:
     """Get actual regular season win counts (week <= 15)."""
-    client = CFBDClient()
     games = client.get_games(year=year, season_type='regular')
     wins: dict[str, int] = {}
     for g in games:
@@ -198,8 +202,11 @@ def main():
         print(f"Run first: python3 -m src.win_totals.run_win_totals predict --year {year} --train-start 2015")
         sys.exit(1)
 
+    # Single client instance for all API calls
+    client = CFBDClient()
+
     df = pd.read_csv(csv_path)
-    conf_map = get_team_conferences(year)
+    conf_map = get_team_conferences(client, year)
     df['conference'] = df['team'].map(conf_map).fillna('Unknown')
 
     # Load SP+ preseason expected wins (if available)
@@ -217,7 +224,7 @@ def main():
     historical = is_season_complete(year)
     actual_wins_map: dict[str, int] = {}
     if historical:
-        actual_wins_map = get_actual_wins(year)
+        actual_wins_map = get_actual_wins(client, year)
         df['actual_wins'] = df['team'].map(actual_wins_map)
 
     # Filter by conference if requested
@@ -338,6 +345,8 @@ def main():
             wins = 0
             losses = 0
             pushes = 0
+            total_payout = 0.0
+            has_odds = df['over_odds'].notna().any()
             for _, r in df.iterrows():
                 if not (pd.notna(r.get('book_line')) and pd.notna(r.get('actual_wins'))):
                     continue
@@ -355,31 +364,45 @@ def main():
                     continue
                 actual_int = int(r['actual_wins'])
                 book = r['book_line']
+                # Determine the odds for this side
                 if side == 'Over':
+                    bet_odds = int(over_o) if pd.notna(over_o) else None
                     if actual_int > book:
                         wins += 1
+                        if bet_odds is not None:
+                            total_payout += (100.0 / abs(bet_odds)) if bet_odds < 0 else (bet_odds / 100.0)
                     elif actual_int < book:
                         losses += 1
+                        if bet_odds is not None:
+                            total_payout -= 1.0
                     else:
                         pushes += 1
                 elif side == 'Under':
+                    bet_odds = int(under_o) if pd.notna(under_o) else None
                     if actual_int < book:
                         wins += 1
+                        if bet_odds is not None:
+                            total_payout += (100.0 / abs(bet_odds)) if bet_odds < 0 else (bet_odds / 100.0)
                     elif actual_int > book:
                         losses += 1
+                        if bet_odds is not None:
+                            total_payout -= 1.0
                     else:
                         pushes += 1
-            total = wins + losses + pushes
+
+            decided = wins + losses
             label = f"{year}"
             if conf_name:
                 label += f" {conf_name}"
-            pct = f" ({wins/total*100:.0f}%)" if total > 0 else ""
+            pct = f" ({wins/decided*100:.0f}%)" if decided > 0 else ""
             print(f"\n**{label} JP+ Record: {wins}-{losses}" + (f"-{pushes}" if pushes else "") + f"{pct}**")
-            has_odds = df['over_odds'].notna().any()
+            if has_odds and decided > 0:
+                roi = total_payout / decided * 100
+                print(f"ROI (actual odds): {roi:+.1f}%")
             if has_odds:
                 print(f"\n*JP+ Bet column shows Over/Under when P(win bet) exceeds breakeven implied by book odds. Probability from Monte Carlo PMF.*")
             else:
-                print(f"\n*JP+ Bet column shows Over/Under when P(win bet) > 55% (covers -110 vig). Probability from Monte Carlo PMF.*")
+                print(f"\n*JP+ Bet column shows Over/Under when P(win bet) > 55% (conservative default for typical win total juice). Probability from Monte Carlo PMF.*")
     else:
         if show_conf_col:
             print("| Rank | Team | Conf | JP+ Exp. Wins | SP+ Exp. Wins |")

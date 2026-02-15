@@ -82,19 +82,52 @@ class ValidationResult:
     production_alpha: float = 0.0  # alpha with lowest avg MAE across folds
     alpha_mae_table: dict[float, float] = field(default_factory=dict)  # alpha -> avg MAE
     production_residuals: np.ndarray = field(default_factory=lambda: np.array([]))
+    _production_predictions: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
-    def overall_mae(self) -> float:
+    def per_fold_optimized_mae(self) -> float:
+        """MAE from fold predictions where each fold used its own best alpha.
+
+        Mildly optimistic — each fold selected the alpha that performed best
+        on that specific fold's test data. Use production_mae for honest estimates.
+        """
         all_preds = pd.concat([f.predictions for f in self.folds])
         return float(np.mean(np.abs(all_preds['predicted_sp'] - all_preds['actual_sp'])))
 
     @property
-    def overall_rmse(self) -> float:
+    def per_fold_optimized_rmse(self) -> float:
+        """RMSE from fold predictions where each fold used its own best alpha."""
         all_preds = pd.concat([f.predictions for f in self.folds])
         return float(np.sqrt(np.mean((all_preds['predicted_sp'] - all_preds['actual_sp']) ** 2)))
 
     @property
+    def production_mae(self) -> float:
+        """Honest MAE from production_alpha residuals (consistent alpha across all folds)."""
+        if len(self.production_residuals) > 0:
+            return float(np.mean(np.abs(self.production_residuals)))
+        return self.per_fold_optimized_mae
+
+    @property
+    def production_rmse(self) -> float:
+        """Honest RMSE from production_alpha residuals (consistent alpha across all folds)."""
+        if len(self.production_residuals) > 0:
+            return float(np.sqrt(np.mean(self.production_residuals ** 2)))
+        return self.per_fold_optimized_rmse
+
+    @property
+    def production_predictions(self) -> pd.DataFrame:
+        """OOF predictions generated with production_alpha (consistent across folds).
+
+        Used for calibration to ensure spread scale matches production model.
+        Falls back to per-fold-optimized predictions if production run wasn't done.
+        """
+        if self._production_predictions is not None:
+            return self._production_predictions
+        return self.all_predictions
+
+    @property
     def all_predictions(self) -> pd.DataFrame:
+        """Per-fold-optimized OOF predictions (each fold used its own best alpha)."""
         return pd.concat([f.predictions for f in self.folds], ignore_index=True)
 
     @property
@@ -145,6 +178,35 @@ class PreseasonModel:
         exclude = {'team', 'year', 'target_sp'}
         return [c for c in df.columns if c not in exclude]
 
+    def _fit_and_predict_fold(
+        self,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        feature_names: list[str],
+        alpha: float,
+    ) -> tuple[np.ndarray, np.ndarray, Ridge, StandardScaler, np.ndarray]:
+        """Fit Ridge on train, predict on test. Shared preprocessing logic.
+
+        Returns:
+            (predictions, col_means, fitted_ridge, fitted_scaler, y_test)
+        """
+        X_train_raw = train_df[feature_names].values.astype(np.float64)
+        y_train = train_df['target_sp'].values.astype(np.float64)
+        X_test_raw = test_df[feature_names].values.astype(np.float64)
+        y_test = test_df['target_sp'].values.astype(np.float64)
+
+        X_train, X_test, col_means = _impute_nan_with_means(X_train_raw, X_test_raw)
+
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+        ridge = Ridge(alpha=alpha)
+        ridge.fit(X_train_scaled, y_train)
+        preds = ridge.predict(X_test_scaled)
+
+        return preds, col_means, ridge, scaler, y_test
+
     def train(
         self,
         train_df: pd.DataFrame,
@@ -194,10 +256,11 @@ class PreseasonModel:
 
         X = df[self.feature_names].values.astype(np.float64)
         # Impute NaN with training column means for consistent z-scores
-        if self._col_means is not None:
+        col_means = getattr(self, '_col_means', None)
+        if col_means is not None:
             for j in range(X.shape[1]):
                 mask = np.isnan(X[:, j])
-                X[mask, j] = self._col_means[j]
+                X[mask, j] = col_means[j]
         else:
             X = np.nan_to_num(X, nan=0.0)
         X_scaled = self.scaler.transform(X)
@@ -268,29 +331,18 @@ class PreseasonModel:
 
             fold_splits.append((pred_year, train_df, test_df))
 
+            feature_names = self._get_feature_cols(train_df)
+
             # Try each alpha candidate on this fold
             best_alpha = self.alpha_candidates[0]
             best_mae = float('inf')
             best_preds = None
             best_model = None
-            best_scaler = None
-
-            feature_names = self._get_feature_cols(train_df)
-            X_train_raw = train_df[feature_names].values.astype(np.float64)
-            y_train = train_df['target_sp'].values.astype(np.float64)
-            X_test_raw = test_df[feature_names].values.astype(np.float64)
-            y_test = test_df['target_sp'].values.astype(np.float64)
-
-            X_train, X_test, _ = _impute_nan_with_means(X_train_raw, X_test_raw)
-
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            X_test_scaled = scaler.transform(X_test)
 
             for alpha in self.alpha_candidates:
-                ridge = Ridge(alpha=alpha)
-                ridge.fit(X_train_scaled, y_train)
-                preds = ridge.predict(X_test_scaled)
+                preds, _, ridge, _, y_test = self._fit_and_predict_fold(
+                    train_df, test_df, feature_names, alpha
+                )
                 mae = float(np.mean(np.abs(preds - y_test)))
                 alpha_fold_maes[alpha].append(mae)
 
@@ -299,8 +351,8 @@ class PreseasonModel:
                     best_alpha = alpha
                     best_preds = preds
                     best_model = ridge
-                    best_scaler = scaler
 
+            y_test = test_df['target_sp'].values.astype(np.float64)
             pred_df = pd.DataFrame({
                 'team': test_df['team'].values,
                 'year': test_df['year'].values,
@@ -341,30 +393,30 @@ class PreseasonModel:
                 logger.info(f"  alpha={a:.1f}: avg MAE={m:.3f}")
 
         # Re-run all folds with production_alpha for consistent tau calibration
+        # and production_predictions (used for calibration spread scale matching)
         if result.folds and result.production_alpha > 0:
             from src.win_totals.schedule import calibrate_tau
 
             all_production_residuals = []
+            all_production_pred_dfs = []
             feature_names = result.folds[0].feature_names
 
             for pred_year, train_df, test_df in fold_splits:
-                X_train_raw = train_df[feature_names].values.astype(np.float64)
-                y_train = train_df['target_sp'].values.astype(np.float64)
-                X_test_raw = test_df[feature_names].values.astype(np.float64)
-                y_test = test_df['target_sp'].values.astype(np.float64)
-
-                X_train, X_test, _ = _impute_nan_with_means(X_train_raw, X_test_raw)
-
-                scaler = StandardScaler()
-                X_train_scaled = scaler.fit_transform(X_train)
-                X_test_scaled = scaler.transform(X_test)
-
-                ridge = Ridge(alpha=result.production_alpha)
-                ridge.fit(X_train_scaled, y_train)
-                preds = ridge.predict(X_test_scaled)
+                preds, _, _, _, y_test = self._fit_and_predict_fold(
+                    train_df, test_df, feature_names, result.production_alpha
+                )
                 all_production_residuals.append(preds - y_test)
+                all_production_pred_dfs.append(pd.DataFrame({
+                    'team': test_df['team'].values,
+                    'year': test_df['year'].values,
+                    'predicted_sp': preds,
+                    'actual_sp': y_test,
+                }))
 
             result.production_residuals = np.concatenate(all_production_residuals)
+            result._production_predictions = pd.concat(
+                all_production_pred_dfs, ignore_index=True
+            )
             result.tau = calibrate_tau(result.production_residuals)
 
             # Retrain final production model on full dataset
@@ -373,8 +425,8 @@ class PreseasonModel:
             logger.info(f"Production model retrained on full dataset "
                          f"(alpha={result.production_alpha:.1f}, n={len(dataset)})")
 
-        logger.info(f"Walk-forward complete: MAE={result.overall_mae:.3f}, "
-                     f"RMSE={result.overall_rmse:.3f}, tau={result.tau:.3f}")
+        logger.info(f"Walk-forward complete: MAE={result.production_mae:.3f}, "
+                     f"RMSE={result.production_rmse:.3f}, tau={result.tau:.3f}")
 
         return result
 
@@ -382,7 +434,7 @@ class PreseasonModel:
     def naive_baseline(dataset: pd.DataFrame) -> float:
         """Naive baseline: prior SP+ predicts current SP+.
 
-        Returns MAE of using prior_sp_overall as prediction.
+        Returns in-sample MAE (no fitted parameters, but uses full dataset).
         """
         residuals = dataset['prior_sp_overall'] - dataset['target_sp']
         return float(np.mean(np.abs(residuals)))
@@ -391,11 +443,8 @@ class PreseasonModel:
     def talent_baseline(dataset: pd.DataFrame) -> float:
         """Talent baseline: talent_composite as sole predictor.
 
-        Returns in-sample MAE of using talent composite (rescaled) as prediction.
-
-        Note: This is an in-sample estimate (fits on all years simultaneously).
-        Do not compare directly to walk-forward Ridge MAE, which is out-of-fold.
-        Use only as a rough sanity check that Ridge improves on talent alone.
+        Returns in-sample MAE (fitted on all years simultaneously).
+        Not comparable to walk-forward MAE — use only as a sanity check.
         """
         from sklearn.linear_model import LinearRegression
         talent = dataset['talent_composite']

@@ -138,8 +138,9 @@ def cmd_train(args):
         print(f"  {fold.year}: MAE={fold.mae:.3f}  RMSE={fold.rmse:.3f}  "
               f"fold_alpha={fold.fold_alpha:.0f}  n={fold.n_teams}")
 
-    print(f"\n  Overall MAE:  {result.overall_mae:.3f}")
-    print(f"  Overall RMSE: {result.overall_rmse:.3f}")
+    print(f"\n  Production MAE (honest):  {result.production_mae:.3f}")
+    print(f"  Production RMSE (honest): {result.production_rmse:.3f}")
+    print(f"  Per-fold optimized MAE (diagnostic only): {result.per_fold_optimized_mae:.3f}")
     print(f"  Tau:          {result.tau:.3f}")
     print(f"  Production alpha: {result.production_alpha:.1f}")
 
@@ -151,7 +152,7 @@ def cmd_train(args):
 
     # Baselines
     naive = PreseasonModel.naive_baseline(dataset)
-    print(f"\n  Naive baseline (prior SP+): MAE={naive:.3f}")
+    print(f"\n  Naive baseline (in-sample, no fit): MAE={naive:.3f}")
 
     # Feature importance
     fi = result.feature_importance()
@@ -176,10 +177,8 @@ def cmd_predict(args):
     )
 
     model = PreseasonModel()
+    # validate() internally retrains with production_alpha on full dataset
     val_result = model.validate(dataset)
-
-    # Train final model with production alpha on all data
-    model.train(dataset, alpha=val_result.production_alpha)
 
     features = builder.build_features(args.year)
     predictions = model.predict(features)
@@ -264,6 +263,7 @@ def cmd_backtest(args):
     total_bets = 0
     total_wins = 0
     total_pushes = 0
+    total_payout = 0.0  # sum of payouts for ROI calculation
 
     for year in range(args.start_year, args.end_year + 1):
         lines_path = Path(f"data/win_totals/{year}_book_lines.csv")
@@ -272,13 +272,15 @@ def cmd_backtest(args):
             continue
 
         book_lines = load_book_lines(str(lines_path))
+        # Build lookup for per-bet odds
+        book_line_lookup = {bl.team: bl for bl in book_lines}
 
         dataset = builder.build_training_dataset(
             args.train_start, year - 1, exclude_years={2020}
         )
         model = PreseasonModel()
+        # validate() internally retrains with production_alpha on full dataset
         val_result = model.validate(dataset)
-        model.train(dataset, alpha=val_result.production_alpha)
 
         features = builder.build_features(year)
         predictions = model.predict(features)
@@ -328,24 +330,43 @@ def cmd_backtest(args):
         year_wins = 0
         year_bets = 0
         year_pushes = 0
+        year_payout = 0.0
         for rec in recs:
             actual = actual_wins.get(rec.team)
             if actual is None:
                 continue
             year_bets += 1
+            won = False
+            pushed = False
             if rec.side == "Over" and actual > rec.line:
-                year_wins += 1
+                won = True
             elif rec.side == "Under" and actual < rec.line:
-                year_wins += 1
+                won = True
             elif actual == rec.line and rec.line == int(rec.line):
+                pushed = True
+
+            if won:
+                year_wins += 1
+                # Compute payout from actual odds
+                odds = rec.odds
+                if odds < 0:
+                    year_payout += 100.0 / abs(odds)
+                else:
+                    year_payout += odds / 100.0
+            elif pushed:
                 year_pushes += 1
+                # Push = refund, no payout change
+            else:
+                year_payout -= 1.0
 
         total_bets += year_bets
         total_wins += year_wins
         total_pushes += year_pushes
+        total_payout += year_payout
 
-        win_pct = year_wins / year_bets * 100 if year_bets > 0 else 0
-        print(f"{year}: {year_wins}/{year_bets} ({win_pct:.1f}%), "
+        decided = year_bets - year_pushes
+        win_pct = year_wins / decided * 100 if decided > 0 else 0
+        print(f"{year}: {year_wins}/{decided} ({win_pct:.1f}%), "
               f"{year_pushes} pushes, {len(recs)} recs, {len(distributions)} teams")
 
     if total_bets > 0:
@@ -353,9 +374,8 @@ def cmd_backtest(args):
         overall_pct = total_wins / decided * 100 if decided > 0 else 0
         print(f"\nOverall: {total_wins}/{decided} ({overall_pct:.1f}%), {total_pushes} pushes")
         if decided > 0:
-            losses = decided - total_wins
-            roi = (total_wins * (100 / 110) - losses) / decided * 100
-            print(f"ROI at -110: {roi:+.1f}%")
+            roi = total_payout / decided * 100
+            print(f"ROI (actual odds): {roi:+.1f}%")
 
 
 def cmd_calibrate(args):
@@ -369,11 +389,10 @@ def cmd_calibrate(args):
     result = model.validate(dataset)
 
     print(f"\nTau (team uncertainty): {result.tau:.3f}")
-    print(f"Walk-forward MAE: {result.overall_mae:.3f}")
-    print(f"Walk-forward RMSE: {result.overall_rmse:.3f}")
+    print(f"Walk-forward MAE (production): {result.production_mae:.3f}")
+    print(f"Walk-forward RMSE (production): {result.production_rmse:.3f}")
     print(f"Production alpha: {result.production_alpha:.1f}")
 
-    all_preds = result.all_predictions
     cal_spreads, cal_outcomes, fb_spreads, fb_outcomes, fb_years, primary_years = (
         _build_calibration_data_prior_folds(
             result, builder.client, builder, max_year=args.end_year
@@ -416,10 +435,11 @@ def _compute_leakage_pcts(
     feature_cols = model.feature_names
     X = features[feature_cols].values.astype(np.float64)
     # Impute NaN with training column means (consistent with model.py)
-    if model._col_means is not None:
+    col_means = getattr(model, '_col_means', None)
+    if col_means is not None:
         for j in range(X.shape[1]):
             mask = np.isnan(X[:, j])
-            X[mask, j] = model._col_means[j]
+            X[mask, j] = col_means[j]
     else:
         X = np.nan_to_num(X, nan=0.0)
     X_scaled = model.scaler.transform(X)
@@ -488,6 +508,9 @@ def _build_calibration_data_prior_folds(
     For predicting year Y, calibration uses OOF predictions from
     years start..Y-1 ONLY (not including Y itself).
 
+    Uses production_predictions (consistent production_alpha across all folds)
+    to ensure calibration spread scale matches production model.
+
     If insufficient primary data (< 1500 games), supplements with
     earlier years using naive baseline ratings regressed 30% toward mean.
 
@@ -498,7 +521,8 @@ def _build_calibration_data_prior_folds(
     spreads_list = []
     outcomes_list = []
 
-    all_preds = val_result.all_predictions
+    # Use production_predictions for consistent alpha across folds
+    all_preds = val_result.production_predictions
     # Only use predictions from years strictly before max_year
     prior_preds = all_preds[all_preds['year'] < max_year]
 
@@ -530,6 +554,11 @@ def _build_calibration_data_prior_folds(
             if home not in fbs_teams or away not in fbs_teams:
                 continue
 
+            # Skip tied games (shouldn't happen post-1996, but guard against bad data)
+            if g.home_points == g.away_points:
+                logger.warning(f"Skipping tied game {home} vs {away} ({year} week {week})")
+                continue
+
             spread = pred_by_team[home] - pred_by_team[away] + DEFAULT_HFA
             if getattr(g, 'neutral_site', False):
                 spread = pred_by_team[home] - pred_by_team[away]
@@ -550,7 +579,6 @@ def _build_calibration_data_prior_folds(
     if len(primary_spreads) < 1500:
         # Get years that are NOT in val_result (too early for walk-forward)
         oof_years = set(prior_preds['year'].unique())
-        all_dataset_years = set(all_preds['year'].unique())
 
         # Try to find earlier years not covered by OOF
         earliest_oof = min(oof_years) if oof_years else max_year
@@ -583,6 +611,10 @@ def _build_calibration_data_prior_folds(
                     if home not in sp_prior or away not in sp_prior:
                         continue
                     if home not in fbs_teams or away not in fbs_teams:
+                        continue
+
+                    # Skip tied games
+                    if g.home_points == g.away_points:
                         continue
 
                     spread = sp_prior[home] - sp_prior[away] + DEFAULT_HFA
