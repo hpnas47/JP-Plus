@@ -965,6 +965,16 @@ def walk_forward_predict(
         if use_learned_situ:
             lsa_model.train(max_week=pred_week - 1)
 
+        # Pre-build dict lookups for LSA data (avoids O(n) Polars filter per game)
+        turnover_lookup = {}
+        if turnover_df is not None and len(turnover_df) > 0:
+            for row in turnover_df.iter_rows(named=True):
+                turnover_lookup[row["game_id"]] = row["net_home_to_margin"]
+        betting_lookup = {}
+        if betting_df is not None and len(betting_df) > 0 and "spread_close" in betting_df.columns:
+            for row in betting_df.iter_rows(named=True):
+                betting_lookup[row["game_id"]] = row["spread_close"]
+
         for game in week_games.iter_rows(named=True):
             try:
                 # Standard prediction (uses fixed situational constants)
@@ -1010,21 +1020,9 @@ def walk_forward_predict(
                         fixed_situational=pred.components.situational,
                     )
 
-                    # Look up turnover margin for this game (for LSA turnover adjustment)
-                    turnover_margin = None
-                    if turnover_df is not None and len(turnover_df) > 0:
-                        game_to_row = turnover_df.filter(pl.col("game_id") == game["id"])
-                        if len(game_to_row) > 0:
-                            turnover_margin = game_to_row["net_home_to_margin"][0]
-
-                    # Look up Vegas spread for this game (for LSA filtering/weighting)
-                    vegas_spread = None
-                    if betting_df is not None and len(betting_df) > 0:
-                        game_betting = betting_df.filter(pl.col("game_id") == game["id"])
-                        if len(game_betting) > 0:
-                            # Use closing spread (spread_close column), not opening
-                            if "spread_close" in game_betting.columns:
-                                vegas_spread = game_betting["spread_close"][0]
+                    # Look up turnover margin and Vegas spread via pre-built dicts
+                    turnover_margin = turnover_lookup.get(game["id"])
+                    vegas_spread = betting_lookup.get(game["id"])
 
                     # Add to training data (extended format with weight and vegas)
                     weight = lsa_model._compute_sample_weight(vegas_spread) if lsa_model else 1.0
