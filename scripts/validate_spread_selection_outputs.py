@@ -339,6 +339,19 @@ class SchemaValidator:
         if ev is not None and not isinstance(ev, (int, float)):
             self.add_error(filename, f"{prefix}.ev", "Must be numeric")
 
+        # EV consistency cross-check: ev should match p_cover at -110 odds
+        # Assumes -110 placeholder odds; update when real odds are integrated.
+        if (p_cover is not None and ev is not None
+                and isinstance(p_cover, (int, float))
+                and isinstance(ev, (int, float))):
+            expected_ev = p_cover * (100 / 110) - (1 - p_cover)
+            if abs(ev - expected_ev) > 0.01:
+                self.add_error(
+                    filename, f"{prefix}.ev",
+                    f"EV inconsistent with p_cover at assumed -110 odds: "
+                    f"expected {expected_ev:.4f}, got {ev:.4f}"
+                )
+
         # edge_abs: float >= 0
         edge_abs = record.get("edge_abs")
         if edge_abs is not None:
@@ -477,7 +490,7 @@ class SchemaValidator:
         # Legacy schema: sp_gate_passed (if present)
         # Only enforce sp_gate_passed=True for non-vetoed bets (vetoed/rejected records legitimately have False)
         sp_passed = record.get("sp_gate_passed")
-        veto_applied = record.get("veto_applied")
+        # Reuse veto_applied from line 466 (no need to re-read from record)
         is_vetoed = veto_applied is True or str(veto_applied).lower() == "true"
         if sp_passed is not None and not is_vetoed:
             # Use equality check (not identity) to handle CSV-parsed strings/ints
