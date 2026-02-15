@@ -122,9 +122,7 @@ def show_spread_bets(year: int, week: int):
         print("|---|---------|----------|------------|------|-----|-------|--------|")
 
     for i, (_, row) in enumerate(primary.iterrows(), 1):
-        away_abbr = get_abbrev(row['away_team'])
-        home_abbr = get_abbrev(row['home_team'])
-        matchup = f"{away_abbr} @ {home_abbr}"
+        matchup = f"{row['away_team']} @ {row['home_team']}"
         jp_line = format_jp_line(row)
         bet_line = format_bet_line(row)
         score = format_score(row)
@@ -156,9 +154,7 @@ def show_spread_bets(year: int, week: int):
         print("|---|---------|----------|------------|------|-------|--------|")
 
     for i, (_, row) in enumerate(edge5.iterrows(), 1):
-        away_abbr = get_abbrev(row['away_team'])
-        home_abbr = get_abbrev(row['home_team'])
-        matchup = f"{away_abbr} @ {home_abbr}"
+        matchup = f"{row['away_team']} @ {row['home_team']}"
         jp_line = format_jp_line(row)
         bet_line = format_bet_line(row)
         score = format_score(row)
