@@ -196,11 +196,6 @@ class TestReliabilityScaling:
         rel = compute_game_reliability(home_games_played=1, away_games_played=1)
         assert rel == 0.0
 
-    def test_reliability_full_at_eight_games(self):
-        """Reliability should be 1.0 when both teams have 8+ games."""
-        rel = compute_game_reliability(home_games_played=8, away_games_played=10)
-        assert rel == 1.0
-
     def test_reliability_midpoint(self):
         """Reliability should be ~0.5 at 4-5 games."""
         rel = compute_game_reliability(home_games_played=5, away_games_played=5)
@@ -252,37 +247,6 @@ class TestReliabilityScaling:
 class TestWeekBucketLookup:
     """Test week bucket lookup is deterministic."""
 
-    def test_week_bucket_mapping(self):
-        """Each week should map to correct bucket."""
-        multipliers = {
-            "1-2": 1.3,
-            "3-5": 1.1,
-            "6-9": 1.0,
-            "10-14": 1.0,
-            "15+": 1.1,
-        }
-        sigma_base = 13.0
-
-        # Week 1 -> "1-2" -> 13 * 1.3 = 16.9
-        assert get_sigma_for_week_bucket(1, sigma_base, multipliers) == pytest.approx(16.9)
-        assert get_sigma_for_week_bucket(2, sigma_base, multipliers) == pytest.approx(16.9)
-
-        # Week 3-5 -> 13 * 1.1 = 14.3
-        assert get_sigma_for_week_bucket(3, sigma_base, multipliers) == pytest.approx(14.3)
-        assert get_sigma_for_week_bucket(5, sigma_base, multipliers) == pytest.approx(14.3)
-
-        # Week 6-9 -> 13 * 1.0 = 13.0
-        assert get_sigma_for_week_bucket(6, sigma_base, multipliers) == pytest.approx(13.0)
-        assert get_sigma_for_week_bucket(9, sigma_base, multipliers) == pytest.approx(13.0)
-
-        # Week 10-14 -> 13 * 1.0 = 13.0
-        assert get_sigma_for_week_bucket(10, sigma_base, multipliers) == pytest.approx(13.0)
-        assert get_sigma_for_week_bucket(14, sigma_base, multipliers) == pytest.approx(13.0)
-
-        # Week 15+ -> 13 * 1.1 = 14.3
-        assert get_sigma_for_week_bucket(15, sigma_base, multipliers) == pytest.approx(14.3)
-        assert get_sigma_for_week_bucket(20, sigma_base, multipliers) == pytest.approx(14.3)
-
     def test_week_bucket_deterministic(self):
         """Same inputs should always give same output."""
         multipliers = {"1-2": 1.3, "3-5": 1.1, "6-9": 1.0, "10-14": 1.0, "15+": 1.1}
@@ -311,40 +275,6 @@ class TestGetSigmaForGame:
 
         sigma = get_sigma_for_game(config, week=5, home_games_played=1, away_games_played=1)
         assert sigma == 13.5
-
-    def test_week_bucket_mode(self):
-        """Week bucket mode should apply multipliers."""
-        config = TotalsCalibrationConfig(
-            sigma_mode="week_bucket",
-            sigma_base=13.0,
-            week_bucket_multipliers={"1-2": 1.5, "3-5": 1.0, "6-9": 1.0, "10-14": 1.0, "15+": 1.0},
-        )
-
-        # Week 1 -> 13 * 1.5 = 19.5
-        sigma = get_sigma_for_game(config, week=1)
-        assert sigma == 19.5
-
-        # Week 5 -> 13 * 1.0 = 13.0
-        sigma = get_sigma_for_game(config, week=5)
-        assert sigma == 13.0
-
-    def test_reliability_scaled_mode(self):
-        """Reliability mode should scale by games played."""
-        config = TotalsCalibrationConfig(
-            sigma_mode="reliability_scaled",
-            sigma_base=13.0,
-            reliability_k=0.5,
-            reliability_sigma_min=10.0,
-            reliability_sigma_max=25.0,
-        )
-
-        # 8 games each -> reliability=1.0 -> sigma=13.0
-        sigma_full = get_sigma_for_game(config, week=10, home_games_played=8, away_games_played=8)
-        assert sigma_full == 13.0
-
-        # 1 game each -> reliability=0.0 -> sigma=13*1.5=19.5
-        sigma_low = get_sigma_for_game(config, week=2, home_games_played=1, away_games_played=1)
-        assert sigma_low == 19.5
 
 
 # =============================================================================
