@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fast totals bet display script - no API calls, pre-computed data."""
+"""Fast totals bet display script - no API calls, pre-computed data.
+
+Selection criteria: 5+ point edge (2023-2025 backtest: 55.5% ATS, +6.0% ROI)
+EV shown for reference but not used for filtering.
+"""
 
 import math
 import sys
@@ -14,39 +18,30 @@ def normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
-def calculate_totals_ev(edge: float, sigma: float = 13.0, odds: int = -110) -> tuple[float, float, float]:
+def calculate_totals_ev(edge: float, sigma: float = 16.4, odds: int = -110) -> tuple[float, float, float]:
     """Calculate EV for a totals bet using Normal CDF model.
 
     Args:
         edge: Signed edge (positive = OVER, negative = UNDER)
-        sigma: Standard deviation of prediction errors (default 13.0)
+        sigma: Standard deviation of prediction errors (default 16.4 from 2023-2025)
         odds: American odds (default -110)
 
     Returns:
         (ev, p_win, p_push) tuple
     """
-    # For OVER bet with positive edge, or UNDER bet with negative edge
-    # z-score is |edge| / sigma
     z = abs(edge) / sigma
-
-    # Push probability (half-point band around the line)
-    # For whole number lines, push zone is [line-0.5, line+0.5]
     p_push = normal_cdf(0.5 / sigma) - normal_cdf(-0.5 / sigma)
-
-    # Win probability (Normal CDF of z-score, minus half the push zone)
     p_win = normal_cdf(z) - p_push / 2
     p_lose = 1.0 - p_win - p_push
 
-    # Convert American odds to decimal payout
     if odds > 0:
         payout = odds / 100.0
     else:
         payout = 100.0 / abs(odds)
 
-    # EV = p_win * payout - p_lose * 1.0 (push returns stake)
     ev = p_win * payout - p_lose
-
     return ev, p_win, p_push
+
 
 # Team abbreviations (shared with show_spread_bets.py)
 ABBREV = {
@@ -91,8 +86,36 @@ def get_abbrev(team: str) -> str:
     return ABBREV.get(team, team[:4].upper())
 
 
-def get_result(row) -> str:
-    result = row['result']
+def calc_play_vs_open(row) -> str:
+    """Determine OVER/UNDER based on edge vs OPEN line."""
+    if row['edge_open'] > 0:
+        return 'OVER'
+    elif row['edge_open'] < 0:
+        return 'UNDER'
+    return 'PASS'
+
+
+def calc_result_vs_open(row) -> str:
+    """Calculate WIN/LOSS/PUSH based on OPEN line (not CLOSE)."""
+    if pd.isna(row['vegas_total_open']) or pd.isna(row['actual_total']):
+        return 'NO_LINE'
+
+    vegas = row['vegas_total_open']
+    actual = row['actual_total']
+
+    if actual == vegas:
+        return 'PUSH'
+
+    # JP+ says OVER if edge_open > 0, UNDER if edge_open < 0
+    if row['edge_open'] > 0:  # JP+ says OVER
+        return 'WIN' if actual > vegas else 'LOSS'
+    elif row['edge_open'] < 0:  # JP+ says UNDER
+        return 'WIN' if actual < vegas else 'LOSS'
+    return 'PASS'
+
+
+def format_result(result: str) -> str:
+    """Format result for display."""
     if result == 'PUSH':
         return 'Push'
     elif result == 'WIN':
@@ -109,7 +132,7 @@ def format_score(row) -> str:
 
 
 def show_totals_bets(year: int, week: int):
-    # Load pre-computed data
+    # Load pre-computed data (2023-2025 only, excludes 2022 transition year)
     data_path = Path(__file__).parent.parent / 'data/spread_selection/outputs/backtest_totals_2023-2025.csv'
     if not data_path.exists():
         print(f"Error: {data_path} not found")
@@ -127,44 +150,43 @@ def show_totals_bets(year: int, week: int):
     week_data = week_data[week_data['vegas_total_open'].notna()].copy()
 
     # Calculate calibrated sigma from actual prediction errors
-    # This makes EV estimates comparable to the spread engine's calibrated model
     SIGMA = df['jp_error'].std()  # ~16.4 from 2023-2025 backtest
 
-    # Calculate EV using Normal CDF model with calibrated sigma
+    # Calculate EV using Normal CDF model (for display, not filtering)
     ev_data = week_data['edge_open'].apply(lambda e: calculate_totals_ev(e, SIGMA))
     week_data['ev'] = ev_data.apply(lambda x: x[0])
     week_data['p_win'] = ev_data.apply(lambda x: x[1])
 
-    # Primary EV Engine: EV >= 3% (matches spread engine threshold)
-    EV_MIN = 0.03
-    primary = week_data[week_data['ev'] >= EV_MIN].sort_values('ev', ascending=False)
+    # Recalculate play and result vs OPEN line (CSV uses CLOSE, we bet on OPEN)
+    week_data['play_open'] = week_data.apply(calc_play_vs_open, axis=1)
+    week_data['result_open'] = week_data.apply(calc_result_vs_open, axis=1)
 
-    # 5+ Edge that didn't make EV cut (diagnostic - should be rare)
-    edge5_non_ev = week_data[
-        (week_data['edge_open'].abs() >= 5.0) &
-        (week_data['ev'] < EV_MIN)
-    ].sort_values('edge_open', key=abs, ascending=False)
+    # Primary: 5+ point edge (2023-2025 backtest: 55.5% ATS, +6.0% ROI)
+    EDGE_MIN = 5.0
+    primary = week_data[week_data['edge_open'].abs() >= EDGE_MIN].sort_values(
+        'edge_open', key=abs, ascending=False
+    )
 
-    # Print Primary EV Engine
-    print(f"\n## {year} Week {week} — Totals Primary EV Engine (EV >= {EV_MIN*100:.0f}%)\n")
-    print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | EV | Final | Result |")
+    # Print Primary 5+ Edge
+    print(f"\n## {year} Week {week} — Totals Primary (5+ Edge)\n")
+    print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | ~EV | Final | Result |")
     print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
 
     for i, (_, row) in enumerate(primary.iterrows(), 1):
         matchup = f"{row['away_team']} @ {row['home_team']}"
         jp_total = f"{row['adjusted_total']:.1f}"
         vegas_total = f"{row['vegas_total_open']:.1f}"
-        side = row['play']
+        side = row['play_open']
         edge = f"+{abs(row['edge_open']):.1f}"
         ev = f"+{row['ev']*100:.1f}%"
         final = format_score(row)
-        result = get_result(row)
+        result = format_result(row['result_open'])
         print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
 
-    # Calculate record
-    p_wins = len(primary[primary['result'] == 'WIN'])
-    p_losses = len(primary[primary['result'] == 'LOSS'])
-    p_pushes = len(primary[primary['result'] == 'PUSH'])
+    # Calculate record (using OPEN-based results)
+    p_wins = len(primary[primary['result_open'] == 'WIN'])
+    p_losses = len(primary[primary['result_open'] == 'LOSS'])
+    p_pushes = len(primary[primary['result_open'] == 'PUSH'])
 
     if p_wins + p_losses > 0:
         if p_pushes > 0:
@@ -174,38 +196,10 @@ def show_totals_bets(year: int, week: int):
     else:
         print("\n**Record: No qualifying bets**")
 
-    # Print 5+ Edge that didn't make EV cut (diagnostic - usually empty)
-    if len(edge5_non_ev) > 0:
-        print(f"\n## 5+ Edge (Below EV Cut)\n")
-        print("| # | Matchup | JP+ Total | Vegas (Open) | Side | Edge | EV | Final | Result |")
-        print("|---|---------|-----------|--------------|------|------|-----|-------|--------|")
-
-        for i, (_, row) in enumerate(edge5_non_ev.iterrows(), 1):
-            matchup = f"{row['away_team']} @ {row['home_team']}"
-            jp_total = f"{row['adjusted_total']:.1f}"
-            vegas_total = f"{row['vegas_total_open']:.1f}"
-            side = row['play']
-            edge = f"+{abs(row['edge_open']):.1f}"
-            ev = f"+{row['ev']*100:.1f}%"
-            final = format_score(row)
-            result = get_result(row)
-            print(f"| {i} | {matchup} | {jp_total} | {vegas_total} | {side} | {edge} | {ev} | {final} | {result} |")
-
-        # Calculate record
-        e_wins = len(edge5_non_ev[edge5_non_ev['result'] == 'WIN'])
-        e_losses = len(edge5_non_ev[edge5_non_ev['result'] == 'LOSS'])
-        e_pushes = len(edge5_non_ev[edge5_non_ev['result'] == 'PUSH'])
-
-        if e_wins + e_losses > 0:
-            if e_pushes > 0:
-                print(f"\n**Record: {e_wins}-{e_losses}-{e_pushes} ({e_wins/(e_wins+e_losses)*100:.1f}%)**")
-            else:
-                print(f"\n**Record: {e_wins}-{e_losses} ({e_wins/(e_wins+e_losses)*100:.1f}%)**")
-
     # Footnotes
     print("\n---")
-    print(f"*Primary EV: Normal CDF model (sigma={SIGMA:.1f}, calibrated from residuals), EV >= {EV_MIN*100:.0f}%.*")
-    print("*5+ Edge: Games with 5+ point edge that didn't meet EV threshold.*")
+    print(f"*Selection: 5+ point edge vs opening line. EV estimates use Normal CDF (sigma={SIGMA:.1f}).*")
+    print("*2023-2025 backtest: 55.5% ATS, +6.0% ROI at 5+ edge (~15 games/week).*")
 
 
 if __name__ == '__main__':
