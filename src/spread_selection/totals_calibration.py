@@ -251,14 +251,14 @@ def collect_walk_forward_residuals(
         has_weather = False
 
     # Compute mu_used based on calibration mode
-    if calibration_mode == "weather_adjusted":
-        if not has_weather:
+    if calibration_mode == "weather_adjusted" and has_weather:
+        df['mu_used'] = df['mu_model'] + df['weather_adj']
+    else:
+        if calibration_mode == "weather_adjusted" and not has_weather:
             logger.warning(
                 "calibration_mode='weather_adjusted' but no weather data found. "
                 "Falling back to model_only calibration."
             )
-        df['mu_used'] = df['mu_model'] + df['weather_adj']
-    else:  # model_only
         df['mu_used'] = df['mu_model']
 
     # Compute error columns
@@ -596,7 +596,8 @@ def calculate_totals_probabilities(
     if sigma <= 0:
         raise ValueError(f"sigma must be positive, got {sigma}")
 
-    is_half_point = (line % 1.0) != 0.0
+    eps = 1e-6
+    is_half_point = np.abs(line - round(line)) >= eps
 
     if is_half_point:
         z = (line - mu) / sigma
@@ -688,7 +689,10 @@ def backtest_ev_roi(
         return {"error": "No qualifying bets"}
 
     # Calculate probabilities (vectorized)
-    is_half_point = (line % 1.0) != 0.0
+    # Float-safe integer/half-point detection
+    eps = 1e-6
+    is_integer_line = np.abs(line - np.round(line)) < eps
+    is_half_point = ~is_integer_line
 
     # For half-point lines
     z_half = (line - mu) / sigma
@@ -726,20 +730,29 @@ def backtest_ev_roi(
     kelly_mask = numerator > 0  # Only bet when edge is positive
 
     f_star = np.where(kelly_mask, numerator / b, 0.0)
-    f = np.minimum(kelly_fraction * f_star, max_bet_fraction)
+    f_raw = np.minimum(kelly_fraction * f_star, max_bet_fraction)
 
-    # Actual results (vectorized)
-    is_push = actual == line
+    # Combined filter mask BEFORE profit computation
+    final_mask = edge_mask & ev_mask & kelly_mask
+
+    if not final_mask.any():
+        return {"error": "No qualifying bets"}
+
+    # Gate stake to zero for non-selected rows, then compute profit
+    stake = np.where(final_mask, f_raw, 0.0)
+
+    # Actual results (vectorized) — float-safe push detection
+    is_push = is_integer_line & (np.abs(actual - line) < eps)
     is_win = np.where(
         pick_over,
-        actual > line,
-        actual < line
+        actual > line + eps,
+        actual < line - eps
     )
 
     profit = np.where(
         is_push,
         0.0,
-        np.where(is_win, f * b, -f)
+        np.where(is_win, stake * b, -stake)
     )
 
     outcome = np.where(
@@ -748,13 +761,7 @@ def backtest_ev_roi(
         np.where(is_win, "win", "loss")
     )
 
-    at_cap = f >= max_bet_fraction - 0.0001
-
-    # Combined filter mask (kelly_mask = numerator > 0, which implies positive edge)
-    final_mask = edge_mask & ev_mask & kelly_mask
-
-    if not final_mask.any():
-        return {"error": "No qualifying bets"}
+    at_cap = stake >= max_bet_fraction - 0.0001
 
     # Build results DataFrame from filtered arrays
     results_df = pd.DataFrame({
@@ -763,7 +770,7 @@ def backtest_ev_roi(
         "side": side[final_mask],
         "edge": edge[final_mask],
         "ev": ev[final_mask],
-        "stake_frac": f[final_mask],
+        "stake_frac": stake[final_mask],
         "outcome": outcome[final_mask],
         "profit": profit[final_mask],
         "at_cap": at_cap[final_mask],
@@ -985,8 +992,9 @@ def run_full_calibration(
     # This resolves the mu column and stores it in 'mu_used'
     residuals = collect_walk_forward_residuals(preds_df, calibration_mode=calibration_mode)
 
-    # Check if weather data was available
+    # Check if weather data was available; determine effective calibration mode
     has_weather = 'weather_adj' in residuals.columns and residuals['weather_adj'].abs().sum() > 0
+    effective_mode = calibration_mode if (calibration_mode != "weather_adjusted" or has_weather) else "model_only"
 
     # Compute all sigma estimates
     sigma_estimates = compute_all_sigma_estimates(residuals)
@@ -1032,7 +1040,7 @@ def run_full_calibration(
 
     # Build recommended config
     recommended_config = TotalsCalibrationConfig(
-        calibration_mode=calibration_mode,
+        calibration_mode=effective_mode,
         sigma_mode="fixed",  # Default; can upgrade to week_bucket or reliability_scaled
         sigma_base=best_sigma,
         week_bucket_multipliers=week_multipliers,

@@ -463,6 +463,91 @@ class TestTuning:
 
 
 # =============================================================================
+# Regression Tests (stake gating, float-safe push, weather fallback)
+# =============================================================================
+
+class TestBacktestStakeGating:
+    """Stake must be zero for rows not meeting all selection criteria."""
+
+    def test_backtest_ev_roi_stake_zero_for_unselected(self):
+        """Rows with positive Kelly numerator but EV < ev_min should have zero stake."""
+        # Construct data where edge is small enough that EV < ev_min=0.10
+        # but Kelly numerator > 0 (i.e., positive EV just below threshold)
+        df = pd.DataFrame({
+            "year": [2024] * 20,
+            "week": [5] * 20,
+            "predicted_total": [51.0] * 20,  # 1pt edge — small EV
+            "actual_total": [52.0] * 20,
+            "vegas_total_close": [50.0] * 20,
+        })
+        result = backtest_ev_roi(df, sigma=13.0, ev_min=0.10)
+        # With only 1pt edge and sigma=13, EV should be well below 0.10
+        # so no bets should qualify
+        assert "error" in result or result.get("n_bets", 0) == 0
+
+
+class TestFloatSafePush:
+    """Push detection must handle float comparison correctly."""
+
+    def test_backtest_ev_roi_push_float_safe(self):
+        """Integer line stored as float with artifact should detect push."""
+        df = pd.DataFrame({
+            "year": [2024] * 20,
+            "week": [5] * 20,
+            "predicted_total": [60.0] * 20,  # Big edge to ensure selection
+            "actual_total": [54.0] * 20,  # Equals line
+            "vegas_total_close": [54.0000000001] * 20,  # Float artifact
+        })
+        result = backtest_ev_roi(df, sigma=13.0, ev_min=0.01)
+        if "error" not in result:
+            assert result["pushes"] > 0, "Push should be detected despite float artifact"
+
+    def test_calculate_totals_probabilities_integer_line_push_prob_nonzero(self):
+        """Integer line should have nonzero push probability."""
+        p_win, p_loss, p_push = calculate_totals_probabilities(
+            mu=54.0, line=54.0, sigma=13.0, side="OVER"
+        )
+        assert p_push > 0, "Integer line should have push probability > 0"
+
+    def test_calculate_totals_probabilities_half_line_no_push(self):
+        """Half-point line should have zero push probability."""
+        p_win, p_loss, p_push = calculate_totals_probabilities(
+            mu=54.0, line=54.5, sigma=13.0, side="OVER"
+        )
+        assert p_push == 0.0
+
+
+class TestWeatherFallback:
+    """Weather-adjusted mode with no weather data should force model_only."""
+
+    def test_weather_adjusted_no_weather_forces_model_only(self):
+        """Request weather_adjusted without weather data → effective mode is model_only."""
+        df = pd.DataFrame({
+            "year": [2024] * 50,
+            "week": list(range(1, 11)) * 5,
+            "predicted_total": np.random.normal(50, 5, 50),
+            "actual_total": np.random.normal(50, 5, 50),
+            "vegas_total_close": [50.0] * 50,
+        })
+        from src.spread_selection.totals_calibration import run_full_calibration
+        report = run_full_calibration(df, calibration_mode="weather_adjusted")
+        assert report.recommended_config.calibration_mode == "model_only"
+        assert not report.recommended_config.has_weather_data
+
+    def test_collect_residuals_weather_fallback_uses_model_only_mu(self):
+        """When weather_adjusted requested but no weather, mu_used == mu_model."""
+        df = pd.DataFrame({
+            "year": [2024] * 10,
+            "week": [5] * 10,
+            "predicted_total": [55.0] * 10,
+            "actual_total": [50.0] * 10,
+        })
+        residuals = collect_walk_forward_residuals(df, calibration_mode="weather_adjusted")
+        # mu_used should equal mu_model (no weather applied)
+        assert (residuals["mu_used"] == residuals["mu_model"]).all()
+
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
