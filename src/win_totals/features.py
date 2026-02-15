@@ -222,7 +222,7 @@ class PreseasonFeatureBuilder:
         raw = self.client.get_team_talent(year)
         result = {}
         for r in raw:
-            team = normalize_team_name(r.school)
+            team = normalize_team_name(r.team)
             result[team] = float(r.talent) if r.talent else 0.0
 
         self.cache.save_talent(year, result)
