@@ -609,8 +609,15 @@ class SpreadGenerator:
             components.home_field_raw = 0.0
 
         # Travel and altitude (raw values only; breakdown dicts discarded)
-        raw_travel, _travel_breakdown = self.travel.get_total_travel_adjustment(home_team, away_team)
-        raw_altitude, _altitude_breakdown = self.altitude.get_detailed_adjustment(home_team, away_team)
+        if not neutral_site:
+            raw_travel, _travel_breakdown = self.travel.get_total_travel_adjustment(home_team, away_team)
+            raw_altitude, _altitude_breakdown = self.altitude.get_detailed_adjustment(home_team, away_team)
+        else:
+            # Neutral site: cannot compute accurate travel/altitude differential without
+            # venue location. Zero is more accurate than computing against wrong venue.
+            # TODO V2: Accept venue coordinates for proper neutral-site adjustments.
+            raw_travel = 0.0
+            raw_altitude = 0.0
 
         travel_breakdown = TravelBreakdown(
             travel_penalty=raw_travel,
@@ -730,25 +737,31 @@ class SpreadGenerator:
         components.fcs_adjustment = self._get_fcs_adjustment(home_team, away_team)
         spread += components.fcs_adjustment
 
-        # Debug check: verify components sum to spread within floating point tolerance
-        expected_spread = (
+        # Verify spread assembly: spread should equal the sum of its computation steps.
+        # This catches bugs where a component is added to 'spread' but not tracked,
+        # or tracked but not added to 'spread'.
+        assembly_check = (
             components.base_margin
-            + components.home_field
-            + components.travel
-            + components.altitude
-            + components.situational
-            + components.rest_and_road
+            + aggregated.net_adjustment
             + components.special_teams
             + components.finishing_drives
             + components.pace_adjustment
             + components.fcs_adjustment
             + components.qb_adjustment
         )
-        if abs(expected_spread - spread) > 0.01:
-            logger.warning(
-                f"Component sum mismatch: expected={expected_spread:.4f}, "
-                f"spread={spread:.4f}, diff={expected_spread - spread:.4f} "
+        if abs(assembly_check - spread) > 0.001:
+            logger.error(
+                f"SPREAD ASSEMBLY BUG: computed={spread:.4f}, "
+                f"reconstructed={assembly_check:.4f}, diff={assembly_check - spread:.4f} "
                 f"({away_team} @ {home_team})"
+            )
+
+        # Verify component attribution: rest_and_road should be small (typically 0-2 pts).
+        # Large values suggest the plug is absorbing misattribution or global cap residuals.
+        if abs(components.rest_and_road) > 3.0:
+            logger.warning(
+                f"Large rest_and_road residual ({components.rest_and_road:.2f} pts) "
+                f"for {away_team} @ {home_team}. This may indicate component misattribution."
             )
 
         # Convert to win probability
