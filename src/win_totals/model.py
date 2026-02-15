@@ -26,6 +26,40 @@ logger = logging.getLogger(__name__)
 ALPHA_CANDIDATES = [0.1, 1.0, 10.0, 50.0, 100.0, 200.0]
 
 
+def _impute_nan_with_means(
+    X_train: np.ndarray,
+    X_test: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    """Replace NaN with training column means.
+
+    Returns copies; originals are not modified.
+
+    Args:
+        X_train: Training features (may contain NaN)
+        X_test: Test features (may contain NaN), or None
+
+    Returns:
+        (X_train_imputed, X_test_imputed_or_None, col_means)
+    """
+    col_means = np.nanmean(X_train, axis=0)
+    # If an entire column is NaN, fall back to 0.0
+    col_means = np.where(np.isnan(col_means), 0.0, col_means)
+
+    X_train_out = X_train.copy()
+    for j in range(X_train_out.shape[1]):
+        mask = np.isnan(X_train_out[:, j])
+        X_train_out[mask, j] = col_means[j]
+
+    X_test_out = None
+    if X_test is not None:
+        X_test_out = X_test.copy()
+        for j in range(X_test_out.shape[1]):
+            mask = np.isnan(X_test_out[:, j])
+            X_test_out[mask, j] = col_means[j]
+
+    return X_train_out, X_test_out, col_means
+
+
 @dataclass
 class FoldResult:
     """Results from a single walk-forward fold."""
@@ -44,9 +78,10 @@ class FoldResult:
 class ValidationResult:
     """Aggregate walk-forward validation results."""
     folds: list[FoldResult] = field(default_factory=list)
-    tau: float = 0.0  # calibrated from residuals
+    tau: float = 0.0  # calibrated from production_alpha residuals
     production_alpha: float = 0.0  # alpha with lowest avg MAE across folds
     alpha_mae_table: dict[float, float] = field(default_factory=dict)  # alpha -> avg MAE
+    production_residuals: np.ndarray = field(default_factory=lambda: np.array([]))
 
     @property
     def overall_mae(self) -> float:
@@ -103,6 +138,7 @@ class PreseasonModel:
         self.model: Ridge | None = None
         self.feature_names: list[str] = []
         self.selected_alpha: float = 0.0
+        self._col_means: np.ndarray | None = None  # for consistent NaN imputation
 
     def _get_feature_cols(self, df: pd.DataFrame) -> list[str]:
         """Get feature columns (exclude team, year, target)."""
@@ -130,8 +166,7 @@ class PreseasonModel:
         X = train_df[self.feature_names].values.astype(np.float64)
         y = train_df['target_sp'].values.astype(np.float64)
 
-        # Handle NaN
-        X = np.nan_to_num(X, nan=0.0)
+        X, _, self._col_means = _impute_nan_with_means(X)
 
         self.scaler = StandardScaler()
         X_scaled = self.scaler.fit_transform(X)
@@ -158,7 +193,13 @@ class PreseasonModel:
             raise RuntimeError("Model not trained. Call train() first.")
 
         X = df[self.feature_names].values.astype(np.float64)
-        X = np.nan_to_num(X, nan=0.0)
+        # Impute NaN with training column means for consistent z-scores
+        if self._col_means is not None:
+            for j in range(X.shape[1]):
+                mask = np.isnan(X[:, j])
+                X[mask, j] = self._col_means[j]
+        else:
+            X = np.nan_to_num(X, nan=0.0)
         X_scaled = self.scaler.transform(X)
         return self.model.predict(X_scaled)
 
@@ -176,10 +217,12 @@ class PreseasonModel:
         - For each candidate alpha, fit Ridge(alpha) and compute MAE on year Y
         - Record fold-best alpha and predictions using that alpha
         After all folds: production_alpha = alpha with lowest average MAE.
+        Then re-run all folds with production_alpha for consistent tau calibration,
+        and retrain on full dataset with production_alpha for self.model.
 
         Args:
             dataset: Full training dataset from build_training_dataset()
-            start_year: First year to predict (default: min year + min_train_years)
+            start_year: First year to predict (default: first year with >= min_train_years prior)
             end_year: Last year to predict (default: max year)
             min_train_years: Minimum years of training data required
 
@@ -189,7 +232,13 @@ class PreseasonModel:
         years = sorted(dataset['year'].unique())
 
         if start_year is None:
-            start_year = years[min_train_years]
+            # Find first year with enough prior years of data
+            for y in years:
+                if sum(1 for yy in years if yy < y) >= min_train_years:
+                    start_year = y
+                    break
+            else:
+                start_year = years[-1]  # fallback
         if end_year is None:
             end_year = years[-1]
 
@@ -199,6 +248,9 @@ class PreseasonModel:
         alpha_fold_maes: dict[float, list[float]] = {
             a: [] for a in self.alpha_candidates
         }
+
+        # Store fold data splits for production_alpha re-run
+        fold_splits: list[tuple[int, pd.DataFrame, pd.DataFrame]] = []
 
         for pred_year in range(start_year, end_year + 1):
             if pred_year not in years:
@@ -214,6 +266,8 @@ class PreseasonModel:
                 logger.warning(f"Skipping {pred_year}: only {len(train_df)} training samples")
                 continue
 
+            fold_splits.append((pred_year, train_df, test_df))
+
             # Try each alpha candidate on this fold
             best_alpha = self.alpha_candidates[0]
             best_mae = float('inf')
@@ -222,14 +276,12 @@ class PreseasonModel:
             best_scaler = None
 
             feature_names = self._get_feature_cols(train_df)
-            X_train = np.nan_to_num(
-                train_df[feature_names].values.astype(np.float64), nan=0.0
-            )
+            X_train_raw = train_df[feature_names].values.astype(np.float64)
             y_train = train_df['target_sp'].values.astype(np.float64)
-            X_test = np.nan_to_num(
-                test_df[feature_names].values.astype(np.float64), nan=0.0
-            )
+            X_test_raw = test_df[feature_names].values.astype(np.float64)
             y_test = test_df['target_sp'].values.astype(np.float64)
+
+            X_train, X_test, _ = _impute_nan_with_means(X_train_raw, X_test_raw)
 
             scaler = StandardScaler()
             X_train_scaled = scaler.fit_transform(X_train)
@@ -248,12 +300,6 @@ class PreseasonModel:
                     best_preds = preds
                     best_model = ridge
                     best_scaler = scaler
-
-            # Store best-alpha results for this fold
-            self.model = best_model
-            self.scaler = best_scaler
-            self.feature_names = feature_names
-            self.selected_alpha = best_alpha
 
             pred_df = pd.DataFrame({
                 'team': test_df['team'].values,
@@ -294,10 +340,38 @@ class PreseasonModel:
             for a, m in sorted(result.alpha_mae_table.items()):
                 logger.info(f"  alpha={a:.1f}: avg MAE={m:.3f}")
 
-        # Calibrate tau from all residuals
-        if result.folds:
+        # Re-run all folds with production_alpha for consistent tau calibration
+        if result.folds and result.production_alpha > 0:
             from src.win_totals.schedule import calibrate_tau
-            result.tau = calibrate_tau(result.all_residuals)
+
+            all_production_residuals = []
+            feature_names = result.folds[0].feature_names
+
+            for pred_year, train_df, test_df in fold_splits:
+                X_train_raw = train_df[feature_names].values.astype(np.float64)
+                y_train = train_df['target_sp'].values.astype(np.float64)
+                X_test_raw = test_df[feature_names].values.astype(np.float64)
+                y_test = test_df['target_sp'].values.astype(np.float64)
+
+                X_train, X_test, _ = _impute_nan_with_means(X_train_raw, X_test_raw)
+
+                scaler = StandardScaler()
+                X_train_scaled = scaler.fit_transform(X_train)
+                X_test_scaled = scaler.transform(X_test)
+
+                ridge = Ridge(alpha=result.production_alpha)
+                ridge.fit(X_train_scaled, y_train)
+                preds = ridge.predict(X_test_scaled)
+                all_production_residuals.append(preds - y_test)
+
+            result.production_residuals = np.concatenate(all_production_residuals)
+            result.tau = calibrate_tau(result.production_residuals)
+
+            # Retrain final production model on full dataset
+            self.train(dataset, alpha=result.production_alpha)
+
+            logger.info(f"Production model retrained on full dataset "
+                         f"(alpha={result.production_alpha:.1f}, n={len(dataset)})")
 
         logger.info(f"Walk-forward complete: MAE={result.overall_mae:.3f}, "
                      f"RMSE={result.overall_rmse:.3f}, tau={result.tau:.3f}")
@@ -317,7 +391,11 @@ class PreseasonModel:
     def talent_baseline(dataset: pd.DataFrame) -> float:
         """Talent baseline: talent_composite as sole predictor.
 
-        Returns MAE of using talent composite (rescaled) as prediction.
+        Returns in-sample MAE of using talent composite (rescaled) as prediction.
+
+        Note: This is an in-sample estimate (fits on all years simultaneously).
+        Do not compare directly to walk-forward Ridge MAE, which is out-of-fold.
+        Use only as a rough sanity check that Ridge improves on talent alone.
         """
         from sklearn.linear_model import LinearRegression
         talent = dataset['talent_composite']
