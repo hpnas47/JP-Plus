@@ -119,8 +119,8 @@ FEATURE_METADATA = {
         'status': ASSUMED,
         'leakage_risk': False,
     },
-    'coaching_imputed': {
-        'description': 'Coaching years (median-imputed when missing from CFBD)',
+    'coaching_was_imputed': {
+        'description': 'Binary: 1.0 if coaching data was missing and median-imputed',
         'timing': 'Derived from coaching_years (ASSUMED input)',
         'status': ASSUMED,
         'leakage_risk': False,
@@ -201,10 +201,6 @@ class PreseasonFeatureBuilder:
 
     def _get_sp_ratings(self, year: int) -> dict[str, dict]:
         """Get SP+ ratings dict {team: {overall, offense, defense, st}}."""
-        cached = self.cache.load_sp_ratings(year)
-        if cached is not None:
-            pass  # Cache only stores overall; need full breakdown from API
-
         raw = self.client.get_sp_ratings(year)
         result = {}
         for r in raw:
@@ -246,36 +242,43 @@ class PreseasonFeatureBuilder:
         return result
 
     def _get_coaching(self, year: int) -> dict[str, dict]:
-        """Get coaching info {team: {years: int, is_new: bool}}."""
+        """Get coaching info {team: {years: int, is_new: bool}}.
+
+        Counts consecutive years at the same school by iterating backwards
+        from the query year and breaking at the first gap.
+        """
         raw = self.client.get_coaches(year=year)
         result = {}
         for coach in raw:
             for season in getattr(coach, 'seasons', []):
                 if getattr(season, 'year', None) == year:
                     team = normalize_team_name(season.school)
+                    # Build set of years this coach was at this school
+                    years_at_school = set()
+                    for s in getattr(coach, 'seasons', []):
+                        if getattr(s, 'school', '') == season.school:
+                            years_at_school.add(getattr(s, 'year', 0))
+                    # Count backwards from query year
                     tenure = 0
-                    for s in sorted(getattr(coach, 'seasons', []),
-                                    key=lambda x: getattr(x, 'year', 0)):
-                        if getattr(s, 'school', '') == season.school and getattr(s, 'year', 0) <= year:
-                            if getattr(s, 'year', 0) == year - tenure:
-                                tenure += 1
-                            else:
-                                tenure = 1
+                    for y in range(year, year - 50, -1):
+                        if y in years_at_school:
+                            tenure += 1
+                        else:
+                            break
                     result[team] = {
                         'years': tenure,
                         'is_new': tenure <= 1,
                     }
         return result
 
-    def _get_prior_record(self, year: int) -> dict[str, dict]:
-        """Get prior season win-loss records (regular season only, weeks 1-15).
+    def _get_prior_record_from_games(self, games: list) -> dict[str, dict]:
+        """Get prior season win-loss records from pre-fetched games.
 
         On-field result convention:
         - Win: home_points > away_points OR away_points > home_points
-        - Regular season only: season_type='regular' AND week <= 15
+        - Regular season only: week <= 15
         - CCG and bowls are EXCLUDED
         """
-        games = self.client.get_games(year=year - 1, season_type='regular')
         records: dict[str, dict] = {}
 
         for g in games:
@@ -330,7 +333,8 @@ class PreseasonFeatureBuilder:
         talent_2yr = self._get_talent(year - 2) if year >= 2017 else {}
         ret_prod = self._get_returning_production(year)
         coaching = self._get_coaching(year)
-        prior_record = self._get_prior_record(year)
+        prior_games = self.client.get_games(year=year - 1, season_type='regular')
+        prior_record = self._get_prior_record_from_games(prior_games)
 
         fbs_raw = self.client.get_fbs_teams(year=year)
         team_conf = {}
@@ -343,7 +347,7 @@ class PreseasonFeatureBuilder:
                 conf_sp.setdefault(conf, []).append(sp_prior[team]['overall'])
         conf_avg = {c: np.mean(vals) for c, vals in conf_sp.items()}
 
-        prior_sos = self._compute_prior_sos(year, sp_prior)
+        prior_sos = self._compute_prior_sos_from_games(prior_games, sp_prior)
 
         coaching_years_list = [v['years'] for v in coaching.values()]
         median_tenure = int(np.median(coaching_years_list)) if coaching_years_list else 3
@@ -356,6 +360,7 @@ class PreseasonFeatureBuilder:
             t1 = talent_1yr.get(team, tc)
             t2 = talent_2yr.get(team, t1)
             rp = ret_prod.get(team, {'total': 0.5, 'offense': 0.5, 'defense': 0.5})
+            coaching_was_imputed = team not in coaching
             coach = coaching.get(team, {'years': median_tenure, 'is_new': False})
             rec = prior_record.get(team, {'win_pct': 0.5})
             conf = team_conf.get(team, 'Independent')
@@ -378,7 +383,7 @@ class PreseasonFeatureBuilder:
                 'talent_3yr_avg': (tc + t1 + t2) / 3.0,
                 'talent_trend': tc - t1,
                 'coaching_years': coach['years'],
-                'coaching_imputed': min(coach['years'], median_tenure) if coach['years'] == median_tenure else coach['years'],
+                'coaching_was_imputed': float(coaching_was_imputed),
                 'is_new_coach': float(coach['is_new']),
                 'conf_strength': conf_avg.get(conf, 0.0),
                 'prior_win_pct': rec['win_pct'],
@@ -396,14 +401,13 @@ class PreseasonFeatureBuilder:
 
         return df
 
-    def _compute_prior_sos(
-        self, year: int, sp_prior: dict[str, dict]
+    def _compute_prior_sos_from_games(
+        self, games: list, sp_prior: dict[str, dict]
     ) -> dict[str, float]:
         """Compute prior season SOS as average opponent SP+ rating.
 
         Regular season only (week <= 15 safeguard).
         """
-        games = self.client.get_games(year=year - 1, season_type='regular')
         opp_ratings: dict[str, list[float]] = {}
 
         for g in games:
