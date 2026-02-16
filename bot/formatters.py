@@ -324,7 +324,7 @@ def _build_spread_field(row: dict, has_ev: bool) -> tuple[str, str]:
     parts = [f"Pick: {bet}", f"Edge: {edge}"]
     if has_ev and ev:
         parts.append(f"EV: {ev}")
-    parts.append(f"JP+ Line: {jp_line}")
+    parts.append(f"JP+: {_abbreviate_teams(jp_line)}")
     if result and result != "—":
         parts.append(f"Result: {result}")
 
