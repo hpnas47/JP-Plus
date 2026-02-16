@@ -234,6 +234,241 @@ async def send_to_channel(channel, content: str, filename: str = "output.md") ->
         await channel.send(f"Results attached:", file=file)
 
 
+# ── Embed formatting for bet recommendations ─────────────────────────
+
+# Color palette for embed sidebars
+EMBED_COLORS = {
+    "spread_primary": 0x2ECC71,   # Green
+    "spread_edge": 0x3498DB,      # Blue
+    "totals_primary": 0xF39C12,   # Orange
+    "moneyline_action": 0x2ECC71, # Green
+    "moneyline_watchlist": 0xF1C40F,  # Yellow
+}
+
+
+def parse_bet_sections(text: str) -> list[dict]:
+    """Parse markdown output into sections with title, header, rows, and record.
+
+    Returns list of dicts: {title, headers, rows: list[dict], record}
+    """
+    sections: list[dict] = []
+    current_section: dict | None = None
+
+    for block in _split_into_blocks(text):
+        if isinstance(block, str):
+            # Check for section header
+            m = re.match(r'^#{1,3}\s+(.+)$', block)
+            if m:
+                if current_section:
+                    sections.append(current_section)
+                current_section = {"title": m.group(1), "headers": [], "rows": [], "record": ""}
+                continue
+
+            # Check for record line
+            rec = re.match(r'^\*\*(.+)\*\*$', block.strip())
+            if rec and current_section:
+                # Append record lines (there may be multiple)
+                if current_section["record"]:
+                    current_section["record"] += "\n" + rec.group(1)
+                else:
+                    current_section["record"] = rec.group(1)
+                continue
+
+            # Stop at footnote separator
+            if block.strip() == '---':
+                break
+
+        elif isinstance(block, list) and current_section is not None:
+            # Table block — first row is headers, rest are data
+            if len(block) < 1:
+                continue
+            current_section["headers"] = block[0]
+            for row_cells in block[1:]:
+                row_dict = {}
+                for i, h in enumerate(block[0]):
+                    row_dict[h.strip()] = row_cells[i].strip() if i < len(row_cells) else ""
+                current_section["rows"].append(row_dict)
+
+    if current_section:
+        sections.append(current_section)
+
+    return sections
+
+
+def _detect_section_color(title: str, bet_type: str) -> int:
+    """Pick embed color based on section title and bet type."""
+    title_lower = title.lower()
+    if bet_type == "spread":
+        if "primary" in title_lower or "ev engine" in title_lower:
+            return EMBED_COLORS["spread_primary"]
+        return EMBED_COLORS["spread_edge"]
+    elif bet_type == "totals":
+        return EMBED_COLORS["totals_primary"]
+    elif bet_type == "moneyline":
+        if "watchlist" in title_lower:
+            return EMBED_COLORS["moneyline_watchlist"]
+        return EMBED_COLORS["moneyline_action"]
+    return 0x95A5A6  # Gray fallback
+
+
+def _build_spread_field(row: dict, has_ev: bool) -> tuple[str, str]:
+    """Build embed field name/value for a spread bet row."""
+    matchup = row.get("Matchup", "")
+    bet = row.get("Bet (Open)", "")
+    edge = row.get("Edge", "")
+    jp_line = row.get("JP+ Line", "")
+    ev = row.get("~EV", "")
+    result = row.get("Result", "")
+
+    name = f"{bet}" if bet else matchup
+    parts = [f"Edge: {edge}"]
+    if has_ev and ev:
+        parts.append(f"EV: {ev}")
+    parts.append(f"JP+ Line: {jp_line}")
+    if result and result != "—":
+        parts.append(f"Result: {result}")
+
+    return name, " | ".join(parts)
+
+
+def _build_totals_field(row: dict) -> tuple[str, str]:
+    """Build embed field name/value for a totals bet row."""
+    matchup = row.get("Matchup", "")
+    side = row.get("Side", "")
+    edge = row.get("Edge", "")
+    vegas = row.get("Vegas (Open)", "")
+    jp_total = row.get("JP+ Total", "")
+    ev = row.get("~EV", "")
+    result = row.get("Result", "")
+
+    name = f"{side} {vegas}" if side and vegas else matchup
+    parts = [f"{matchup}", f"Edge: {edge}"]
+    if jp_total:
+        parts.append(f"JP+: {jp_total}")
+    if ev:
+        parts.append(f"EV: {ev}")
+    if result and result != "—":
+        parts.append(f"Result: {result}")
+
+    return name, " | ".join(parts)
+
+
+def _build_moneyline_field(row: dict) -> tuple[str, str]:
+    """Build embed field name/value for a moneyline bet row."""
+    matchup = row.get("Matchup", "")
+    bet = row.get("Bet", row.get("Side", ""))
+    odds = row.get("Odds", "")
+    ev = row.get("EV", "")
+    conf = row.get("Conf", "")
+    win_prob = row.get("Win Prob", "")
+    result = row.get("Result", "")
+
+    name = f"{bet} ({odds})" if bet and odds else matchup
+    parts = [f"{matchup}"]
+    if win_prob:
+        parts.append(f"P(W): {win_prob}")
+    if ev:
+        parts.append(f"EV: {ev}")
+    if conf:
+        parts.append(f"Conf: {conf}")
+    if result and result != "—":
+        parts.append(f"Result: {result}")
+
+    return name, " | ".join(parts)
+
+
+def section_to_embed(section: dict, color: int, bet_type: str) -> discord.Embed:
+    """Convert a parsed section to a Discord embed."""
+    embed = discord.Embed(title=section["title"], color=color)
+
+    has_ev = any("~EV" in h or "EV" in h for h in section.get("headers", []) if "~EV" in h)
+
+    for row in section["rows"][:25]:  # Discord max 25 fields
+        if bet_type == "spread":
+            name, value = _build_spread_field(row, has_ev="~EV" in section.get("headers", []))
+        elif bet_type == "totals":
+            name, value = _build_totals_field(row)
+        elif bet_type == "moneyline":
+            name, value = _build_moneyline_field(row)
+        else:
+            # Generic: combine all values
+            name = row.get(section["headers"][1], "") if len(section["headers"]) > 1 else "—"
+            value = " | ".join(f"{h}: {row.get(h, '')}" for h in section["headers"][2:] if row.get(h))
+
+        # Discord field limits: name 256 chars, value 1024 chars
+        name = (name or "—")[:256]
+        value = (value or "—")[:1024]
+        embed.add_field(name=name, value=value, inline=False)
+
+    if section.get("record"):
+        embed.set_footer(text=section["record"])
+
+    if not section["rows"]:
+        embed.description = "*No qualifying bets this section.*"
+
+    return embed
+
+
+def bets_to_embeds(text: str, bet_type: str) -> list[discord.Embed]:
+    """Parse markdown bet output and return list of Discord embeds.
+
+    Args:
+        text: Raw markdown output from a display script
+        bet_type: "spread", "totals", or "moneyline"
+
+    Returns:
+        List of discord.Embed objects (one per section)
+    """
+    sections = parse_bet_sections(text)
+    if not sections:
+        return []
+
+    embeds = []
+    for section in sections:
+        color = _detect_section_color(section["title"], bet_type)
+        embeds.append(section_to_embed(section, color, bet_type))
+
+    return embeds
+
+
+async def send_as_embeds(
+    interaction: Interaction,
+    content: str,
+    bet_type: str,
+    filename: str = "output.md",
+) -> None:
+    """Parse bet output and send as Discord embeds. Falls back to code blocks on failure."""
+    try:
+        embeds = bets_to_embeds(content, bet_type)
+        if embeds:
+            for embed in embeds:
+                await interaction.followup.send(embed=embed)
+            return
+    except Exception:
+        pass  # Fall back to code block
+
+    await send_long_message(interaction, content, filename)
+
+
+async def send_embeds_to_channel(
+    channel,
+    content: str,
+    bet_type: str,
+    filename: str = "output.md",
+) -> None:
+    """Parse bet output and send as embeds to a channel. Falls back to code blocks."""
+    try:
+        embeds = bets_to_embeds(content, bet_type)
+        if embeds:
+            for embed in embeds:
+                await channel.send(embed=embed)
+            return
+    except Exception:
+        pass  # Fall back to code block
+
+    await send_to_channel(channel, content, filename)
+
+
 def format_pipeline_results(results: dict[str, dict]) -> str:
     """Format pipeline step results into a summary string."""
     lines = ["**Pipeline Results:**\n"]

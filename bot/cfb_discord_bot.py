@@ -30,7 +30,13 @@ from bot.config import (
     PIPELINE_CHECK_INTERVAL_MINUTES,
     PIPELINE_SCHEDULE_HOUR,
 )
-from bot.formatters import format_pipeline_results, send_long_message, send_to_channel
+from bot.formatters import (
+    format_pipeline_results,
+    send_as_embeds,
+    send_embeds_to_channel,
+    send_long_message,
+    send_to_channel,
+)
 from bot.state_manager import get_season_record, get_status, pipeline_completed
 from bot.sunday_pipeline import run_pipeline
 from bot.task_runner import PYTHON, run_display_script
@@ -59,7 +65,7 @@ async def spread_bets(interaction: discord.Interaction, year: int, week: int):
     await interaction.response.defer()
     result = run_display_script("show_spread_bets.py", [str(year), str(week)])
     output = result.stdout if result.returncode == 0 else f"Error:\n{result.stderr}"
-    await send_long_message(interaction, output, f"spread_bets_{year}_w{week}.md")
+    await send_as_embeds(interaction, output, "spread", f"spread_bets_{year}_w{week}.md")
 
 
 @tree.command(name="totals-bets", description="Show totals (O/U) betting recommendations", guild=guild_obj)
@@ -68,7 +74,7 @@ async def totals_bets(interaction: discord.Interaction, year: int, week: int):
     await interaction.response.defer()
     result = run_display_script("show_totals_bets.py", [str(year), str(week)])
     output = result.stdout if result.returncode == 0 else f"Error:\n{result.stderr}"
-    await send_long_message(interaction, output, f"totals_bets_{year}_w{week}.md")
+    await send_as_embeds(interaction, output, "totals", f"totals_bets_{year}_w{week}.md")
 
 
 @tree.command(name="moneyline-bets", description="Show moneyline betting recommendations", guild=guild_obj)
@@ -77,7 +83,7 @@ async def moneyline_bets(interaction: discord.Interaction, year: int, week: int)
     await interaction.response.defer()
     result = run_display_script("show_moneyline_bets.py", [str(year), str(week)])
     output = result.stdout if result.returncode == 0 else f"Error:\n{result.stderr}"
-    await send_long_message(interaction, output, f"moneyline_bets_{year}_w{week}.md")
+    await send_as_embeds(interaction, output, "moneyline", f"moneyline_bets_{year}_w{week}.md")
 
 
 @tree.command(name="win-totals", description="Show preseason win total projections", guild=guild_obj)
@@ -165,16 +171,16 @@ async def _post_to_channels(year: int, week: int):
     """After pipeline completes, post each display output to its designated channel."""
     mention = f"<@{OWNER_ID}>"
     channel_map = [
-        (CHANNEL_SPREAD, "show_spread_bets.py", [str(year), str(week)], f"spread_bets_{year}_w{week}.md"),
-        (CHANNEL_TOTALS, "show_totals_bets.py", [str(year), str(week)], f"totals_bets_{year}_w{week}.md"),
-        (CHANNEL_MONEYLINE, "show_moneyline_bets.py", [str(year), str(week)], f"moneyline_bets_{year}_w{week}.md"),
+        (CHANNEL_SPREAD, "show_spread_bets.py", [str(year), str(week)], f"spread_bets_{year}_w{week}.md", "spread"),
+        (CHANNEL_TOTALS, "show_totals_bets.py", [str(year), str(week)], f"totals_bets_{year}_w{week}.md", "totals"),
+        (CHANNEL_MONEYLINE, "show_moneyline_bets.py", [str(year), str(week)], f"moneyline_bets_{year}_w{week}.md", "moneyline"),
     ]
     label_map = {
         "show_spread_bets.py": "Spread picks",
         "show_totals_bets.py": "Totals picks",
         "show_moneyline_bets.py": "Moneyline picks",
     }
-    for channel_id, script, args, filename in channel_map:
+    for channel_id, script, args, filename, bet_type in channel_map:
         if not channel_id:
             continue
         channel = bot.get_channel(channel_id)
@@ -187,7 +193,7 @@ async def _post_to_channels(year: int, week: int):
                 continue
             label = label_map.get(script, "Picks")
             await channel.send(f"{mention} **{label} — {year} Week {week}**")
-            await send_to_channel(channel, output, filename)
+            await send_embeds_to_channel(channel, output, bet_type, filename)
         except Exception as e:
             logger.error(f"Failed to post to {channel_id}: {e}")
 
