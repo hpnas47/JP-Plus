@@ -213,10 +213,6 @@ COACHING_CHANGES_MANUAL = {
 # Cache for auto-detected coaching changes
 _coaching_changes_cache: dict[int, dict[str, str]] = {}
 
-# Manual overrides for talent rank (if API data is inconsistent)
-# Format: {year: {team: talent_rank}}
-TALENT_RANK_OVERRIDES = {}
-
 
 # =============================================================================
 # TRIPLE-OPTION TEAM ADJUSTMENT
@@ -618,36 +614,6 @@ class PreseasonPriors:
             logger.warning(f"Could not fetch transfer portal for {year}: {e}")
             return pd.DataFrame()
 
-    def fetch_player_usage(self, year: int) -> pd.DataFrame:
-        """Fetch player usage stats (includes PPA) for a given year.
-
-        Args:
-            year: Season year
-
-        Returns:
-            DataFrame with player usage data
-        """
-        try:
-            usage = self.client.get_player_usage(year=year)
-            data = []
-            for u in usage:
-                ppa = u.usage.overall if hasattr(u.usage, 'overall') else None
-                if ppa is not None:
-                    data.append({
-                        'name': u.name,
-                        'team': u.team,
-                        'position': u.position,
-                        'total_ppa': ppa,
-                    })
-
-            df = pd.DataFrame(data)
-            logger.info(f"Fetched player usage for {len(df)} players in {year}")
-            return df
-
-        except Exception as e:
-            logger.warning(f"Could not fetch player usage for {year}: {e}")
-            return pd.DataFrame()
-
     # Position group mapping for transfer portal analysis
     # Split OT from IOL, and iDL from EDGE for scarcity-based weighting
     POSITION_GROUPS = {
@@ -903,36 +869,6 @@ class PreseasonPriors:
             logger.warning(f"Could not fetch FBS teams for {year}: {e}")
             return set()
 
-    def _fetch_team_conferences(self, year: int) -> dict[str, str]:
-        """Fetch conference affiliation for all FBS teams for a specific year.
-
-        Uses get_fbs_teams(year=year) to get year-appropriate conference data,
-        which correctly handles realignment (e.g., USC/UCLA to Big Ten in 2024,
-        Texas/Oklahoma to SEC in 2024).
-
-        Uses session-level cache via CFBDClient.
-
-        Args:
-            year: Season year (conference affiliations as of this year)
-
-        Returns:
-            Dict mapping team name to conference name
-        """
-        try:
-            # P2.1 FIX: Use get_fbs_teams with year parameter to get
-            # year-appropriate conference affiliations instead of get_teams()
-            # which returns current (potentially future) affiliations
-            teams = self.client.get_fbs_teams(year=year)
-            conf_map = {}
-            for t in teams:
-                if t.school and t.conference:
-                    conf_map[t.school] = t.conference
-            logger.debug(f"Fetched {year} conference data for {len(conf_map)} FBS teams")
-            return conf_map
-        except Exception as e:
-            logger.warning(f"Could not fetch team conferences for {year}: {e}")
-            return {}
-
     def calculate_portal_impact(
         self,
         year: int,
@@ -1125,11 +1061,8 @@ class PreseasonPriors:
             f"have destinations"
         )
 
-        # P1.1: Vectorized G5→P4 transfer count (replaces per-row apply)
+        # P1.1: Vectorized G5→P4 transfer count (reuses p4_set from above)
         if team_conferences:
-            p4_set = self.P4_TEAMS | {
-                t for t, c in team_conferences.items() if c in self.P4_CONFERENCES
-            }
             origin_is_p4 = incoming_df['origin'].isin(p4_set)
             dest_is_p4 = incoming_df['destination'].isin(p4_set)
             g5_to_p4 = int((~origin_is_p4 & dest_is_p4).sum())
@@ -1220,9 +1153,9 @@ class PreseasonPriors:
            - At 100% returning: 0.1 (minimal regression)
 
         2. Extremity multiplier scales down regression for extreme teams:
-           - Within ±10 of mean: full regression (multiplier = 1.0)
-           - 10-25 from mean: linear scale down (1.0 -> 0.5)
-           - 25+ from mean: minimal regression (multiplier = 0.5)
+           - Within ±8 of mean: full regression (multiplier = 1.0)
+           - 8-20 from mean: linear scale down (1.0 -> 0.33)
+           - 20+ from mean: minimal regression (multiplier = 0.33)
 
         3. Final regression = base_regression * extremity_multiplier
 
@@ -1352,7 +1285,10 @@ class PreseasonPriors:
         # Normalize portal to [0, 1]
         # portal_impact is already scaled (typically -0.12 to +0.12 after cap)
         # Map: 0.0 -> 0.5, +0.12 -> 1.0, -0.12 -> 0.0
-        portal_norm = 0.5 + (portal_impact / 0.24) if portal_impact else 0.5
+        # portal_impact is capped at ±impact_cap (default 0.12), so range is [-0.12, 0.12]
+        # Map to [0, 1]: 0.0 -> 0.5, +0.12 -> 1.0, -0.12 -> 0.0
+        # The division handles zero correctly (0.5 + 0/0.24 = 0.5), no guard needed
+        portal_norm = 0.5 + (portal_impact / 0.24)
         portal_norm = max(0.0, min(1.0, portal_norm))
         diag["portal_norm"] = portal_norm
 
@@ -1717,8 +1653,12 @@ class PreseasonPriors:
 
             # Get prior year rating (regressed toward mean)
             # NOTE: rebuild_delta is applied in blend_with_inseason with week taper
-            # Here we use the BASE regression (not relieved) for the stored rating
-            # The relief_delta is stored separately and applied with week taper
+            # Here we use the BASE regression (not relieved) for the stored rating.
+            # The relief_delta is stored separately and applied with week taper.
+            # We intentionally recompute base regression here rather than using
+            # team_regression from _compute_credible_rebuild_relief, which returns
+            # the RELIEVED regression factor (reg_new). The stored combined_rating
+            # must use base regression so the delta can be applied with week taper.
             base_regression = self._get_regression_factor(ret_ppa, raw_prior, mean_prior)
             if raw_prior is not None:
                 regressed_prior = (
@@ -2092,8 +2032,13 @@ class PreseasonPriors:
                     if rebuild_delta > 0.1:  # Only track significant adjustments
                         rebuild_applied.append((team, rebuild_delta))
 
-            # Apply blended rating with optional rebuild relief
-            # The relief_delta adjusts the preseason component (reduces regression penalty)
+            # Apply blended rating with optional rebuild relief.
+            # The relief_delta adjusts the preseason component (reduces regression penalty).
+            # NOTE: rebuild_delta is intentionally multiplied by BOTH rebuild_taper (explicit
+            # linear decay to 0 by week_end) AND prior_weight (sigmoid decay of preseason
+            # influence). This double decay is correct: rebuild relief is a preseason
+            # adjustment that should fade as priors fade — it would be wrong to apply
+            # preseason regression relief to the in-season component.
             blended[team] = (
                 (preseason + rebuild_delta) * prior_weight
                 + inseason * inseason_weight
