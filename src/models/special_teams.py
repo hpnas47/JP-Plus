@@ -941,10 +941,11 @@ class SpecialTeamsModel:
         # DATA LEAKAGE GUARD: Verify no future weeks in training data
         if max_week is not None and "week" in plays_df.columns:
             actual_max = plays_df["week"].max()
-            assert actual_max <= max_week, (
-                f"DATA LEAKAGE in SpecialTeams: plays include week {actual_max} "
-                f"but max_week={max_week}. Filter plays before calling."
-            )
+            if actual_max > max_week:
+                raise ValueError(
+                    f"DATA LEAKAGE in SpecialTeams: plays include week {actual_max} "
+                    f"but max_week={max_week}. Filter plays before calling."
+                )
 
         # PERFORMANCE: Pre-compute play type masks ONCE (avoids 3x str.contains over ~50K plays)
         play_type_lower = plays_df["play_type"].str.lower()
