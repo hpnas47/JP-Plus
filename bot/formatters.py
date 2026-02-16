@@ -364,8 +364,8 @@ def _build_moneyline_field(row: dict) -> tuple[str, str]:
     win_prob = row.get("Win Prob", "")
     result = row.get("Result", "")
 
-    name = f"{bet} ({odds})" if bet and odds else matchup
-    parts = [f"{matchup}"]
+    name = matchup if matchup else "—"
+    parts = [f"Pick: {bet} ({odds})"]
     if win_prob:
         parts.append(f"P(W): {win_prob}")
     if ev:
