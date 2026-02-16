@@ -934,6 +934,15 @@ def main():
         watchlist_edge_threshold=args.edge_threshold,
     )
 
+    # Save watchlist JSON for Discord bot / show_weather_alert.py
+    import json
+    weather_dir = Path(__file__).parent.parent / "data" / "weather"
+    weather_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = weather_dir / f"watchlist_{args.year}_w{args.week}.json"
+    with open(cache_file, "w") as f:
+        json.dump(stats, f, indent=2, default=str)
+    logger.info(f"Saved watchlist to {cache_file}")
+
     # Print appropriate report
     if args.saturday:
         print_saturday_confirmation_report(stats, thursday_forecasts)

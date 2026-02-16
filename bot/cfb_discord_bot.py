@@ -290,6 +290,28 @@ async def next_week(interaction: discord.Interaction):
         await interaction.response.send_message(f"Error detecting week: {e}")
 
 
+@tree.command(name="weather-alert", description="🌧️ Run weather capture and show alert for a week", guild=guild_obj)
+@app_commands.describe(year="Season year", week="Week number")
+async def weather_alert_cmd(interaction: discord.Interaction, year: int, week: int):
+    await interaction.response.defer()
+    from bot.task_runner import run_command_async
+    # Run the Thursday capture (saves JSON)
+    result = await run_command_async(
+        [PYTHON, "scripts/weather_thursday_capture.py", "--year", str(year), "--week", str(week)],
+        timeout=300,
+    )
+    if result.returncode != 0:
+        await interaction.followup.send(f"❌ Weather capture failed:\n```{result.stderr[:1500]}```")
+        return
+    # Now format the alert
+    display = run_display_script("show_weather_alert.py", [str(year), str(week)])
+    output = display.stdout if display.returncode == 0 else f"Error:\n{display.stderr}"
+    if not output.strip():
+        await interaction.followup.send(f"✅ No weather-impacted games for {year} Week {week}.")
+        return
+    await send_long_message(interaction, output, f"weather_alert_{year}_w{week}.md")
+
+
 # ── Auto-scheduler ─────────────────────────────────────────────────────
 
 def _detect_week(year: int) -> int:
@@ -417,6 +439,75 @@ async def auto_schedule_loop():
         await asyncio.sleep(ODDS_POLL_INTERVAL_MINUTES * 60)
 
 
+# ── Thursday weather auto-scheduler ───────────────────────────────────
+
+WEATHER_CAPTURE_HOUR = 6  # 6 AM ET on Thursdays
+
+async def thursday_weather_loop():
+    """Thursday auto-scheduler: capture weather forecasts and post alert."""
+    await bot.wait_until_ready()
+    logger.info("Thursday weather scheduler started")
+
+    _last_run_date = None
+
+    while not bot.is_closed():
+        try:
+            now = datetime.now(ET)
+
+            if (
+                now.weekday() == 3  # Thursday
+                and now.hour == WEATHER_CAPTURE_HOUR
+                and now.minute < 10
+                and _last_run_date != now.date()
+            ):
+                _last_run_date = now.date()
+                year = now.year
+                week = _detect_week(year)
+                logger.info(f"Thursday weather capture — {year} Week {week}")
+
+                # Run capture
+                from bot.task_runner import run_command_async
+                result = await run_command_async(
+                    [PYTHON, "scripts/weather_thursday_capture.py",
+                     "--year", str(year), "--week", str(week)],
+                    timeout=300,
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"Weather capture failed: {result.stderr[:300]}")
+                    # Still notify owner of failure
+                    channel = bot.get_channel(CHANNEL_TOTALS)
+                    if channel:
+                        mention = f"<@{OWNER_ID}>"
+                        await channel.send(
+                            f"{mention} ❌ **Thursday weather capture failed — {year} Week {week}**\n"
+                            f"```{result.stderr[:500]}```"
+                        )
+                else:
+                    # Format and post alert
+                    display = run_display_script("show_weather_alert.py", [str(year), str(week)])
+                    if display.returncode == 0 and display.stdout.strip():
+                        channel = bot.get_channel(CHANNEL_TOTALS)
+                        if channel:
+                            mention = f"<@{OWNER_ID}>"
+                            # Count flagged games from output
+                            await channel.send(f"{mention} 🌧️ **Thursday Weather Alert — {year} Week {week}**")
+                            await send_to_channel(channel, display.stdout, f"weather_{year}_w{week}.md")
+                    else:
+                        # No games flagged — still notify
+                        channel = bot.get_channel(CHANNEL_TOTALS)
+                        if channel:
+                            mention = f"<@{OWNER_ID}>"
+                            await channel.send(
+                                f"{mention} ✅ **{year} Week {week}** — No weather-impacted games this week. All clear! ☀️"
+                            )
+
+        except Exception as e:
+            logger.error(f"Thursday weather error: {e}")
+
+        await asyncio.sleep(5 * 60)  # Check every 5 min
+
+
 # ── Bot events ─────────────────────────────────────────────────────────
 
 @bot.event
@@ -428,6 +519,7 @@ async def on_ready():
         await tree.sync()
     logger.info(f"Bot ready as {bot.user} — synced {len(tree.get_commands(guild=guild_obj))} commands")
     bot.loop.create_task(auto_schedule_loop())
+    bot.loop.create_task(thursday_weather_loop())
 
 
 # ── Main ───────────────────────────────────────────────────────────────
