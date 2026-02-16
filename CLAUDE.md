@@ -55,27 +55,18 @@
 - **Market Data:** `scripts/weekly_odds_capture.py` (OddsAPI/Market Snapshots)
 - **Full File Map:** `docs/PROJECT_MAP.md`
 
-## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-13)
+## ✅ Current Production Baseline (2022-2025 backtest, as of 2026-02-15)
 
 **With QB Continuous Phase1-only + Phase 1 Shrinkage enabled**
 
 | Slice | Weeks | Games | MAE | RMSE | ATS (Close) | ATS (Open) |
 |-------|-------|-------|-----|------|-------------|------------|
-| **Full (`--start-week 1`)** | 1–Post | 3,657 | 12.92 | 16.29 | 50.2% | 51.2% |
-| Phase 1 (Calibration) | 1–3 | 960 | 14.01 | 17.51 | 46.9% | 47.1% |
-| **Phase 2 (Core)** | **4–15** | **2,485** | **12.51** | **15.82** | **51.7%** | **53.0%** |
-| Phase 3 (Postseason) | 16+ | 176 | 13.38 | 16.78 | 48.0% | 49.4% |
-| 3+ Edge (Core) | 4–15 | 1,389 | — | — | 53.1% (737-652) | 55.4% (791-637) |
-| 5+ Edge (Core) | 4–15 | 841 | — | — | 55.1% (463-378) | 57.0% (509-384) |
-
-**Phase 1 Improvement with Shrinkage=0.90:**
-| Metric | Without Shrinkage | With Shrinkage | Delta |
-|--------|-------------------|----------------|-------|
-| 5+ Edge (Close) | 50.4% (225-221) | **51.1%** (237-227) | **+0.7%** |
-| 5+ Edge (Open) | 50.4% (225-221) | **50.9%** (234-226) | **+0.5%** |
-| RMSE | 17.57 | 17.45 | -0.12 |
-
-Core (weeks 4-15) performance is **unchanged** with Phase 1 shrinkage.
+| **Full (`--start-week 1`)** | 1–Post | 3,657 | 12.93 | 16.30 | 50.2% | 50.8% |
+| Phase 1 (Calibration) | 1–3 | 992 | 13.97 | 17.46 | 46.9% | 47.0% |
+| **Phase 2 (Core)** | **4–15** | **2,489** | **12.52** | **15.82** | **51.7%** | **52.4%** |
+| Phase 3 (Postseason) | 16+ | 176 | 13.35 | 16.76 | 47.4% | 48.3% |
+| 3+ Edge (Core) | 4–15 | 1,429 | — | — | 52.7% (738-663) | 55.1% (786-640) |
+| 5+ Edge (Core) | 4–15 | 865 | — | — | 55.6% (471-376) | 57.8% (506-369) |
 
 ### Edge-Aware Production Mode (DEFAULT in 2026)
 
@@ -83,16 +74,15 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
 
 | Timing | Edge | Mode | ATS | Rationale |
 |--------|------|------|-----|-----------|
-| **Opening** (4+ days out) | Any | Fixed | **56.5%** (5+) | Fixed dominates on less-efficient opening lines |
-| **Closing** (<4 days) | 3-5 pts | Fixed | **52.9%** | LSA degrades 3+ edge by 0.9% |
-| **Closing** (<4 days) | 5+ pts | LSA | **55.1%** | LSA improves 5+ edge by 1.1% |
+| **Opening** (4+ days out) | Any | Fixed | **57.8%** (5+) | Fixed dominates on less-efficient opening lines |
+| **Closing** (<4 days) | Any | Fixed | **55.6%** (5+) | Post-bugfix: Fixed now leads LSA on close-line 5+ edge too |
 
-**Full LSA vs Fixed Comparison (Core Weeks 4-15):**
+**Full LSA vs Fixed Comparison (Core Weeks 4-15, Close Line):**
 
-| Mode | 3+ Edge (Close) | 3+ Edge (Open) | 5+ Edge (Close) | 5+ Edge (Open) |
-|------|-----------------|----------------|-----------------|----------------|
-| Fixed | **52.9%** (795-707) | **55.1%** (844-688) | 54.0% (498-425) | **56.5%** (551-425) |
-| LSA | 52.0% (768-708) | 54.9% (825-678) | **55.1%** (480-391) | 55.9% (523-413) |
+| Mode | 3+ Edge | 5+ Edge |
+|------|---------|---------|
+| Fixed | **52.7%** (738-663) | **55.6%** (471-376) |
+| LSA | 52.8% (725-648) | 55.2% (443-359) |
 
 **LSA Config:** `alpha=300.0`, `clamp_max=4.0`, `min_games=150`, `ema=0.3`, `adjust_for_turnovers=True`
 
@@ -167,12 +157,12 @@ The prediction engine automatically selects Fixed or LSA based on timing and edg
 ## 📊 Quant Auditor (The Analyst)
 - **Role:** Weight optimization, MAE/ATS validation, and **redundancy detection**.
 - **Success Metrics (Core Phase, Weeks 4–15, 2,485 games):**
-    - **MAE Baseline:** 12.51 (Strict Tolerance: +0.02).
-    - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 54.0%.
+    - **MAE Baseline:** 12.52 (Strict Tolerance: +0.02).
+    - **ATS Target (Core):** > 52.0%. **5+ Edge Target:** > 55.0%.
 - **Redundancy Protocol:** For any new signal, you must report the **Correlation Coefficient** against existing PPA/IsoPPP metrics.
 - **Validation Slices (Mandatory):**
     - **EFM/In-Season:** `python backtest.py --start-week 4`. Focus on Weeks 4-15 to isolate in-season signal from preseason noise.
     - **Priors/Portal/Talent:** `python backtest.py --start-week 1`. Full Season validation for Recruiting Offset and Portal Continuity Tax.
 - **Sanity Check:** Must report rating stability for **High Variance Cohorts** (High Churn/Portal teams) alongside Blue Bloods (ALA, UGA, OSU, TEX, ORE, ND).
 
-<!-- Last validated: 2026-02-13 by generate_docs.py -->
+<!-- Last validated: 2026-02-15 by generate_docs.py -->

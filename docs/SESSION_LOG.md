@@ -4,6 +4,51 @@
 
 ---
 
+## Session: February 15, 2026 (Late Night)
+
+### Theme: Discord Embeds, Bug Fixes, Baseline Update
+
+---
+
+#### Discord Embed Format for Bet Recommendations — COMMITTED
+Converted spread, totals, and moneyline bet outputs from monospace code blocks to Discord embeds for mobile readability. Each bet is an embed field with colored sidebar (Green=spread primary, Blue=spread edge, Orange=totals, Yellow=ML watchlist). Added `parse_bet_sections()`, `section_to_embed()`, `bets_to_embeds()`, `send_as_embeds()`, `send_embeds_to_channel()` to `bot/formatters.py`. Updated `bot/cfb_discord_bot.py` to use embeds for bet commands and `_post_to_channels`. Multiple iterations on layout: matchup as header, pick first, team abbreviations for JP+ line.
+
+#### Owner-Only Discord Commands — COMMITTED
+Added permission checks to `/run-pipeline`, `/capture-odds`, `/settle-bets` so only bot owner can trigger them.
+
+#### Preseason Priors Bug Fixes (10 items) — COMMITTED
+Validated 10 reported bugs, fixed 6, identified 4 as not-bugs:
+- Bug 2: Updated stale docstring in `_get_regression_factor`
+- Bug 3/9: Removed float truthiness guard on `portal_norm`
+- Bug 4: Removed redundant `p4_set` computation
+- Bug 6: Removed dead `fetch_player_usage` method (29 lines)
+- Bug 7: Removed dead `TALENT_RANK_OVERRIDES` dict
+- Bug 8: Removed dead `_fetch_team_conferences` method (28 lines)
+- Not bugs: Bug 1 (talent dual-mechanism intentional), Bug 5 (base regression recomputation intentional), Bug 10 (double-decay intentional)
+- **Backtest confirmed: no regression**
+
+#### Backtest Bug Fixes (6 items) — COMMITTED
+Validated 6 reported bugs, fixed 5, identified 1 as not-bug:
+- **Bug 1 (CRITICAL)**: Separate pick direction for open-line ATS — was using close-line pick direction for open-line evaluation. **5+ Edge Open improved 55.0% → 57.8%** (+2.8%)
+- Bug 2: Pre-filter games_df before FCS estimator (walk-forward safety)
+- Bug 3: FBS-filter ST plays
+- Bug 4: Include HFA in LSA preliminary spread
+- Bug 5: Handle ties in `build_team_records`
+- Not a bug: Bug 6 (`home_field_raw` is pre-offset value by design)
+
+#### Updated Baselines (post-bugfix):
+| Metric | Old | New |
+|--------|-----|-----|
+| Core MAE | 12.51 | 12.52 |
+| 3+ Edge (Close) | 53.1% (737-652) | 52.7% (738-663) |
+| 5+ Edge (Close) | 55.1% (463-378) | 55.6% (471-376) |
+| 3+ Edge (Open) | 55.4% (791-637) | 55.1% (786-640) |
+| 5+ Edge (Open) | 57.0% (509-384) | 57.8% (506-369) |
+
+LSA no longer beats Fixed on close-line 5+ Edge (55.2% vs 55.6%), so Edge-Aware mode simplified to Fixed-only.
+
+---
+
 ## Session: February 15, 2026 (Night)
 
 ### Theme: Ratings Pipeline Unification — Single Source of Truth
