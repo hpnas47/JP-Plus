@@ -320,8 +320,8 @@ def _build_spread_field(row: dict, has_ev: bool) -> tuple[str, str]:
     ev = row.get("~EV", "")
     result = row.get("Result", "")
 
-    name = f"{bet}" if bet else matchup
-    parts = [f"Edge: {edge}"]
+    name = matchup if matchup else "—"
+    parts = [f"Pick: {bet}", f"Edge: {edge}"]
     if has_ev and ev:
         parts.append(f"EV: {ev}")
     parts.append(f"JP+ Line: {jp_line}")
