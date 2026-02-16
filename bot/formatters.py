@@ -341,8 +341,9 @@ def _build_totals_field(row: dict) -> tuple[str, str]:
     ev = row.get("~EV", "")
     result = row.get("Result", "")
 
-    name = f"{side} {vegas}" if side and vegas else matchup
-    parts = [f"{matchup}", f"Edge: {edge}"]
+    name = matchup if matchup else "—"
+    parts = [f"Pick: {side} {vegas}"]
+    parts.append(f"Edge: {edge}")
     if jp_total:
         parts.append(f"JP+: {jp_total}")
     if ev:
