@@ -10,6 +10,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+# Load .env so subprocess env includes secrets (TOMORROW_IO_API_KEY, etc.)
+from dotenv import load_dotenv
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Use the exact same Python that's running the bot for all subprocesses
 PYTHON = sys.executable  # e.g. /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
 
