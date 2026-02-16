@@ -128,6 +128,9 @@ async def run_pipeline_cmd(
     week: int | None = None,
     force: bool = False,
 ):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("Only the bot owner can run the pipeline.", ephemeral=True)
+        return
     await interaction.response.defer()
 
     # Auto-detect year/week if not provided
@@ -205,6 +208,9 @@ async def _post_to_channels(year: int, week: int):
     app_commands.Choice(name="closing", value="closing"),
 ])
 async def capture_odds(interaction: discord.Interaction, timing: str, year: int, week: int):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("Only the bot owner can capture odds.", ephemeral=True)
+        return
     await interaction.response.defer()
     from bot.task_runner import run_command_async
     result = await run_command_async(
@@ -218,6 +224,9 @@ async def capture_odds(interaction: discord.Interaction, timing: str, year: int,
 @tree.command(name="settle-bets", description="Settle spread and ML bets for a completed week", guild=guild_obj)
 @app_commands.describe(year="Season year", week="Week number")
 async def settle_bets(interaction: discord.Interaction, year: int, week: int):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("Only the bot owner can settle bets.", ephemeral=True)
+        return
     await interaction.response.defer()
     from bot.task_runner import run_command_async
     # Settle spreads
