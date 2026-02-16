@@ -47,6 +47,9 @@ Validated 6 reported bugs, fixed 5, identified 1 as not-bug:
 
 LSA no longer beats Fixed on close-line 5+ Edge (55.2% vs 55.6%), so Edge-Aware mode simplified to Fixed-only.
 
+#### Metrics Cache Refresh — COMMITTED
+Ran `generate_docs.py` (full backtest, no `--skip-backtest`) to refresh `data/last_backtest_metrics.json` with post-bugfix numbers. Pre-push hook now passes cleanly. Also updated `docs/MODEL_ARCHITECTURE.md` via the same run. Minor game-count corrections from fresh run (Core 2,485→2,489, Phase 1 960→992) — edge metrics unchanged.
+
 ---
 
 ## Session: February 15, 2026 (Night)
