@@ -25,6 +25,9 @@ CHANNEL_RATINGS = int(os.getenv("CHANNEL_RATINGS", "0"))
 # Fallback default channel (pipeline status posts go here)
 DEFAULT_CHANNEL_ID = int(os.getenv("DEFAULT_CHANNEL_ID", "0")) or CHANNEL_SPREAD
 
+# Owner mention for auto-notifications
+OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", "389424176387325965"))
+
 # Pipeline timing
 PIPELINE_SCHEDULE_HOUR = 10  # 10 AM ET on Sundays
 PIPELINE_CHECK_INTERVAL_MINUTES = 5

@@ -112,12 +112,16 @@ def _format_table(rows: list[list[str]]) -> list[str]:
 
     # Keep full team names — Discord desktop has enough width
 
-    # Compute column widths
+    # Compute column widths (add 1 char padding for breathing room)
     widths = {i: 0 for i in kept}
     for row in rows:
         for i in kept:
             cell = row[i] if i < len(row) else ""
             widths[i] = max(widths[i], len(cell))
+    for i in kept:
+        widths[i] += 1  # extra padding per column
+
+    SEP = "  "  # 2-space column separator for readability
 
     # Build output
     lines: list[str] = []
@@ -126,12 +130,12 @@ def _format_table(rows: list[list[str]]) -> list[str]:
         for i in kept:
             cell = row[i] if i < len(row) else ""
             parts.append(cell.ljust(widths[i]))
-        line = " ".join(parts).rstrip()
+        line = SEP.join(parts).rstrip()
         lines.append(line)
 
         if row_idx == 0:
             sep_parts = ["─" * widths[i] for i in kept]
-            lines.append(" ".join(sep_parts))
+            lines.append(SEP.join(sep_parts))
 
     return lines
 

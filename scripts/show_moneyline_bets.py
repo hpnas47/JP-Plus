@@ -137,16 +137,16 @@ def show_moneyline_bets(year: int, week: int):
         if has_results:
             if has_scores:
                 if has_dates:
-                    print("| # | Date | Matchup | Bet | Odds | p(W) | EV | Conf | Score | Result |")
+                    print("| # | Date | Matchup | Bet | Odds | Win Prob | EV | Conf | Score | Result |")
                     print("|---|------|---------|-----|------|------|-----|------|-------|--------|")
                 else:
-                    print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Score | Result |")
+                    print("| # | Matchup | Bet | Odds | Win Prob | EV | Conf | Score | Result |")
                     print("|---|---------|-----|------|------|-----|------|-------|--------|")
             else:
-                print("| # | Matchup | Bet | Odds | p(W) | EV | Conf | Result |")
+                print("| # | Matchup | Bet | Odds | Win Prob | EV | Conf | Result |")
                 print("|---|---------|-----|------|------|-----|------|--------|")
         else:
-            print("| # | Matchup | Bet | Odds | p(W) | EV | Conf |")
+            print("| # | Matchup | Bet | Odds | Win Prob | EV | Conf |")
             print("|---|---------|-----|------|------|-----|------|")
 
         for i, (_, row) in enumerate(list_a.iterrows(), 1):

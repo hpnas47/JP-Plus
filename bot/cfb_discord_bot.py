@@ -26,6 +26,7 @@ from bot.config import (
     DEFAULT_CHANNEL_ID,
     DISCORD_BOT_TOKEN,
     DISCORD_GUILD_ID,
+    OWNER_ID,
     PIPELINE_CHECK_INTERVAL_MINUTES,
     PIPELINE_SCHEDULE_HOUR,
 )
@@ -162,11 +163,17 @@ async def run_pipeline_cmd(
 
 async def _post_to_channels(year: int, week: int):
     """After pipeline completes, post each display output to its designated channel."""
+    mention = f"<@{OWNER_ID}>"
     channel_map = [
         (CHANNEL_SPREAD, "show_spread_bets.py", [str(year), str(week)], f"spread_bets_{year}_w{week}.md"),
         (CHANNEL_TOTALS, "show_totals_bets.py", [str(year), str(week)], f"totals_bets_{year}_w{week}.md"),
         (CHANNEL_MONEYLINE, "show_moneyline_bets.py", [str(year), str(week)], f"moneyline_bets_{year}_w{week}.md"),
     ]
+    label_map = {
+        "show_spread_bets.py": "Spread picks",
+        "show_totals_bets.py": "Totals picks",
+        "show_moneyline_bets.py": "Moneyline picks",
+    }
     for channel_id, script, args, filename in channel_map:
         if not channel_id:
             continue
@@ -178,6 +185,8 @@ async def _post_to_channels(year: int, week: int):
             output = result.stdout if result.returncode == 0 else f"Error:\n{result.stderr}"
             if not output.strip():
                 continue
+            label = label_map.get(script, "Picks")
+            await channel.send(f"{mention} **{label} — {year} Week {week}**")
             await send_to_channel(channel, output, filename)
         except Exception as e:
             logger.error(f"Failed to post to {channel_id}: {e}")
@@ -283,47 +292,129 @@ async def next_week(interaction: discord.Interaction):
 
 # ── Auto-scheduler ─────────────────────────────────────────────────────
 
+def _detect_week(year: int) -> int:
+    """Auto-detect current CFB week from CFBD calendar."""
+    from src.api.cfbd_client import CFBDClient
+    client = CFBDClient()
+    cal = client.get_calendar(year=year)
+    week = 1
+    now = datetime.now(ET)
+    for entry in cal:
+        start = datetime.fromisoformat(str(entry.first_game_start).replace("Z", "+00:00"))
+        if now >= start:
+            week = entry.week
+    return week
+
+
+# Odds polling: Sunday 9 AM – 12 PM ET, every 10 minutes
+ODDS_POLL_START_HOUR = 9
+ODDS_POLL_END_HOUR = 12
+ODDS_POLL_INTERVAL_MINUTES = 10
+
+def _parse_lines_stored(stdout: str) -> int:
+    """Extract 'Lines stored: N' from odds capture output."""
+    import re
+    m = re.search(r"Lines stored:\s*(\d+)", stdout)
+    return int(m.group(1)) if m else 0
+
+
+# Re-run pipeline at most every 30 min when new lines arrive
+PIPELINE_REBATCH_MINUTES = 30
+
 async def auto_schedule_loop():
-    """Check every N minutes if it's Sunday 10 AM ET and auto-trigger pipeline."""
+    """Sunday auto-scheduler: poll odds 9 AM–12 PM ET, pipeline at 10 AM + re-run on new lines."""
     await bot.wait_until_ready()
     logger.info("Auto-scheduler started")
+
+    _last_pipeline_time = None   # datetime of last pipeline run today
+    _lines_at_last_run = 0       # cumulative lines when pipeline last ran
+    _cumulative_lines = 0        # running total of lines captured today
+    _last_sunday = None          # reset counters each Sunday
 
     while not bot.is_closed():
         try:
             now = datetime.now(ET)
-            if (
-                now.weekday() == 6  # Sunday
-                and now.hour == PIPELINE_SCHEDULE_HOUR
-                and now.minute < PIPELINE_CHECK_INTERVAL_MINUTES
-            ):
-                year = now.year
-                # Auto-detect week
-                from src.api.cfbd_client import CFBDClient
-                client = CFBDClient()
-                cal = client.get_calendar(year=year)
-                week = 1
-                for entry in cal:
-                    start = datetime.fromisoformat(str(entry.first_game_start).replace("Z", "+00:00"))
-                    if now >= start:
-                        week = entry.week
 
-                if not pipeline_completed(year, week):
+            if now.weekday() == 6:  # Sunday
+                year = now.year
+                today = now.date()
+
+                # Reset counters on new Sunday
+                if _last_sunday != today:
+                    _last_sunday = today
+                    _last_pipeline_time = None
+                    _lines_at_last_run = 0
+                    _cumulative_lines = 0
+
+                # Phase 1: Poll odds every 10 min from 9 AM to 12 PM ET
+                if ODDS_POLL_START_HOUR <= now.hour < ODDS_POLL_END_HOUR:
+                    week = _detect_week(year)
+                    timing = "opening"
+                    logger.info(f"Auto odds capture ({timing}) — {year} Week {week}")
+                    try:
+                        from bot.task_runner import run_command_async
+                        result = await run_command_async(
+                            [PYTHON, "scripts/weekly_odds_capture.py",
+                             f"--{timing}", "--year", str(year), "--week", str(week)],
+                            timeout=120,
+                        )
+                        if result.returncode == 0:
+                            new_lines = _parse_lines_stored(result.stdout)
+                            _cumulative_lines += new_lines
+                            logger.info(f"Odds capture OK: {new_lines} lines (cumulative {_cumulative_lines})")
+                        else:
+                            logger.warning(f"Odds capture failed: {result.stderr[:200]}")
+                    except Exception as e:
+                        logger.error(f"Odds capture error: {e}")
+
+                # Phase 2a: First pipeline run at 10 AM ET
+                if (
+                    now.hour == PIPELINE_SCHEDULE_HOUR
+                    and now.minute < PIPELINE_CHECK_INTERVAL_MINUTES
+                    and _last_pipeline_time is None
+                ):
+                    week = _detect_week(year)
                     logger.info(f"Auto-triggering pipeline for {year} Week {week}")
+                    _last_pipeline_time = now
+                    _lines_at_last_run = _cumulative_lines
                     results = await run_pipeline(year, week)
                     summary = format_pipeline_results(results)
 
+                    mention = f"<@{OWNER_ID}>"
                     channel = bot.get_channel(DEFAULT_CHANNEL_ID)
                     if channel:
                         await channel.send(
-                            f"**Auto Pipeline — {year} Week {week}**\n\n{summary}"
+                            f"{mention} **Auto Pipeline — {year} Week {week}**\n\n{summary}"
                         )
-
-                    # Post displays to designated channels
                     await _post_to_channels(year, week)
+
+                # Phase 2b: Re-run pipeline if new lines arrived (batched every 30 min)
+                elif (
+                    _last_pipeline_time is not None
+                    and ODDS_POLL_START_HOUR <= now.hour < ODDS_POLL_END_HOUR
+                    and _cumulative_lines > _lines_at_last_run
+                    and (now - _last_pipeline_time).total_seconds() >= PIPELINE_REBATCH_MINUTES * 60
+                ):
+                    week = _detect_week(year)
+                    new_since = _cumulative_lines - _lines_at_last_run
+                    logger.info(f"Re-running pipeline — {new_since} new lines since last run")
+                    _last_pipeline_time = now
+                    _lines_at_last_run = _cumulative_lines
+                    results = await run_pipeline(year, week)
+                    summary = format_pipeline_results(results)
+
+                    mention = f"<@{OWNER_ID}>"
+                    channel = bot.get_channel(DEFAULT_CHANNEL_ID)
+                    if channel:
+                        await channel.send(
+                            f"{mention} **Updated picks — {new_since} new lines — {year} Week {week}**\n\n{summary}"
+                        )
+                    await _post_to_channels(year, week)
+
         except Exception as e:
             logger.error(f"Auto-scheduler error: {e}")
 
-        await asyncio.sleep(PIPELINE_CHECK_INTERVAL_MINUTES * 60)
+        await asyncio.sleep(ODDS_POLL_INTERVAL_MINUTES * 60)
 
 
 # ── Bot events ─────────────────────────────────────────────────────────
