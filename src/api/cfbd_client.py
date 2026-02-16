@@ -2,6 +2,7 @@
 
 import logging
 import time
+import warnings
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -25,6 +26,22 @@ class APIRateLimitError(Exception):
     pass
 
 
+def _parse_date_safe(value: Any) -> Optional[datetime]:
+    """Parse a date value that may be None, a datetime, or an ISO string.
+
+    Returns None if parsing fails (caller should skip/warn).
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        # dateutil-style parse for ISO strings (handles 'Z', offsets, etc.)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
 class CFBDClient:
     """Wrapper for CFBD API with retry logic and convenience methods."""
 
@@ -44,7 +61,10 @@ class CFBDClient:
         self.configuration = cfbd.Configuration()
         self.configuration.access_token = self.api_key
 
-        # Initialize API instances
+        # Single shared ApiClient for all API instances (avoids per-property overhead)
+        self._api_client = cfbd.ApiClient(self.configuration)
+
+        # Lazy-init API instances (all share _api_client)
         self._games_api: Optional[cfbd.GamesApi] = None
         self._betting_api: Optional[cfbd.BettingApi] = None
         self._metrics_api: Optional[cfbd.MetricsApi] = None
@@ -56,6 +76,7 @@ class CFBDClient:
         self._players_api: Optional[cfbd.PlayersApi] = None
         self._venues_api: Optional[cfbd.VenuesApi] = None
         self._coaches_api: Optional[cfbd.CoachesApi] = None
+        self._drives_api: Optional[cfbd.DrivesApi] = None  # cfbd 5.x moved drives here
 
         # Retry settings
         self.max_retries = settings.max_retries
@@ -64,95 +85,124 @@ class CFBDClient:
         # Session-level cache for frequently called endpoints
         self._fbs_teams_cache: dict[int, list] = {}  # year -> teams list
 
+    # --- Lazy API accessors (shared ApiClient) ---
+
     @property
     def games_api(self) -> cfbd.GamesApi:
         if self._games_api is None:
-            self._games_api = cfbd.GamesApi(cfbd.ApiClient(self.configuration))
+            self._games_api = cfbd.GamesApi(self._api_client)
         return self._games_api
 
     @property
     def betting_api(self) -> cfbd.BettingApi:
         if self._betting_api is None:
-            self._betting_api = cfbd.BettingApi(cfbd.ApiClient(self.configuration))
+            self._betting_api = cfbd.BettingApi(self._api_client)
         return self._betting_api
 
     @property
     def metrics_api(self) -> cfbd.MetricsApi:
         if self._metrics_api is None:
-            self._metrics_api = cfbd.MetricsApi(cfbd.ApiClient(self.configuration))
+            self._metrics_api = cfbd.MetricsApi(self._api_client)
         return self._metrics_api
 
     @property
     def plays_api(self) -> cfbd.PlaysApi:
         if self._plays_api is None:
-            self._plays_api = cfbd.PlaysApi(cfbd.ApiClient(self.configuration))
+            self._plays_api = cfbd.PlaysApi(self._api_client)
         return self._plays_api
 
     @property
     def teams_api(self) -> cfbd.TeamsApi:
         if self._teams_api is None:
-            self._teams_api = cfbd.TeamsApi(cfbd.ApiClient(self.configuration))
+            self._teams_api = cfbd.TeamsApi(self._api_client)
         return self._teams_api
 
     @property
     def stats_api(self) -> cfbd.StatsApi:
         if self._stats_api is None:
-            self._stats_api = cfbd.StatsApi(cfbd.ApiClient(self.configuration))
+            self._stats_api = cfbd.StatsApi(self._api_client)
         return self._stats_api
 
     @property
     def ratings_api(self) -> cfbd.RatingsApi:
         if self._ratings_api is None:
-            self._ratings_api = cfbd.RatingsApi(cfbd.ApiClient(self.configuration))
+            self._ratings_api = cfbd.RatingsApi(self._api_client)
         return self._ratings_api
 
     @property
     def rankings_api(self) -> cfbd.RankingsApi:
         if self._rankings_api is None:
-            self._rankings_api = cfbd.RankingsApi(cfbd.ApiClient(self.configuration))
+            self._rankings_api = cfbd.RankingsApi(self._api_client)
         return self._rankings_api
 
     @property
     def players_api(self) -> cfbd.PlayersApi:
         if self._players_api is None:
-            self._players_api = cfbd.PlayersApi(cfbd.ApiClient(self.configuration))
+            self._players_api = cfbd.PlayersApi(self._api_client)
         return self._players_api
 
     @property
     def venues_api(self) -> cfbd.VenuesApi:
         if self._venues_api is None:
-            self._venues_api = cfbd.VenuesApi(cfbd.ApiClient(self.configuration))
+            self._venues_api = cfbd.VenuesApi(self._api_client)
         return self._venues_api
 
     @property
     def coaches_api(self) -> cfbd.CoachesApi:
         if self._coaches_api is None:
-            self._coaches_api = cfbd.CoachesApi(cfbd.ApiClient(self.configuration))
+            self._coaches_api = cfbd.CoachesApi(self._api_client)
         return self._coaches_api
 
+    @property
+    def drives_api(self) -> cfbd.DrivesApi:
+        """DrivesApi — cfbd 5.x moved get_drives here from GamesApi."""
+        if self._drives_api is None:
+            self._drives_api = cfbd.DrivesApi(self._api_client)
+        return self._drives_api
+
     def _call_with_retry(self, func: callable, *args, **kwargs) -> Any:
-        """Execute API call with exponential backoff retry on rate limits."""
-        last_exception = None
+        """Execute API call with exponential backoff retry on rate limits.
+
+        Makes up to (max_retries + 1) total attempts. On 429 responses,
+        respects the Retry-After header if present, otherwise uses exponential
+        backoff. Raises APIRateLimitError (not bare Exception) after exhaustion.
+        """
+        last_exception: Optional[ApiException] = None
 
         for attempt in range(self.max_retries + 1):
             try:
                 return func(*args, **kwargs)
             except ApiException as e:
                 if e.status == 429:  # Rate limited
-                    delay = self.retry_base_delay * (2**attempt)
-                    logger.warning(f"Rate limited. Waiting {delay}s before retry...")
+                    last_exception = e
+                    # Respect Retry-After header if present, else exponential backoff
+                    retry_after = None
+                    if hasattr(e, "headers") and e.headers:
+                        retry_after = e.headers.get("Retry-After")
+                    if retry_after is not None:
+                        try:
+                            delay = float(retry_after)
+                        except (ValueError, TypeError):
+                            delay = self.retry_base_delay * (2 ** attempt)
+                    else:
+                        delay = self.retry_base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Rate limited (attempt %d/%d). Waiting %.1fs before retry...",
+                        attempt + 1, self.max_retries + 1, delay,
+                    )
                     time.sleep(delay)
-                    last_exception = APIRateLimitError(str(e))
                 elif e.status == 404:
-                    # Data not found - might not be available yet
-                    raise DataNotAvailableError(f"Data not found: {e}")
+                    raise DataNotAvailableError(f"Data not found: {e}") from e
                 else:
                     raise
             except Exception as e:
                 logger.error(f"API call failed: {e}")
                 raise
 
-        raise last_exception or Exception("Max retries exceeded")
+        # Exhausted all retries — raise specific error with original context
+        raise APIRateLimitError(
+            f"Rate limit exceeded after {self.max_retries + 1} attempts"
+        ) from last_exception
 
     def get_games(
         self,
@@ -222,8 +272,9 @@ class CFBDClient:
 
     def get_advanced_box_score(self, game_id: int) -> Any:
         """Get advanced box score for a specific game."""
+        # cfbd 5.x param is 'id', not 'game_id'
         return self._call_with_retry(
-            self.games_api.get_advanced_box_score, game_id=game_id
+            self.games_api.get_advanced_box_score, id=game_id
         )
 
     def get_team_game_stats(
@@ -233,14 +284,17 @@ class CFBDClient:
         season_type: str = "regular",
         team: Optional[str] = None,
     ) -> list:
-        """Get team stats for games."""
+        """Get team stats for games.
+
+        Uses StatsApi.get_advanced_game_stats (cfbd 5.x moved this from GamesApi).
+        """
         kwargs = {"year": year, "season_type": season_type}
         if week is not None:
             kwargs["week"] = week
         if team is not None:
             kwargs["team"] = team
 
-        return self._call_with_retry(self.games_api.get_team_game_stats, **kwargs)
+        return self._call_with_retry(self.stats_api.get_advanced_game_stats, **kwargs)
 
     def get_ppa_games(
         self,
@@ -266,7 +320,10 @@ class CFBDClient:
         if team is not None:
             kwargs["team"] = team
 
-        return self._call_with_retry(self.metrics_api.get_game_ppa, **kwargs)
+        # cfbd 5.x renamed get_game_ppa -> get_predicted_points_added_by_game
+        return self._call_with_retry(
+            self.metrics_api.get_predicted_points_added_by_game, **kwargs
+        )
 
     def get_ppa_season(
         self,
@@ -278,7 +335,10 @@ class CFBDClient:
         if team is not None:
             kwargs["team"] = team
 
-        return self._call_with_retry(self.metrics_api.get_team_ppa, **kwargs)
+        # cfbd 5.x renamed get_team_ppa -> get_predicted_points_added_by_team
+        return self._call_with_retry(
+            self.metrics_api.get_predicted_points_added_by_team, **kwargs
+        )
 
     def get_plays(
         self,
@@ -328,7 +388,8 @@ class CFBDClient:
         if team is not None:
             kwargs["team"] = team
 
-        return self._call_with_retry(self.games_api.get_drives, **kwargs)
+        # cfbd 5.x moved get_drives from GamesApi to DrivesApi
+        return self._call_with_retry(self.drives_api.get_drives, **kwargs)
 
     def get_fbs_teams(self, year: Optional[int] = None) -> list:
         """Get list of FBS teams.
@@ -364,7 +425,8 @@ class CFBDClient:
         kwargs = {"year": year}
         if team is not None:
             kwargs["team"] = team
-        return self._call_with_retry(self.games_api.get_team_records, **kwargs)
+        # cfbd 5.x renamed get_team_records -> get_records
+        return self._call_with_retry(self.games_api.get_records, **kwargs)
 
     def get_pregame_win_probabilities(
         self,
@@ -387,16 +449,31 @@ class CFBDClient:
         return self._call_with_retry(self.games_api.get_calendar, year=year)
 
     def get_current_week(self, year: int) -> int:
-        """Determine current week based on calendar and today's date."""
+        """Determine current week based on calendar and today's date.
+
+        Handles first_game_start/last_game_start being None, datetime objects,
+        or ISO strings. Skips unparseable entries with a warning.
+        """
         calendar = self.get_calendar(year)
+        if not calendar:
+            return 1
+
         today = datetime.now().date()
 
         for week_info in calendar:
-            # Parse week start/end dates
-            start = datetime.strptime(
-                week_info.first_game_start[:10], "%Y-%m-%d"
-            ).date()
-            end = datetime.strptime(week_info.last_game_start[:10], "%Y-%m-%d").date()
+            start_dt = _parse_date_safe(week_info.first_game_start)
+            end_dt = _parse_date_safe(week_info.last_game_start)
+
+            if start_dt is None or end_dt is None:
+                # Skip weeks with missing/unparseable dates
+                warnings.warn(
+                    f"Skipping week {week_info.week}: unparseable dates "
+                    f"(first={week_info.first_game_start!r}, last={week_info.last_game_start!r})"
+                )
+                continue
+
+            start = start_dt.date()
+            end = end_dt.date()
 
             # Add buffer for Sunday morning runs
             end_with_buffer = end + timedelta(days=2)
@@ -405,7 +482,7 @@ class CFBDClient:
                 return week_info.week
 
         # Default to last week if past season
-        return calendar[-1].week if calendar else 1
+        return calendar[-1].week
 
     def check_data_availability(self, year: int, week: int) -> bool:
         """Check if data for a given week is available.
@@ -434,24 +511,39 @@ class CFBDClient:
         year: int,
         week: int,
         max_wait_hours: float = 8.0,
-        check_interval: float = 300.0,
+        check_interval: Optional[float] = None,
     ) -> bool:
         """Wait for week data to become available.
 
         Args:
             year: Season year
             week: Week number
-            max_wait_hours: Maximum time to wait in hours
-            check_interval: Time between checks in seconds
+            max_wait_hours: Maximum time to wait in hours (must be > 0)
+            check_interval: Time between checks in seconds (must be > 0).
+                            If None, uses settings.data_check_interval.
 
         Returns:
             True if data became available, False if timed out
 
         Raises:
             DataNotAvailableError: If week has no scheduled games (invalid week)
+            ValueError: If check_interval or max_wait_hours are invalid
         """
         settings = get_settings()
-        check_interval = check_interval or settings.data_check_interval
+        # Use settings default only when caller didn't provide a value
+        if check_interval is None:
+            check_interval = getattr(settings, "data_check_interval", 300.0)
+
+        # Validate parameters — don't allow sleep(0), sleep(negative), or sleep(None)
+        if not isinstance(check_interval, (int, float)) or check_interval <= 0:
+            raise ValueError(
+                f"check_interval must be a positive number, got {check_interval!r}"
+            )
+        if not isinstance(max_wait_hours, (int, float)) or max_wait_hours <= 0:
+            raise ValueError(
+                f"max_wait_hours must be a positive number, got {max_wait_hours!r}"
+            )
+
         max_wait_seconds = max_wait_hours * 3600
 
         # P0: Fail fast if week has no games at all (prevents infinite polling)
@@ -469,7 +561,7 @@ class CFBDClient:
                 )
         except ApiException as e:
             logger.error(f"API error checking {year} week {week}: {e}")
-            raise DataNotAvailableError(f"Cannot fetch games for {year} week {week}: {e}")
+            raise DataNotAvailableError(f"Cannot fetch games for {year} week {week}: {e}") from e
 
         start_time = time.time()
 
