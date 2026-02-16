@@ -107,17 +107,20 @@ def build_team_records(
                 & pl.col("away_points").is_not_null()
             )
             # P3.4: Vectorized aggregation instead of Python row iteration
-            regular = regular.with_columns(
-                (pl.col("home_points") > pl.col("away_points")).alias("home_won")
-            )
-            # Home team stats: wins when home_won=True, losses when home_won=False
+            # Exclude ties (home_points == away_points) — extremely rare in CFB
+            # but should not count as away wins
+            regular = regular.with_columns([
+                (pl.col("home_points") > pl.col("away_points")).alias("home_won"),
+                (pl.col("home_points") < pl.col("away_points")).alias("away_won"),
+            ])
+            # Home team stats
             home_agg = regular.group_by("home_team").agg([
                 pl.col("home_won").sum().alias("wins"),
-                (~pl.col("home_won")).sum().alias("losses"),
+                pl.col("away_won").sum().alias("losses"),
             ])
-            # Away team stats: wins when home_won=False, losses when home_won=True
+            # Away team stats
             away_agg = regular.group_by("away_team").agg([
-                (~pl.col("home_won")).sum().alias("wins"),
+                pl.col("away_won").sum().alias("wins"),
                 pl.col("home_won").sum().alias("losses"),
             ])
             # Merge into records dict
@@ -142,6 +145,9 @@ def build_team_records(
             games = client.get_games(year=year, season_type="regular")
             for game in games:
                 if game.home_points is None or game.away_points is None:
+                    continue
+                # Skip ties (extremely rare in CFB)
+                if game.home_points == game.away_points:
                     continue
                 home_won = game.home_points > game.away_points
                 for team, is_home in [(game.home_team, True), (game.away_team, False)]:
@@ -768,13 +774,22 @@ def walk_forward_predict(
         if len(week_plays) > 0:
             plays_by_week_pd[week] = optimize_dtypes(week_plays.to_pandas())
 
-    # P3.3: Pre-convert ST plays by week
+    # P3.3: Pre-convert ST plays by week (FBS-filtered to match efficiency plays)
     st_by_week_pd = {}
     if st_plays_df is not None and len(st_plays_df) > 0:
+        # Determine FBS filter columns — ST plays use offense/defense if available,
+        # otherwise fall back to game-level join for FBS filtering
+        st_has_teams = "offense" in st_plays_df.columns and "defense" in st_plays_df.columns
         for week in range(1, max_week + 1):
             week_st = st_plays_df.filter(pl.col("week") == week)
             if len(week_st) > 0:
-                st_by_week_pd[week] = optimize_dtypes(week_st.to_pandas())
+                if st_has_teams:
+                    week_st = week_st.filter(
+                        pl.col("offense").is_in(fbs_teams_list)
+                        & pl.col("defense").is_in(fbs_teams_list)
+                    )
+                if len(week_st) > 0:
+                    st_by_week_pd[week] = optimize_dtypes(week_st.to_pandas())
 
     # P3.4: Initialize running training DataFrames for incremental concat
     # This reduces O(weeks^2) copying to O(weeks) by appending only new week data each iteration
@@ -927,10 +942,12 @@ def walk_forward_predict(
                     efm.set_special_teams_rating(team, st_rating.overall_rating)
 
         # Update FCS estimator with games from prior weeks (walk-forward safe)
-        # Only update if we have an estimator and not using static mode
+        # Pre-filter to weeks < pred_week for structural walk-forward safety,
+        # even though downstream also filters via through_week parameter.
         active_fcs_estimator = None
         if fcs_estimator is not None and not fcs_static:
-            fcs_estimator.update_from_games(games_df, fbs_teams, through_week=pred_week - 1)
+            games_before_pred = games_df.filter(pl.col("week") < pred_week)
+            fcs_estimator.update_from_games(games_before_pred, fbs_teams, through_week=pred_week - 1)
             active_fcs_estimator = fcs_estimator
 
         # QB Continuous: Build data through pred_week - 1 (walk-forward safe)
@@ -994,8 +1011,10 @@ def walk_forward_predict(
 
                 # LSA: Collect training data and optionally apply learned adjustment
                 if use_learned_situ:
-                    # Determine favorite for rivalry boost
+                    # Determine favorite for rivalry boost (include HFA to match SpreadGenerator)
                     prelim_spread = team_ratings.get(game["home_team"], 0.0) - team_ratings.get(game["away_team"], 0.0)
+                    if not game["neutral_site"]:
+                        prelim_spread += hfa_lookup.get(game["home_team"], hfa_value)
                     home_is_favorite = prelim_spread > 0
 
                     # Get situational factors (same as SpreadGenerator does internally)
@@ -1158,8 +1177,12 @@ def calculate_ats_results(
     spread_close = df["spread_close"].values
 
     # Calculate ATS result vs OPEN line (for betting analysis)
+    # Use separate pick direction based on edge vs OPEN line, not close line.
+    # When model spread falls between open and close, the pick direction can differ.
+    edge_open = model_spread_vegas - spread_open
+    model_pick_home_open = edge_open < 0  # Model likes home more than Vegas open
     home_cover_open = actual_margin + spread_open
-    ats_win_open = np.where(model_pick_home, home_cover_open > 0, home_cover_open < 0)
+    ats_win_open = np.where(model_pick_home_open, home_cover_open > 0, home_cover_open < 0)
     ats_push_open = home_cover_open == 0
     # Handle NaN spreads
     ats_win_open = np.where(pd.isna(spread_open), np.nan, ats_win_open)
@@ -1176,6 +1199,7 @@ def calculate_ats_results(
     # Build result DataFrame with vectorized column assignment
     df["vegas_spread"] = vegas_spread_vals
     df["edge"] = np.abs(edge)
+    df["edge_open"] = np.where(pd.isna(spread_open), np.nan, np.abs(edge_open))
     df["pick"] = np.where(model_pick_home, "HOME", "AWAY")
     df["ats_win"] = ats_win  # vs CLOSE line
     df["ats_push"] = ats_push  # vs CLOSE line
